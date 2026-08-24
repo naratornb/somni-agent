@@ -1,14 +1,6 @@
-# macOS
+node_modules
+dist
+out
 .DS_Store
-
-# Node
-node_modules/
-
-# Build output
-dist/
-out/
-*.tsbuildinfo
-
-# Local env / logs
-.env*
-*.log
+.eslintcache
+*.log*

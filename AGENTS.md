@@ -32,14 +32,13 @@ Electron + TypeScript (strict) + React + Vite (electron-vite). No database — p
 
 ## Commands
 
-No scaffold yet — fill this in at M0:
-
 ```
-npm run dev     # (M0) launch app in dev mode
-npm run build   # (M0) production build
-npm test        # (M0) run checks
+npm run dev     # launch app in dev mode (HMR)
+npm run build   # typecheck + production build
+npm test        # vitest unit checks
+npm run lint    # eslint
 ```
 
 ## Status & roadmap
 
-**Current milestone: pre-M0** (design approved, no code). Phased plan M0–M6 is in [design/architecture.md §9](design/architecture.md). When a milestone lands, update this line and the Commands section.
+**Current milestone: M0 done** (walking skeleton: one-shot `claude -p` run with live stream-json output; `src/main/stream.ts` is the parser that later moves behind the Runner adapter). Next: M1. Phased plan M0–M6 is in [design/architecture.md §9](design/architecture.md). When a milestone lands, update this line and the Commands section.

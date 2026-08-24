@@ -22,7 +22,7 @@ Electron + TypeScript + React + Vite — no database. Details in [design/archite
 
 ## Status
 
-Pre-M0 — design approved, implementation not started. Roadmap: architecture.md §9.
+M0 (walking skeleton) done — `npm run dev`, type a prompt, hit Run, watch a live `claude -p` stream. Roadmap: architecture.md §9.
 
 ## Note on unattended runs
 
