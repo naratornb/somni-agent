@@ -21,6 +21,7 @@ Electron + TypeScript (strict) + React + Vite (electron-vite). No database — p
 - Worktrees live under `<appData>/worktrees/`; branches are named `somni/<slug>-<yyyymmdd>`.
 - Rate-limit errors **pause the pipeline** with backoff — they do not consume a task's single retry.
 - The orchestrator stays one small boring module: no job-queue libraries, no worker threads.
+- **All runner differences (claude vs antigravity) live behind the Runner adapter** (architecture.md §5: `buildArgs`/`parseLine`). Nothing outside an adapter may branch on runner type. Execution profile `{runner, model, effort}` resolves role → repo config → global settings.
 
 ## Working style (Karpathy guidelines)
 

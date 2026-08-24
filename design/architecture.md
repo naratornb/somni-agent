@@ -65,8 +65,10 @@ All per-repo state lives **inside the target repo** at `<repo>/.somni/` as plain
 ```
 .somni/
   .gitignore            # maintained by somni: ignores runs/*/logs/
-  config.json           # optional per-repo overrides (report_style, concurrency, timeout)
-  roles/<slug>.md       # role preamble as Markdown; H1 = display name
+  config.json           # optional per-repo overrides (report_style, concurrency, timeout,
+                        # default execution profile — runner/model/effort, see §5)
+  roles/<slug>.md       # role preamble as Markdown; H1 = display name; optional
+                        # frontmatter: runner/model/effort override (§5)
   workflows/<slug>.json # name, ordered tasks (title, prompt, role, selected)
   chats/<slug>.jsonl    # "Draft with AI" transcript for that workflow (committable)
   runs/<runId>/
@@ -85,18 +87,43 @@ Statuses: `Queued / Running / Completed / Failed / Skipped / Cancelled`, plus `P
 
 **App-level state** (Electron `userData`, machine-specific): global settings (claude path, default concurrency, default report style, task timeout), the list of known repos, and worktrees under `<appData>/worktrees/` — worktrees are disposable local build artifacts; the `somni/…` branches are the portable part.
 
-## 5. `claude` CLI invocation
+## 5. Runners & CLI invocation
+
+somni supports two execution backends ("runners"): **Claude Code** (`claude`, Max plan) and **Google Antigravity** (`agy`, headless mode, Google subscription). Which one runs a task — and with what model and effort — is an **execution profile**:
+
+```
+{ runner: 'claude' | 'antigravity', model?: string, effort?: 'low'|'medium'|'high' }
+```
+
+Resolution order: **role → repo `.somni/config.json` → global settings.** Roles are where "how much brainpower" lives (e.g. Senior Developer → strongest model, high effort; report writing → small fast model); a task gets its role's profile, no per-task knobs. `run.json` and chat transcripts record the profile that ran each task, for reproducibility.
+
+**Runner adapter.** All runner differences live behind one small interface in the main process — nothing else may branch on runner type:
+
+```
+Runner {
+  buildArgs(prompt, {model, effort, resumeSessionId, readOnly, autonomous}) → argv
+  parseLine(line) → {sessionId} | {text} | {result: {ok, costUsd?, durationMs}} | null
+}
+```
+
+The orchestrator, chat, and stream plumbing are runner-agnostic; each adapter also classifies its own rate-limit error shape for the pipeline pause/backoff.
+
+**ClaudeRunner** (reference implementation):
 
 ```
 claude -p --output-format stream-json --verbose \
-  --dangerously-skip-permissions \
+  [--model <m>] [--resume <session_id>] \
+  --dangerously-skip-permissions            # autonomous task mode
+  | --allowedTools "Read,Glob,Grep"         # read-only chat mode
   "<role preamble>\n\n---\n\n<task prompt>"
 ```
 
-- `cwd` = the workflow's worktree.
-- Role context is simply the role's preamble prepended to the task prompt — no system-prompt flags needed.
-- Parsed from stream-json: `session_id` (stored per task_run for debugging and `--resume`), assistant text deltas (live log view), and the final `result` event → success/error, `total_cost_usd`, duration.
-- Rate-limit conditions are detected from the error result payload and trigger the pipeline pause/backoff described above.
+- `cwd` = the workflow's worktree (tasks) or the repo (chat).
+- Role context is the role's preamble prepended to the prompt — no system-prompt flags needed.
+- Parsed from stream-json: `session_id` (stored per task run), assistant text deltas (live log), final `result` event → success/error, `total_cost_usd`, duration.
+- Effort maps to the CLI's thinking controls — exact mechanism pinned at implementation time.
+
+**AntigravityRunner:** `agy` headless/print mode with machine-readable output and its auto-approve mode; multi-turn resume for chat if supported (else chat falls back to ClaudeRunner). The CLI is young and moving fast — exact flags are pinned during implementation against https://antigravity.google/docs/cli/headless/. A workflow run's retry always reuses the same profile; runners are never mixed within a retry.
 
 ## 6. Summary reports — `Report style` setting
 
@@ -126,7 +153,7 @@ Sidebar navigation, five views:
 2. **Roles** — CRUD library of `name` + `preamble`.
 3. **Pipeline** — the dashboard: selected workflows as cards, each task a chip colored by status, overall progress bar, **Run / Pause / Cancel**. Click any running task → **live log pane** (streamed stdout tail).
 4. **Runs & Reports** — history of pipeline runs; per-workflow report (stats table + summary); links to the worktree/branch for review.
-5. **Settings** — max concurrency, claude binary path, **report style (Minimal / Compact / Full)**, task timeout.
+5. **Settings** — max concurrency, runner binary paths, **default execution profile** (runner dropdown, per-runner model list, effort), **report style (Minimal / Compact / Full)**, task timeout. Role editor gains optional model/effort override fields.
 
 ## 9. Phased build plan
 
@@ -135,8 +162,9 @@ Sidebar navigation, five views:
 - **M2 — Single workflow run.** Worktree creation, sequential task execution, persisted statuses, per-task log files.
 - **M3 — Pipeline.** Checkboxes, multi-workflow concurrency, dashboard, live log streaming.
 - **M4 — Unattended reliability.** Retry-once/halt policy, timeouts, rate-limit pause/backoff, crash resume, powerSaveBlocker, cancel.
-- **M5 — Reports, settings, polish.** Three report styles, run history, worktree cleanup.
+- **M5 — Reports, settings, polish.** Three report styles, run history, worktree cleanup; model/effort configuration for the Claude runner (profile resolution role → repo → global).
 - **M6 — AI workflow drafting.** The "Draft with AI" chat (§7). Depends only on M0's spawn/parse and M1's file store, so it can be pulled earlier if wanted.
+- **M7 — Antigravity runner.** Extract the Runner adapter interface, add the `agy` adapter, runner dropdown + per-runner models in settings.
 
 Each milestone is shippable and exercises the one before it.
 
@@ -148,4 +176,5 @@ Each milestone is shippable and exercises the one before it.
 - **Hung tasks** are covered by the per-task timeout.
 - **Prompt quality is the real ceiling.** Unattended runs live or die on task prompts and role preambles; the Design → Implement → Test → Revise → Report shape from the brief is the template to encourage.
 - **Merge-back is manual by design.** The app creates branches; you merge. Auto-merge is out of scope for v1.
+- **Antigravity CLI is young.** `agy` shipped mid-2026 and its flags may drift; the adapter pins exact flags at M7 implementation against the live docs, and CI-style smoke checks of both runners' output parsing guard against CLI updates breaking overnight runs. Rate-limit detection is per-adapter (Anthropic and Google error shapes differ).
 - **One machine at a time.** `.somni/` sync is via git, so running pipelines for the same repo on two machines concurrently is unsupported (last-writer-wins on `run.json`). Run overnight on one machine; review anywhere.

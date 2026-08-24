@@ -1,13 +1,14 @@
 # somni
 
-A macOS desktop app that puts your Claude Max subscription to work while you sleep.
+A macOS desktop app that puts your AI coding subscription (Claude Max, Google/Antigravity) to work while you sleep.
 
-somni orchestrates the **Claude Code CLI** to run coding workflows in parallel, unattended, overnight. You define workflows of ordered tasks (each with a role/persona like *Senior Developer* or *Senior Tester*), tick the ones you want run, and hit **Run Pipeline**. Each workflow executes in its own git worktree; in the morning you review branches and summary reports.
+somni orchestrates agent CLIs — **Claude Code** (`claude`) or **Google Antigravity** (`agy`) — to run coding workflows in parallel, unattended, overnight. You define workflows of ordered tasks (each with a role/persona like *Senior Developer* or *Senior Tester*), tick the ones you want run, and hit **Run Pipeline**. Each workflow executes in its own git worktree; in the morning you review branches and summary reports.
 
 ## How it works
 
 - **Workflows** — ordered tasks sharing one workspace; each task sees the previous task's output (files, git state).
-- **Roles** — reusable persona preambles prepended to task prompts.
+- **Roles** — reusable persona preambles prepended to task prompts; a role can pin its own model/effort.
+- **Runners** — pick Claude Code or Antigravity per execution profile (runner + model + effort), configurable globally, per repo, or per role.
 - **Draft with AI** — a chat in the workflow editor: type a rough idea and the assistant (reading your repo, read-only) refines it into a technical brief and proposes the task list; nothing is written until you hit Apply.
 - **Pipeline** — checkbox-selected workflows run sequentially-within, parallel-across, under a configurable concurrency cap.
 - **Isolation** — the app creates a dedicated worktree + `somni/<slug>-<date>` branch per workflow; merging back is up to you.
