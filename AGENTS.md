@@ -30,6 +30,10 @@ Electron + TypeScript (strict) + React + Vite (electron-vite). No database — p
 3. **Surgical changes.** Touch only what the task requires. Match existing style. Remove orphans your own change created; leave pre-existing code alone unless asked.
 4. **Goal-driven execution.** Before coding, state a verifiable success criterion (e.g. M0: "click button → live claude output streams into the window → final result event parsed"). Non-trivial logic ships with one minimal check/test. Loop until verified.
 
+## Team — multi-agent approach
+
+Non-trivial work is executed by the agent team defined in [design/team.md](design/team.md): the main session acts as **Technical Director** (briefs, reviews, green-lights) and spawns the project agents in `.claude/agents/` — `fullstack-engineer` (implements), `tester` (verifies), `ux-designer` (UI tasks). Apply that process for feature/milestone work; trivial mechanical changes don't need it.
+
 ## Commit messages
 
 - Format: `<milestone or area>: <what changed>` in imperative mood, matching existing history (e.g. `M2: single workflow run in an isolated worktree`, `Design: runner abstraction`).
