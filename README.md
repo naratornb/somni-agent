@@ -8,6 +8,7 @@ somni orchestrates the **Claude Code CLI** to run coding workflows in parallel, 
 
 - **Workflows** — ordered tasks sharing one workspace; each task sees the previous task's output (files, git state).
 - **Roles** — reusable persona preambles prepended to task prompts.
+- **Draft with AI** — a chat in the workflow editor: type a rough idea and the assistant (reading your repo, read-only) refines it into a technical brief and proposes the task list; nothing is written until you hit Apply.
 - **Pipeline** — checkbox-selected workflows run sequentially-within, parallel-across, under a configurable concurrency cap.
 - **Isolation** — the app creates a dedicated worktree + `somni/<slug>-<date>` branch per workflow; merging back is up to you.
 - **Reliability** — one retry then halt-workflow on failure; rate limits pause the whole pipeline with backoff; crash-safe resume from persisted run state.
@@ -20,7 +21,7 @@ Electron + TypeScript + React + Vite — no database. Details in [design/archite
 
 ## Status
 
-Pre-M0 — design approved, implementation not started. Roadmap: architecture.md §8.
+Pre-M0 — design approved, implementation not started. Roadmap: architecture.md §9.
 
 ## Note on unattended runs
 

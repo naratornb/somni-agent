@@ -41,4 +41,4 @@ npm test        # (M0) run checks
 
 ## Status & roadmap
 
-**Current milestone: pre-M0** (design approved, no code). Phased plan M0–M5 is in [design/architecture.md §8](design/architecture.md). When a milestone lands, update this line and the Commands section.
+**Current milestone: pre-M0** (design approved, no code). Phased plan M0–M6 is in [design/architecture.md §9](design/architecture.md). When a milestone lands, update this line and the Commands section.

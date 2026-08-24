@@ -68,6 +68,7 @@ All per-repo state lives **inside the target repo** at `<repo>/.somni/` as plain
   config.json           # optional per-repo overrides (report_style, concurrency, timeout)
   roles/<slug>.md       # role preamble as Markdown; H1 = display name
   workflows/<slug>.json # name, ordered tasks (title, prompt, role, selected)
+  chats/<slug>.jsonl    # "Draft with AI" transcript for that workflow (committable)
   runs/<runId>/
     run.json            # execution state: pipeline/workflow/task statuses, attempts,
                         # session_ids, timestamps, cost, exit codes — crash-resume source of truth
@@ -107,17 +108,27 @@ claude -p --output-format stream-json --verbose \
 
 Reports are written to `runs/<runId>/report.md` (with stats alongside in `run.json`) and rendered in the Runs & Reports view.
 
-## 7. UI / screen breakdown
+## 7. AI workflow drafting ("Draft with AI" chat)
+
+A chat button in the workflow editor lets you yap a rough idea; an assistant refines it into a complete technical brief and populates the workflow's tasks. It reuses the task runner rather than adding a chat stack:
+
+- **Each chat turn is the same spawn path as task execution**: `claude -p <message> --output-format stream-json --verbose`, with `--resume <session_id>` from the second turn on. No API calls, no new dependency; uses the Max plan.
+- `cwd` = the target repo, tools restricted to read-only via `--allowedTools "Read,Glob,Grep"` and **no** `--dangerously-skip-permissions` — the assistant can inspect the actual codebase while refining the brief, but cannot change anything.
+- A fixed drafting preamble is prepended: interview briefly, then propose a workflow; whenever proposing, end the reply with a fenced ` ```somni-workflow ` JSON block matching the `workflows/<slug>.json` schema.
+- The app parses the last such block into a **proposal preview** (task cards) with **Apply / Dismiss**. Apply merges it into the open workflow definition (atomic write, like all `.somni/` writes). The chat itself never writes files — Apply is the only mutation, and it is user-triggered.
+- The transcript persists to `.somni/chats/<workflow-slug>.jsonl` so drafting context survives sessions and machines; "New chat" starts a fresh session.
+
+## 8. UI / screen breakdown
 
 Sidebar navigation, five views:
 
-1. **Workflows** — list with per-workflow pipeline checkboxes. Click into the **Workflow editor**: ordered task list (drag to reorder), each task = title, prompt, role dropdown, checkbox; repo picker for the workspace.
+1. **Workflows** — list with per-workflow pipeline checkboxes. Click into the **Workflow editor**: ordered task list (drag to reorder), each task = title, prompt, role dropdown, checkbox; repo picker for the workspace; **Draft with AI** button → side chat panel (message list, input, streaming reply, proposal preview with Apply/Dismiss; disabled while the workflow is running in a pipeline).
 2. **Roles** — CRUD library of `name` + `preamble`.
 3. **Pipeline** — the dashboard: selected workflows as cards, each task a chip colored by status, overall progress bar, **Run / Pause / Cancel**. Click any running task → **live log pane** (streamed stdout tail).
 4. **Runs & Reports** — history of pipeline runs; per-workflow report (stats table + summary); links to the worktree/branch for review.
 5. **Settings** — max concurrency, claude binary path, **report style (Minimal / Compact / Full)**, task timeout.
 
-## 8. Phased build plan
+## 9. Phased build plan
 
 - **M0 — Walking skeleton.** electron-vite scaffold; one button that spawns a hardcoded `claude -p` and streams its output into the window. Proves the entire risky path: spawn, stream-json parsing, completion detection.
 - **M1 — Definitions.** `.somni/` file store (read/write, atomic saves, `.gitignore` bootstrap); Roles and Workflows/Tasks CRUD UI.
@@ -125,13 +136,14 @@ Sidebar navigation, five views:
 - **M3 — Pipeline.** Checkboxes, multi-workflow concurrency, dashboard, live log streaming.
 - **M4 — Unattended reliability.** Retry-once/halt policy, timeouts, rate-limit pause/backoff, crash resume, powerSaveBlocker, cancel.
 - **M5 — Reports, settings, polish.** Three report styles, run history, worktree cleanup.
+- **M6 — AI workflow drafting.** The "Draft with AI" chat (§7). Depends only on M0's spawn/parse and M1's file store, so it can be pulled earlier if wanted.
 
 Each milestone is shippable and exercises the one before it.
 
-## 9. Risks & open questions
+## 10. Risks & open questions
 
 - **`--dangerously-skip-permissions` is genuinely dangerous.** Worktrees contain *file* changes, not shell side effects — a task can still run arbitrary commands, install packages, or hit the network. Mitigation for v1: personal machine, personal repos, review-in-the-morning workflow. macOS sandboxing (`sandbox-exec`, containers) is a future hardening option, not v1 scope.
-- **Max plan limits.** Overnight fan-out will hit 5-hour usage windows. The pause/backoff behavior is the core mitigation; default concurrency should be modest (2–3).
+- **Max plan limits.** Overnight fan-out will hit 5-hour usage windows. The pause/backoff behavior is the core mitigation; default concurrency should be modest (2–3). Draft-with-AI chat turns share the same usage windows — fine for drafting, worth remembering right before an overnight run.
 - **The Mac must stay awake.** `powerSaveBlocker` prevents app suspension, but lid-closed sleep needs user-side energy settings or `caffeinate` — document in the README.
 - **Hung tasks** are covered by the per-task timeout.
 - **Prompt quality is the real ceiling.** Unattended runs live or die on task prompts and role preambles; the Design → Implement → Test → Revise → Report shape from the brief is the template to encourage.
