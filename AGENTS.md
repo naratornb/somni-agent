@@ -30,6 +30,13 @@ Electron + TypeScript (strict) + React + Vite (electron-vite). No database — p
 3. **Surgical changes.** Touch only what the task requires. Match existing style. Remove orphans your own change created; leave pre-existing code alone unless asked.
 4. **Goal-driven execution.** Before coding, state a verifiable success criterion (e.g. M0: "click button → live claude output streams into the window → final result event parsed"). Non-trivial logic ships with one minimal check/test. Loop until verified.
 
+## Commit messages
+
+- Format: `<milestone or area>: <what changed>` in imperative mood, matching existing history (e.g. `M2: single workflow run in an isolated worktree`, `Design: runner abstraction`).
+- Subject ≤ 72 chars; body (when needed) explains *why* and any decisions/trade-offs, not a file list.
+- One logical change per commit; each commit should build and pass tests.
+- **No AI attribution** — never add `Co-Authored-By: Claude`, "Generated with Claude Code", or similar trailers.
+
 ## Commands
 
 ```
@@ -41,4 +48,4 @@ npm run lint    # eslint
 
 ## Status & roadmap
 
-**Current milestone: M2 done** (single workflow run: `src/main/executor.ts` — worktree + `somni/<slug>-<runId>` branch, sequential tasks via `spawnClaude` in `src/main/runner.ts` with `--dangerously-skip-permissions`, role preamble prepended, `run.json` written atomically before every transition, raw logs to `runs/<id>/logs/`, fail → skip rest, cancel support; RunView with live statuses/log). Next: M3 — pipeline (checkboxes, multi-workflow concurrency, dashboard). Phased plan M0–M6 is in [design/architecture.md §9](design/architecture.md). When a milestone lands, update this line and the Commands section.
+**Current milestone: M3 done** (pipeline: `runPipeline` in `src/main/executor.ts` — FIFO worker pool over checkbox-selected workflows, sequential-within/parallel-across bounded by concurrency (hardcoded 2 until M5), serialized `git worktree add`, unique `<ts>-<slug>` runIds, deselected tasks excluded, one workflow's failure doesn't stop the rest; PipelineView dashboard — workflow cards, task chips, progress bar, click-a-chip live log tail, Run/Cancel). Next: M4 — unattended reliability (retry-once, timeouts, rate-limit pause/backoff, crash resume, powerSaveBlocker). Phased plan M0–M6 is in [design/architecture.md §9](design/architecture.md). When a milestone lands, update this line and the Commands section.

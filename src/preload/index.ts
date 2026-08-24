@@ -38,13 +38,13 @@ function on(channel: string, cb: (payload: unknown) => void): () => void {
 const somni = {
   runTask: (prompt: string): Promise<void> => ipcRenderer.invoke('task:run', prompt),
   onTaskEvent: (cb: (ev: unknown) => void): (() => void) => on('task:event', cb),
-  startRun: (repo: string, slug: string): Promise<void> =>
-    ipcRenderer.invoke('run:start', repo, slug),
-  cancelRun: (): Promise<void> => ipcRenderer.invoke('run:cancel'),
+  startPipeline: (repo: string, slugs: string[]): Promise<void> =>
+    ipcRenderer.invoke('pipeline:start', repo, slugs),
+  cancelPipeline: (): Promise<void> => ipcRenderer.invoke('pipeline:cancel'),
   onRunState: (cb: (state: RunState) => void): (() => void) =>
     on('run:state', (p) => cb(p as RunState)),
-  onRunLog: (cb: (log: { taskIndex: number; text: string }) => void): (() => void) =>
-    on('run:log', (p) => cb(p as { taskIndex: number; text: string })),
+  onRunLog: (cb: (log: { runId: string; taskIndex: number; text: string }) => void): (() => void) =>
+    on('run:log', (p) => cb(p as { runId: string; taskIndex: number; text: string })),
   lastRepo: (): Promise<string | null> => ipcRenderer.invoke('repo:last'),
   chooseRepo: (): Promise<string | null> => ipcRenderer.invoke('repo:choose'),
   loadRepo: (repo: string): Promise<RepoData> => ipcRenderer.invoke('repo:load', repo),

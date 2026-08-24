@@ -199,6 +199,30 @@ button.danger {
   color: #d8c97f;
 }
 
+.row.wrap {
+  flex-wrap: wrap;
+}
+
+progress {
+  flex: 1;
+  accent-color: #6d5ae0;
+}
+
+button.chip {
+  align-self: auto;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+button.chip:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+button.chip.focused {
+  border-color: #9f97e8;
+}
+
 .output {
   flex: 1;
   overflow: auto;

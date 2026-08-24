@@ -131,6 +131,17 @@ export function WorkflowsView({
       <ul className="list">
         {workflows.map((w) => (
           <li key={w.slug} onClick={() => setEditing(w)}>
+            <input
+              type="checkbox"
+              title="Include in pipeline"
+              checked={w.selected}
+              onClick={(e) => e.stopPropagation()}
+              onChange={() =>
+                void window.somni
+                  .saveWorkflow(repo, { ...w, selected: !w.selected })
+                  .then(() => refresh())
+              }
+            />{' '}
             <b>{w.name}</b>
             <span className="dim">
               {' '}

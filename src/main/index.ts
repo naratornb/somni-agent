@@ -4,7 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { wireTaskIpc, killTask } from './runner'
 import { wireRepoIpc } from './repoIpc'
-import { cancelRun, isRunning, runWorkflow } from './executor'
+import { cancelPipeline, isRunning, runPipeline } from './executor'
 
 function createWindow(): void {
   // Create the browser window.
@@ -56,14 +56,15 @@ app.whenReady().then(() => {
   wireRepoIpc()
 
   const wc = (): Electron.WebContents | undefined => BrowserWindow.getAllWindows()[0]?.webContents
-  ipcMain.handle('run:start', (_e, repo: string, slug: string) => {
-    if (isRunning()) return
-    void runWorkflow(repo, slug, join(app.getPath('userData'), 'worktrees'), {
+  ipcMain.handle('pipeline:start', (_e, repo: string, slugs: string[]) => {
+    if (isRunning() || slugs.length === 0) return
+    // ponytail: concurrency hardcoded at 2 until M5 settings
+    void runPipeline(repo, slugs, join(app.getPath('userData'), 'worktrees'), 2, {
       onState: (state) => wc()?.send('run:state', state),
-      onLog: (taskIndex, text) => wc()?.send('run:log', { taskIndex, text })
+      onLog: (runId, taskIndex, text) => wc()?.send('run:log', { runId, taskIndex, text })
     })
   })
-  ipcMain.handle('run:cancel', () => cancelRun())
+  ipcMain.handle('pipeline:cancel', () => cancelPipeline())
 
   createWindow()
 

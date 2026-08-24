@@ -3,7 +3,7 @@ import { execFileSync } from 'child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { runWorkflow } from './executor'
+import { runPipeline, runWorkflow } from './executor'
 import { saveRole, saveWorkflow } from './store'
 
 // A fake `claude` on PATH: emits a valid stream-json conversation, drops a file
@@ -43,8 +43,15 @@ beforeEach(() => {
     selected: false,
     tasks: [
       { title: 'Design', prompt: 'design it', role: 'dev', selected: true },
-      { title: 'Build', prompt: 'build it', role: 'dev', selected: true }
+      { title: 'Build', prompt: 'build it', role: 'dev', selected: true },
+      { title: 'Deselected', prompt: 'skip me', role: 'dev', selected: false }
     ]
+  })
+  saveWorkflow(repo, {
+    slug: '',
+    name: 'Docs',
+    selected: true,
+    tasks: [{ title: 'Write docs', prompt: 'write docs', role: 'dev', selected: true }]
   })
 })
 
@@ -55,9 +62,11 @@ afterEach(() => {
 const noEvents = { onState: (): void => {}, onLog: (): void => {} }
 
 describe('runWorkflow', () => {
-  it('runs tasks sequentially in a worktree and persists run.json', async () => {
+  it('runs selected tasks sequentially in a worktree and persists run.json', async () => {
     const state = await runWorkflow(repo, 'feature', base, noEvents)
     expect(state.status).toBe('Completed')
+    // deselected task is excluded entirely
+    expect(state.tasks.map((t) => t.title)).toEqual(['Design', 'Build'])
     expect(state.tasks.map((t) => t.status)).toEqual(['Completed', 'Completed'])
     expect(state.tasks[0].sessionId).toBe('s1')
     expect(state.tasks[0].costUsd).toBe(0.01)
@@ -87,5 +96,28 @@ describe('runWorkflow', () => {
     } finally {
       delete process.env.FAKE_FAIL
     }
+  })
+})
+
+describe('runPipeline', () => {
+  it('runs workflows concurrently in separate worktrees, all complete', async () => {
+    const results = await runPipeline(repo, ['feature', 'docs'], base, 2, noEvents)
+    expect(results.map((r) => r.status).sort()).toEqual(['Completed', 'Completed'])
+    const ids = results.map((r) => r.runId)
+    expect(new Set(ids).size).toBe(2) // same-second starts still get unique run dirs
+    for (const r of results) {
+      expect(existsSync(join(r.worktree, 'task-ran-here'))).toBe(true)
+      expect(existsSync(join(repo, '.somni/runs', r.runId, 'run.json'))).toBe(true)
+    }
+  })
+
+  it('a missing workflow fails soft, the rest still run', async () => {
+    const errors: string[] = []
+    const results = await runPipeline(repo, ['nope', 'docs'], base, 2, {
+      onState: () => {},
+      onLog: (_id, _i, text) => errors.push(text)
+    })
+    expect(results.map((r) => r.workflow)).toEqual(['docs'])
+    expect(errors.some((e) => e.includes('workflow not found'))).toBe(true)
   })
 })

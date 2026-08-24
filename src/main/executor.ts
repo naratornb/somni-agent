@@ -1,5 +1,7 @@
-// Runs one workflow: worktree + branch, tasks sequentially, every state
-// transition written to .somni/runs/<runId>/run.json before it is acted on.
+// Orchestrator (architecture.md §3): runs one workflow per worktree, tasks
+// sequential within it; the pipeline schedules selected workflows FIFO with
+// bounded concurrency. Every state transition is written to
+// .somni/runs/<runId>/run.json before it is acted on.
 
 import { execFile } from 'child_process'
 import { appendFileSync, mkdirSync } from 'fs'
@@ -9,6 +11,15 @@ import { spawnClaude, SpawnHandle } from './runner'
 import { atomicWrite, loadRepo, slugify } from './store'
 
 const git = promisify(execFile)
+
+// ponytail: concurrent `git worktree add` on one repo can race on .git locks —
+// serialize the mutating git calls; the task processes themselves run in parallel.
+let gitLock: Promise<unknown> = Promise.resolve()
+function lockedGit(args: string[]): Promise<unknown> {
+  const p = gitLock.then(() => git('git', args))
+  gitLock = p.catch(() => {})
+  return p
+}
 
 export type TaskStatus = 'Queued' | 'Running' | 'Completed' | 'Failed' | 'Skipped' | 'Cancelled'
 
@@ -38,20 +49,64 @@ export type RunState = {
 
 export type RunEvents = {
   onState: (state: RunState) => void
-  onLog: (taskIndex: number, text: string) => void
+  onLog: (runId: string, taskIndex: number, text: string) => void
 }
 
-let current: { handle: SpawnHandle | null; cancelled: boolean } | null = null
+type Ctrl = { cancelled: boolean; handle: SpawnHandle | null }
 
-export function cancelRun(): void {
-  if (current) {
-    current.cancelled = true
-    current.handle?.kill()
+let pipeline: { cancelled: boolean; ctrls: Set<Ctrl> } | null = null
+
+export function isRunning(): boolean {
+  return pipeline !== null
+}
+
+export function cancelPipeline(): void {
+  if (!pipeline) return
+  pipeline.cancelled = true
+  for (const c of pipeline.ctrls) {
+    c.cancelled = true
+    c.handle?.kill()
   }
 }
 
-export function isRunning(): boolean {
-  return current !== null
+// Sequential within a workflow, parallel across workflows, bounded by
+// maxConcurrency (each workflow has at most one running task, so bounding
+// concurrent workflows bounds concurrent tasks).
+export async function runPipeline(
+  repo: string,
+  slugs: string[],
+  worktreeBase: string,
+  maxConcurrency: number,
+  events: RunEvents,
+  now: () => Date = () => new Date()
+): Promise<RunState[]> {
+  if (pipeline) throw new Error('a pipeline is already running')
+  pipeline = { cancelled: false, ctrls: new Set() }
+  const mine = pipeline
+  try {
+    const queue = [...slugs]
+    const results: RunState[] = []
+    const workers = Math.max(1, Math.min(maxConcurrency, queue.length))
+    await Promise.all(
+      Array.from({ length: workers }, async () => {
+        while (queue.length > 0 && !mine.cancelled) {
+          const slug = queue.shift()!
+          const ctrl: Ctrl = { cancelled: false, handle: null }
+          mine.ctrls.add(ctrl)
+          try {
+            results.push(await runWorkflow(repo, slug, worktreeBase, events, now, ctrl))
+          } catch (err) {
+            events.onLog(slug, -1, `[error] ${err instanceof Error ? err.message : String(err)}`)
+          } finally {
+            mine.ctrls.delete(ctrl)
+          }
+        }
+      })
+    )
+    return results
+  } finally {
+    pipeline = null
+  }
 }
 
 export async function runWorkflow(
@@ -59,16 +114,19 @@ export async function runWorkflow(
   wfSlug: string,
   worktreeBase: string,
   events: RunEvents,
-  now: () => Date = () => new Date()
+  now: () => Date = () => new Date(),
+  ctrl: Ctrl = { cancelled: false, handle: null }
 ): Promise<RunState> {
-  if (current) throw new Error('a run is already in progress')
   const { roles, workflows } = loadRepo(repo)
   const wf = workflows.find((w) => w.slug === wfSlug)
   if (!wf) throw new Error(`workflow not found: ${wfSlug}`)
+  const defs = wf.tasks.filter((t) => t.selected !== false)
+  if (defs.length === 0) throw new Error(`no tasks selected in ${wf.name}`)
 
-  const runId = now().toISOString().replace(/[-:T]/g, '').slice(0, 14)
-  const branch = `somni/${wf.slug}-${runId}`
-  const worktree = join(worktreeBase, `${runId}-${wf.slug}`)
+  const stamp = now().toISOString().replace(/[-:T]/g, '').slice(0, 14)
+  const runId = `${stamp}-${wf.slug}` // slug keeps concurrent same-second runs unique
+  const branch = `somni/${wf.slug}-${stamp}`
+  const worktree = join(worktreeBase, runId)
   const runDir = join(repo, '.somni', 'runs', runId)
   const logsDir = join(runDir, 'logs')
   mkdirSync(logsDir, { recursive: true })
@@ -81,7 +139,7 @@ export async function runWorkflow(
     worktree,
     status: 'Running',
     startedAt: now().toISOString(),
-    tasks: wf.tasks.map((t, i) => ({
+    tasks: defs.map((t, i) => ({
       title: t.title || `task ${i + 1}`,
       role: t.role,
       status: 'Queued',
@@ -93,15 +151,14 @@ export async function runWorkflow(
     events.onState(state)
   }
 
-  current = { handle: null, cancelled: false }
   writeState()
   try {
-    await git('git', ['-C', repo, 'worktree', 'add', worktree, '-b', branch])
+    await lockedGit(['-C', repo, 'worktree', 'add', worktree, '-b', branch])
 
     for (let i = 0; i < state.tasks.length; i++) {
       const task = state.tasks[i]
-      const def = wf.tasks[i]
-      if (current.cancelled) {
+      const def = defs[i]
+      if (ctrl.cancelled) {
         task.status = 'Skipped'
         continue
       }
@@ -125,8 +182,8 @@ export async function runWorkflow(
         worktree,
         (ev) => {
           if (ev.kind === 'session') task.sessionId = ev.sessionId
-          if (ev.kind === 'text') events.onLog(i, ev.text)
-          if (ev.kind === 'spawn-error') events.onLog(i, `[stderr] ${ev.message}`)
+          if (ev.kind === 'text') events.onLog(runId, i, ev.text)
+          if (ev.kind === 'spawn-error') events.onLog(runId, i, `[stderr] ${ev.message}`)
           if (ev.kind === 'result') {
             task.costUsd = ev.costUsd
             task.durationMs = ev.durationMs
@@ -135,12 +192,12 @@ export async function runWorkflow(
         },
         (chunk) => appendFileSync(logPath, chunk)
       )
-      current.handle = handle
+      ctrl.handle = handle
       const { code, ok } = await handle.done
-      current.handle = null
+      ctrl.handle = null
       task.exitCode = code
       task.durationMs ??= now().getTime() - started
-      task.status = current.cancelled ? 'Cancelled' : ok ? 'Completed' : 'Failed'
+      task.status = ctrl.cancelled ? 'Cancelled' : ok ? 'Completed' : 'Failed'
       writeState()
 
       if (task.status !== 'Completed') {
@@ -156,11 +213,10 @@ export async function runWorkflow(
     state.status = 'Failed'
     for (const t of state.tasks)
       if (t.status === 'Queued' || t.status === 'Running') t.status = 'Skipped'
-    events.onLog(-1, `[error] ${err instanceof Error ? err.message : String(err)}`)
+    events.onLog(runId, -1, `[error] ${err instanceof Error ? err.message : String(err)}`)
   } finally {
     state.finishedAt = now().toISOString()
     writeState()
-    current = null
   }
   return state
 }
