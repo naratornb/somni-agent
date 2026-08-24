@@ -22,7 +22,7 @@ Electron + TypeScript + React + Vite — no database. Details in [design/archite
 
 ## Status
 
-M0 (walking skeleton) done — `npm run dev`, type a prompt, hit Run, watch a live `claude -p` stream. Roadmap: architecture.md §9.
+M1 done — choose a repo, define roles and workflows (stored in `<repo>/.somni/`), and run one-off prompts in the Playground. Roadmap: architecture.md §9.
 
 ## Note on unattended runs
 

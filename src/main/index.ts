@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { wireTaskIpc, killTask } from './runner'
+import { wireRepoIpc } from './repoIpc'
 
 function createWindow(): void {
   // Create the browser window.
@@ -51,6 +52,7 @@ app.whenReady().then(() => {
   })
 
   wireTaskIpc(ipcMain, () => BrowserWindow.getAllWindows()[0]?.webContents ?? null)
+  wireRepoIpc()
 
   createWindow()
 

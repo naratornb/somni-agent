@@ -1,63 +1,79 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import type { RepoData } from '../../preload/index'
+import { Playground } from './Playground'
+import { RolesView } from './RolesView'
+import { WorkflowsView } from './WorkflowsView'
 
-type TaskEvent =
-  | { kind: 'session'; sessionId: string }
-  | { kind: 'text'; text: string }
-  | { kind: 'result'; ok: boolean; costUsd?: number; durationMs?: number; detail?: string }
-  | { kind: 'spawn-error'; message: string }
-  | { kind: 'exit'; code: number | null }
-
-const DEMO_PROMPT = 'Introduce yourself in one sentence, then tell a one-line programming joke.'
+const VIEWS = ['Workflows', 'Roles', 'Playground'] as const
+type View = (typeof VIEWS)[number]
 
 function App(): React.JSX.Element {
-  const [prompt, setPrompt] = useState(DEMO_PROMPT)
-  const [running, setRunning] = useState(false)
-  const [lines, setLines] = useState<string[]>([])
-  const [footer, setFooter] = useState('')
-  const paneRef = useRef<HTMLPreElement>(null)
+  const [repo, setRepo] = useState<string | null>(null)
+  const [data, setData] = useState<RepoData>({ roles: [], workflows: [] })
+  const [view, setView] = useState<View>('Workflows')
+
+  const refresh = useCallback(
+    (path = repo): void => {
+      if (path) void window.somni.loadRepo(path).then(setData)
+    },
+    [repo]
+  )
 
   useEffect(() => {
-    return window.somni.onTaskEvent((raw) => {
-      const ev = raw as TaskEvent
-      if (ev.kind === 'session') setLines((l) => [...l, `[session ${ev.sessionId}]`])
-      if (ev.kind === 'text') setLines((l) => [...l, ev.text])
-      if (ev.kind === 'spawn-error') setLines((l) => [...l, `[stderr] ${ev.message}`])
-      if (ev.kind === 'result') {
-        setFooter(
-          `${ev.ok ? '✓ success' : '✗ error'}` +
-            (ev.durationMs != null ? ` · ${(ev.durationMs / 1000).toFixed(1)}s` : '') +
-            (ev.costUsd != null ? ` · $${ev.costUsd.toFixed(4)}` : '')
-        )
-      }
-      if (ev.kind === 'exit') {
-        setRunning(false)
-        setLines((l) => [...l, `[exit code ${ev.code}]`])
+    void window.somni.lastRepo().then((path) => {
+      if (path) {
+        setRepo(path)
+        refresh(path)
       }
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, [])
 
-  useEffect(() => {
-    paneRef.current?.scrollTo(0, paneRef.current.scrollHeight)
-  }, [lines])
-
-  const run = (): void => {
-    setLines([])
-    setFooter('')
-    setRunning(true)
-    void window.somni.runTask(prompt)
+  const choose = async (): Promise<void> => {
+    const path = await window.somni.chooseRepo()
+    if (path) {
+      setRepo(path)
+      refresh(path)
+    }
   }
 
   return (
-    <div className="app">
-      <h1>somni · M0 walking skeleton</h1>
-      <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} />
-      <button onClick={run} disabled={running || !prompt.trim()}>
-        {running ? 'Running…' : 'Run'}
-      </button>
-      <pre className="output" ref={paneRef}>
-        {lines.join('\n')}
-      </pre>
-      {footer && <div className="footer">{footer}</div>}
+    <div className="layout">
+      <nav className="sidebar">
+        <h1>somni</h1>
+        {VIEWS.map((v) => (
+          <button key={v} className={v === view ? 'nav active' : 'nav'} onClick={() => setView(v)}>
+            {v}
+          </button>
+        ))}
+      </nav>
+      <main className="content">
+        <div className="repo-bar">
+          <span className="dim">{repo ?? 'No repo selected'}</span>
+          <button className="ghost" onClick={choose}>
+            Choose repo…
+          </button>
+          {repo && (
+            <button className="ghost" onClick={() => refresh()}>
+              Refresh
+            </button>
+          )}
+        </div>
+        {view === 'Playground' ? (
+          <Playground />
+        ) : !repo ? (
+          <p className="dim">Choose a repo to manage its workflows and roles.</p>
+        ) : view === 'Workflows' ? (
+          <WorkflowsView
+            repo={repo}
+            workflows={data.workflows}
+            roles={data.roles}
+            refresh={refresh}
+          />
+        ) : (
+          <RolesView repo={repo} roles={data.roles} refresh={refresh} />
+        )}
+      </main>
     </div>
   )
 }

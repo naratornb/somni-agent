@@ -41,4 +41,4 @@ npm run lint    # eslint
 
 ## Status & roadmap
 
-**Current milestone: M0 done** (walking skeleton: one-shot `claude -p` run with live stream-json output; `src/main/stream.ts` is the parser that later moves behind the Runner adapter). Next: M1. Phased plan M0–M6 is in [design/architecture.md §9](design/architecture.md). When a milestone lands, update this line and the Commands section.
+**Current milestone: M1 done** (`.somni/` file store — `src/main/store.ts`, atomic writes, `.gitignore` bootstrap; Roles + Workflows CRUD UI; repo picker with last-repo memory; M0 runner lives on under the Playground view, `src/main/stream.ts` parser later moves behind the Runner adapter). Next: M2 — single workflow run in a worktree. Phased plan M0–M6 is in [design/architecture.md §9](design/architecture.md). When a milestone lands, update this line and the Commands section.

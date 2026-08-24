@@ -7,24 +7,84 @@ body {
   font-family: -apple-system, system-ui, sans-serif;
   background: #1b1b1f;
   color: #e4e4e7;
+  font-size: 13px;
 }
 
-.app {
+.layout {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 16px;
   height: 100vh;
 }
 
-h1 {
-  font-size: 15px;
-  font-weight: 600;
+.sidebar {
+  width: 150px;
+  padding: 16px 10px;
+  background: #141417;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-textarea {
-  width: 100%;
-  resize: vertical;
+.sidebar h1 {
+  font-size: 15px;
+  font-weight: 700;
+  padding: 0 8px 12px;
+  color: #9f97e8;
+}
+
+.nav {
+  text-align: left;
+  background: none;
+  border: none;
+  color: #a1a1aa;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.nav.active {
+  background: #26262b;
+  color: #e4e4e7;
+}
+
+.content {
+  flex: 1;
+  padding: 16px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.repo-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #2a2a30;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.row input {
+  flex: 1;
+}
+
+textarea,
+input,
+select {
   font:
     13px/1.4 ui-monospace,
     monospace;
@@ -32,12 +92,17 @@ textarea {
   color: inherit;
   border: 1px solid #3a3a40;
   border-radius: 6px;
-  padding: 8px;
+  padding: 7px 8px;
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
 }
 
 button {
   align-self: flex-start;
-  padding: 6px 18px;
+  padding: 6px 16px;
   font-size: 13px;
   border: none;
   border-radius: 6px;
@@ -49,6 +114,50 @@ button {
 button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+button.ghost {
+  background: #26262b;
+  color: #c9c9cf;
+}
+
+button.danger {
+  background: #3d2222;
+  color: #f0a3a3;
+}
+
+.list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.list li {
+  padding: 10px 12px;
+  background: #222227;
+  border: 1px solid #2f2f36;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.list li:hover {
+  border-color: #4a4a55;
+}
+
+.task-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  background: #202024;
+  border: 1px solid #2f2f36;
+  border-radius: 8px;
+}
+
+.dim {
+  color: #8a8a93;
 }
 
 .output {
