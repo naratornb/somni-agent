@@ -14,16 +14,16 @@ Design for a macOS desktop app that orchestrates parallel, unattended `claude` C
 - The heart of this app is process orchestration: spawning, supervising, and streaming from long-lived `claude` CLI child processes. Node's `child_process` is the most mature, best-documented tool for exactly that. In Tauri the same logic must be written in Rust or fought through the shell plugin's sidecar model.
 - One language (TypeScript) across main + renderer. You're web-tech comfortable, not a Rust dev.
 - Tauri's advantages — bundle size, idle memory — don't matter for a single-user tool that intentionally runs all night on your own Mac.
-- `better-sqlite3` in the main process gives synchronous, zero-config local persistence.
+- Persistence is plain files in each target repo's `.somni/` directory (§4) — no database dependency at all.
 
-Stack: **Electron + TypeScript + React + Vite + better-sqlite3**, scaffolded with `electron-vite`.
+Stack: **Electron + TypeScript + React + Vite**, scaffolded with `electron-vite`.
 
 ## 2. High-level architecture
 
 Standard two-process split:
 
-- **Main process** — owns everything stateful: the SQLite store, the orchestrator (scheduler + process supervisor), worktree manager, report generator, and settings. Plain TS modules — no separate daemon. The window can be closed to the tray while main keeps running overnight; `powerSaveBlocker.start('prevent-app-suspension')` is held while a pipeline runs.
-- **Renderer** — React UI. Talks to main via `contextBridge`-exposed IPC: `ipcRenderer.invoke` for CRUD/commands, `webContents.send` push events for status changes and log lines. The renderer holds no business logic; it renders DB state plus live events.
+- **Main process** — owns everything stateful: the `.somni/` file store, the orchestrator (scheduler + process supervisor), worktree manager, report generator, and settings. Plain TS modules — no separate daemon. The window can be closed to the tray while main keeps running overnight; `powerSaveBlocker.start('prevent-app-suspension')` is held while a pipeline runs.
+- **Renderer** — React UI. Talks to main via `contextBridge`-exposed IPC: `ipcRenderer.invoke` for CRUD/commands, `webContents.send` push events for status changes and log lines. The renderer holds no business logic; it renders stored state plus live events.
 
 No microservices, no job-queue library, no worker threads. The orchestrator is a ~300-line module; concurrency is bounded by an integer, not a framework.
 
@@ -36,13 +36,13 @@ No microservices, no job-queue library, no worker threads. The orchestrator is a
 │ Main process                                    │
 │  Orchestrator ── ProcessSupervisor ── claude ×N │
 │       │                │                        │
-│  WorktreeManager   SQLite (better-sqlite3)      │
+│  WorktreeManager   FileStore (<repo>/.somni/)   │
 └─────────────────────────────────────────────────┘
 ```
 
 ## 3. Orchestration engine
 
-**Scheduling.** A pipeline run captures the checkbox-selected workflows/tasks. The runnable set at any moment = the first not-yet-completed task of each selected workflow whose predecessors have all completed. Loop: while `running < maxConcurrency` and runnable tasks exist, spawn the next (FIFO by workflow order). This yields sequential-within-workflow, parallel-across-workflows with no extra machinery. Every state transition is written to SQLite *before* it is acted on, so the DB is always the source of truth.
+**Scheduling.** A pipeline run captures the checkbox-selected workflows/tasks. The runnable set at any moment = the first not-yet-completed task of each selected workflow whose predecessors have all completed. Loop: while `running < maxConcurrency` and runnable tasks exist, spawn the next (FIFO by workflow order). This yields sequential-within-workflow, parallel-across-workflows with no extra machinery. Every state transition is written to the run's `run.json` (atomic write-temp-then-rename) *before* it is acted on, so the files are always the source of truth.
 
 **Worktree isolation.** On workflow start:
 
@@ -56,26 +56,33 @@ All of the workflow's tasks share that worktree, so each task sees the previous 
 
 **Failure & retry.** A task fails on nonzero exit, an error `result`, or timeout → one automatic retry as a fresh invocation in the same worktree. Second failure → task `Failed`, the workflow's remaining tasks `Skipped`, workflow `Failed`; other workflows are unaffected. **Rate-limit errors are special-cased:** instead of burning the retry, the whole pipeline enters `Paused` and re-attempts on a backoff timer — this is what makes an overnight run survive Max-plan 5-hour usage windows.
 
-**Crash/quit recovery.** On launch, if a pipeline run is still marked `Running` in SQLite, orphaned `Running` tasks are reset to `Queued`. Their worktree holds whatever the dead process left behind — acceptable, because task prompts are stated as goals, not diffs, so a re-run continues from the current files. The user is offered **Resume pipeline** / **Abandon**.
+**Crash/quit recovery.** On launch, if a repo's latest `runs/<id>/run.json` is still marked `Running`, orphaned `Running` tasks are reset to `Queued`. Their worktree holds whatever the dead process left behind — acceptable, because task prompts are stated as goals, not diffs, so a re-run continues from the current files. The user is offered **Resume pipeline** / **Abandon**.
 
-## 4. Data model
+## 4. Data model — the `.somni/` file store
 
-SQLite (better-sqlite3) in Electron's `userData` directory.
+All per-repo state lives **inside the target repo** at `<repo>/.somni/` as plain files: transparent (reviewable, diffable) and portable — clone the repo on another machine, open somni, and your workflows and history are there. No database.
 
 ```
-roles          id, name, preamble, created_at
-workflows      id, name, repo_path, position, selected      -- selected = pipeline checkbox
-tasks          id, workflow_id, position, title, prompt, role_id, selected
-pipeline_runs  id, status, concurrency, started_at, finished_at
-workflow_runs  id, pipeline_run_id, workflow_id, status, worktree_path, branch,
-               started_at, finished_at
-task_runs      id, workflow_run_id, task_id, attempt, status, session_id,
-               exit_code, cost_usd, log_path, started_at, finished_at
-reports        workflow_run_id, style, stats_json, summary_md
-settings       key, value    -- concurrency, claude_path, report_style, task_timeout_min
+.somni/
+  .gitignore            # maintained by somni: ignores runs/*/logs/
+  config.json           # optional per-repo overrides (report_style, concurrency, timeout)
+  roles/<slug>.md       # role preamble as Markdown; H1 = display name
+  workflows/<slug>.json # name, ordered tasks (title, prompt, role, selected)
+  runs/<runId>/
+    run.json            # execution state: pipeline/workflow/task statuses, attempts,
+                        # session_ids, timestamps, cost, exit codes — crash-resume source of truth
+    logs/<task>.jsonl   # raw stream-json CLI output (gitignored — large)
+    report.md           # the summary report (committable)
 ```
 
-Statuses: `Queued / Running / Completed / Failed / Skipped / Cancelled`, plus `Paused` at the pipeline level for rate-limit waits. Definitions (workflows/tasks/roles) are deliberately separate from executions (`*_runs`) so history survives edits and re-runs.
+- **Committable**: definitions, `run.json`, reports — commit `.somni/` for cross-machine continuity. **Gitignored**: raw logs (somni writes `.somni/.gitignore` itself).
+- Roles are Markdown because preambles are prose; workflows are JSON because they're structured.
+- Writes are atomic (write temp file, rename). The files are authoritative: external edits — a `git pull`, hand-editing a workflow — are picked up on app refresh.
+- Definitions (`roles/`, `workflows/`) are deliberately separate from executions (`runs/`) so history survives edits and re-runs.
+
+Statuses: `Queued / Running / Completed / Failed / Skipped / Cancelled`, plus `Paused` at the pipeline level for rate-limit waits.
+
+**App-level state** (Electron `userData`, machine-specific): global settings (claude path, default concurrency, default report style, task timeout), the list of known repos, and worktrees under `<appData>/worktrees/` — worktrees are disposable local build artifacts; the `somni/…` branches are the portable part.
 
 ## 5. `claude` CLI invocation
 
@@ -98,7 +105,7 @@ claude -p --output-format stream-json --verbose \
 | **Compact** | one short call | Minimal + a single `claude -p` call that turns the task transcripts into a prose summary paragraph. |
 | **Full** | one full task | Minimal + an auto-appended "Report" task run inside the worktree with full context. |
 
-Reports are stored per workflow run and rendered in the Runs & Reports view.
+Reports are written to `runs/<runId>/report.md` (with stats alongside in `run.json`) and rendered in the Runs & Reports view.
 
 ## 7. UI / screen breakdown
 
@@ -113,7 +120,7 @@ Sidebar navigation, five views:
 ## 8. Phased build plan
 
 - **M0 — Walking skeleton.** electron-vite scaffold; one button that spawns a hardcoded `claude -p` and streams its output into the window. Proves the entire risky path: spawn, stream-json parsing, completion detection.
-- **M1 — Definitions.** SQLite schema; Roles and Workflows/Tasks CRUD UI.
+- **M1 — Definitions.** `.somni/` file store (read/write, atomic saves, `.gitignore` bootstrap); Roles and Workflows/Tasks CRUD UI.
 - **M2 — Single workflow run.** Worktree creation, sequential task execution, persisted statuses, per-task log files.
 - **M3 — Pipeline.** Checkboxes, multi-workflow concurrency, dashboard, live log streaming.
 - **M4 — Unattended reliability.** Retry-once/halt policy, timeouts, rate-limit pause/backoff, crash resume, powerSaveBlocker, cancel.
@@ -129,3 +136,4 @@ Each milestone is shippable and exercises the one before it.
 - **Hung tasks** are covered by the per-task timeout.
 - **Prompt quality is the real ceiling.** Unattended runs live or die on task prompts and role preambles; the Design → Implement → Test → Revise → Report shape from the brief is the template to encourage.
 - **Merge-back is manual by design.** The app creates branches; you merge. Auto-merge is out of scope for v1.
+- **One machine at a time.** `.somni/` sync is via git, so running pipelines for the same repo on two machines concurrently is unsupported (last-writer-wins on `run.json`). Run overnight on one machine; review anywhere.

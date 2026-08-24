@@ -9,14 +9,14 @@
 
 ## Stack
 
-Electron + TypeScript (strict) + React + Vite (electron-vite), better-sqlite3. No new dependencies without strong justification — prefer stdlib/Node/platform features.
+Electron + TypeScript (strict) + React + Vite (electron-vite). No database — persistence is plain files. No new dependencies without strong justification — prefer stdlib/Node/platform features.
 
 ## Architecture rules (non-negotiable)
 
-- All business logic lives in the **main process**. The renderer only renders DB state and IPC events — no logic.
+- All business logic lives in the **main process**. The renderer only renders stored state and IPC events — no logic.
 - IPC: `ipcRenderer.invoke` for commands/CRUD; `webContents.send` push events for status changes and log lines; everything exposed through `contextBridge`.
-- **SQLite is the source of truth.** Write every state transition to the DB *before* acting on it. The in-memory scheduler is derived state, never authoritative.
-- Definitions (`roles`, `workflows`, `tasks`) stay separate from executions (`pipeline_runs`, `workflow_runs`, `task_runs`).
+- **`<repo>/.somni/` files are the source of truth** (layout in architecture.md §4: `roles/*.md`, `workflows/*.json`, `runs/<id>/run.json` + logs + report). Write every state transition with an atomic temp-write-then-rename *before* acting on it. The in-memory scheduler is derived state, never authoritative; external file edits are picked up on refresh.
+- Definitions (`roles/`, `workflows/`) stay separate from executions (`runs/`). Raw logs are gitignored via a somni-maintained `.somni/.gitignore`; machine-specific settings and worktrees stay in Electron `userData`.
 - Statuses: `Queued / Running / Completed / Failed / Skipped / Cancelled`; pipeline additionally `Paused`.
 - Worktrees live under `<appData>/worktrees/`; branches are named `somni/<slug>-<yyyymmdd>`.
 - Rate-limit errors **pause the pipeline** with backoff — they do not consume a task's single retry.

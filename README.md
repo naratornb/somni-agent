@@ -10,12 +10,13 @@ somni orchestrates the **Claude Code CLI** to run coding workflows in parallel, 
 - **Roles** — reusable persona preambles prepended to task prompts.
 - **Pipeline** — checkbox-selected workflows run sequentially-within, parallel-across, under a configurable concurrency cap.
 - **Isolation** — the app creates a dedicated worktree + `somni/<slug>-<date>` branch per workflow; merging back is up to you.
-- **Reliability** — one retry then halt-workflow on failure; rate limits pause the whole pipeline with backoff; crash-safe resume from SQLite.
+- **Reliability** — one retry then halt-workflow on failure; rate limits pause the whole pipeline with backoff; crash-safe resume from persisted run state.
 - **Reports** — per-workflow summaries; style configurable (Minimal / Compact / Full).
+- **Your data** — everything somni knows about a repo lives in that repo's `.somni/` folder as plain JSON/Markdown: workflow definitions, roles, run state, reports. Commit it for cross-machine continuity; raw logs are auto-gitignored.
 
 ## Stack
 
-Electron + TypeScript + React + Vite, better-sqlite3. Details in [design/architecture.md](design/architecture.md); requirements in [design/design.md](design/design.md); agent conventions in [AGENTS.md](AGENTS.md).
+Electron + TypeScript + React + Vite — no database. Details in [design/architecture.md](design/architecture.md); requirements in [design/design.md](design/design.md); agent conventions in [AGENTS.md](AGENTS.md).
 
 ## Status
 
