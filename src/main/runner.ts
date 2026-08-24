@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from 'child_process'
+import { spawn } from 'child_process'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -8,40 +8,63 @@ import { feed, StreamEvent } from './stream'
 export type TaskEvent =
   StreamEvent | { kind: 'spawn-error'; message: string } | { kind: 'exit'; code: number | null }
 
-let child: ChildProcess | null = null
+export type SpawnHandle = {
+  done: Promise<{ code: number | null; ok: boolean }>
+  kill: () => void
+}
 
-// ponytail: single task, hardcoded scratch cwd — the orchestrator arrives in M2.
-export function runTask(prompt: string, send: (ev: TaskEvent) => void): void {
-  if (child) return
-  const cwd = mkdtempSync(join(tmpdir(), 'somni-m0-'))
-  child = spawn('claude', ['-p', prompt, '--output-format', 'stream-json', '--verbose'], {
-    cwd,
-    stdio: ['ignore', 'pipe', 'pipe']
-  })
+// Shared claude spawn/stream plumbing (used by the Playground and the executor).
+// Becomes ClaudeRunner behind the Runner adapter at M7.
+export function spawnClaude(
+  args: string[],
+  cwd: string,
+  onEvent: (ev: TaskEvent) => void,
+  onRaw?: (chunk: string) => void
+): SpawnHandle {
+  const child = spawn('claude', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
   let buf = ''
-  child.stdout!.setEncoding('utf8')
-  child.stdout!.on('data', (chunk: string) => {
+  let resultOk = false
+  child.stdout.setEncoding('utf8')
+  child.stdout.on('data', (chunk: string) => {
+    onRaw?.(chunk)
     const { events, rest } = feed(buf, chunk)
     buf = rest
-    events.forEach(send)
+    for (const ev of events) {
+      if (ev.kind === 'result') resultOk = ev.ok
+      onEvent(ev)
+    }
   })
-  child.stderr!.setEncoding('utf8')
-  child.stderr!.on('data', (chunk: string) => {
-    if (chunk.trim()) send({ kind: 'spawn-error', message: chunk.trim() })
+  child.stderr.setEncoding('utf8')
+  child.stderr.on('data', (chunk: string) => {
+    if (chunk.trim()) onEvent({ kind: 'spawn-error', message: chunk.trim() })
   })
-  child.on('error', (err) => {
-    send({ kind: 'spawn-error', message: err.message })
-    child = null
-    send({ kind: 'exit', code: null })
+  const done = new Promise<{ code: number | null; ok: boolean }>((resolve) => {
+    child.on('error', (err) => {
+      onEvent({ kind: 'spawn-error', message: err.message })
+      onEvent({ kind: 'exit', code: null })
+      resolve({ code: null, ok: false })
+    })
+    child.on('close', (code) => {
+      onEvent({ kind: 'exit', code })
+      resolve({ code, ok: resultOk && code === 0 })
+    })
   })
-  child.on('close', (code) => {
-    child = null
-    send({ kind: 'exit', code })
+  return { done, kill: () => child.kill('SIGTERM') }
+}
+
+let playground: SpawnHandle | null = null
+
+export function runTask(prompt: string, send: (ev: TaskEvent) => void): void {
+  if (playground) return
+  const cwd = mkdtempSync(join(tmpdir(), 'somni-m0-'))
+  playground = spawnClaude(['-p', prompt, '--output-format', 'stream-json', '--verbose'], cwd, send)
+  void playground.done.then(() => {
+    playground = null
   })
 }
 
 export function killTask(): void {
-  child?.kill('SIGTERM')
+  playground?.kill()
 }
 
 export function wireTaskIpc(ipcMain: Electron.IpcMain, contents: () => WebContents | null): void {

@@ -160,6 +160,45 @@ button.danger {
   color: #8a8a93;
 }
 
+.list li.plain {
+  cursor: default;
+}
+
+.list li .run-btn {
+  float: right;
+  padding: 3px 12px;
+  font-size: 12px;
+}
+
+.chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  background: #2c2c33;
+  color: #a1a1aa;
+}
+
+.chip.running {
+  background: #2a3550;
+  color: #8fb4f7;
+}
+
+.chip.ok {
+  background: #1f3a29;
+  color: #7fd8a2;
+}
+
+.chip.fail {
+  background: #3d2222;
+  color: #f0a3a3;
+}
+
+.chip.skip {
+  background: #33301f;
+  color: #d8c97f;
+}
+
 .output {
   flex: 1;
   overflow: auto;

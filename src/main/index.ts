@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { wireTaskIpc, killTask } from './runner'
 import { wireRepoIpc } from './repoIpc'
+import { cancelRun, isRunning, runWorkflow } from './executor'
 
 function createWindow(): void {
   // Create the browser window.
@@ -53,6 +54,16 @@ app.whenReady().then(() => {
 
   wireTaskIpc(ipcMain, () => BrowserWindow.getAllWindows()[0]?.webContents ?? null)
   wireRepoIpc()
+
+  const wc = (): Electron.WebContents | undefined => BrowserWindow.getAllWindows()[0]?.webContents
+  ipcMain.handle('run:start', (_e, repo: string, slug: string) => {
+    if (isRunning()) return
+    void runWorkflow(repo, slug, join(app.getPath('userData'), 'worktrees'), {
+      onState: (state) => wc()?.send('run:state', state),
+      onLog: (taskIndex, text) => wc()?.send('run:log', { taskIndex, text })
+    })
+  })
+  ipcMain.handle('run:cancel', () => cancelRun())
 
   createWindow()
 

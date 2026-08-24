@@ -41,4 +41,4 @@ npm run lint    # eslint
 
 ## Status & roadmap
 
-**Current milestone: M1 done** (`.somni/` file store — `src/main/store.ts`, atomic writes, `.gitignore` bootstrap; Roles + Workflows CRUD UI; repo picker with last-repo memory; M0 runner lives on under the Playground view, `src/main/stream.ts` parser later moves behind the Runner adapter). Next: M2 — single workflow run in a worktree. Phased plan M0–M6 is in [design/architecture.md §9](design/architecture.md). When a milestone lands, update this line and the Commands section.
+**Current milestone: M2 done** (single workflow run: `src/main/executor.ts` — worktree + `somni/<slug>-<runId>` branch, sequential tasks via `spawnClaude` in `src/main/runner.ts` with `--dangerously-skip-permissions`, role preamble prepended, `run.json` written atomically before every transition, raw logs to `runs/<id>/logs/`, fail → skip rest, cancel support; RunView with live statuses/log). Next: M3 — pipeline (checkboxes, multi-workflow concurrency, dashboard). Phased plan M0–M6 is in [design/architecture.md §9](design/architecture.md). When a milestone lands, update this line and the Commands section.

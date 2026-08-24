@@ -1,11 +1,25 @@
 import { useState } from 'react'
 import type { Role, Task, Workflow } from '../../preload/index'
 
-type Props = { repo: string; workflows: Workflow[]; roles: Role[]; refresh: () => void }
+type Props = {
+  repo: string
+  workflows: Workflow[]
+  roles: Role[]
+  refresh: () => void
+  onRun: (slug: string) => void
+  running: boolean
+}
 
 const emptyTask = (role: string): Task => ({ title: '', prompt: '', role, selected: true })
 
-export function WorkflowsView({ repo, workflows, roles, refresh }: Props): React.JSX.Element {
+export function WorkflowsView({
+  repo,
+  workflows,
+  roles,
+  refresh,
+  onRun,
+  running
+}: Props): React.JSX.Element {
   const [editing, setEditing] = useState<Workflow | null>(null)
 
   const save = async (): Promise<void> => {
@@ -122,6 +136,16 @@ export function WorkflowsView({ repo, workflows, roles, refresh }: Props): React
               {' '}
               · {w.tasks.length} task{w.tasks.length === 1 ? '' : 's'}
             </span>
+            <button
+              className="run-btn"
+              disabled={running || w.tasks.length === 0}
+              onClick={(e) => {
+                e.stopPropagation()
+                onRun(w.slug)
+              }}
+            >
+              ▶ Run
+            </button>
           </li>
         ))}
       </ul>

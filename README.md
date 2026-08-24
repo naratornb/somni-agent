@@ -22,7 +22,7 @@ Electron + TypeScript + React + Vite — no database. Details in [design/archite
 
 ## Status
 
-M1 done — choose a repo, define roles and workflows (stored in `<repo>/.somni/`), and run one-off prompts in the Playground. Roadmap: architecture.md §9.
+M2 done — define workflows and hit ▶ Run: tasks execute sequentially in an isolated worktree with live statuses, persisted run state, and per-task logs. Roadmap: architecture.md §9.
 
 ## Note on unattended runs
 
