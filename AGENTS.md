@@ -1,0 +1,44 @@
+# AGENTS.md — somni
+
+## What this is
+
+**somni** is a macOS desktop app (Electron) that orchestrates parallel, unattended `claude` CLI runs: workflows of ordered tasks, each with a role/persona, executed overnight in isolated git worktrees.
+
+- Requirements: [design/design.md](design/design.md)
+- Approved technical design: [design/architecture.md](design/architecture.md) — **source of truth**. If a decision must change, update that doc in the same PR; never silently diverge from it.
+
+## Stack
+
+Electron + TypeScript (strict) + React + Vite (electron-vite), better-sqlite3. No new dependencies without strong justification — prefer stdlib/Node/platform features.
+
+## Architecture rules (non-negotiable)
+
+- All business logic lives in the **main process**. The renderer only renders DB state and IPC events — no logic.
+- IPC: `ipcRenderer.invoke` for commands/CRUD; `webContents.send` push events for status changes and log lines; everything exposed through `contextBridge`.
+- **SQLite is the source of truth.** Write every state transition to the DB *before* acting on it. The in-memory scheduler is derived state, never authoritative.
+- Definitions (`roles`, `workflows`, `tasks`) stay separate from executions (`pipeline_runs`, `workflow_runs`, `task_runs`).
+- Statuses: `Queued / Running / Completed / Failed / Skipped / Cancelled`; pipeline additionally `Paused`.
+- Worktrees live under `<appData>/worktrees/`; branches are named `somni/<slug>-<yyyymmdd>`.
+- Rate-limit errors **pause the pipeline** with backoff — they do not consume a task's single retry.
+- The orchestrator stays one small boring module: no job-queue libraries, no worker threads.
+
+## Working style (Karpathy guidelines)
+
+1. **Think before coding.** State assumptions explicitly. If the design doc is ambiguous, or a simpler approach exists, say so before implementing — don't pick silently.
+2. **Simplicity first.** Minimum code that completes the current milestone. No speculative abstractions, no unrequested configurability, no error handling for impossible cases.
+3. **Surgical changes.** Touch only what the task requires. Match existing style. Remove orphans your own change created; leave pre-existing code alone unless asked.
+4. **Goal-driven execution.** Before coding, state a verifiable success criterion (e.g. M0: "click button → live claude output streams into the window → final result event parsed"). Non-trivial logic ships with one minimal check/test. Loop until verified.
+
+## Commands
+
+No scaffold yet — fill this in at M0:
+
+```
+npm run dev     # (M0) launch app in dev mode
+npm run build   # (M0) production build
+npm test        # (M0) run checks
+```
+
+## Status & roadmap
+
+**Current milestone: pre-M0** (design approved, no code). Phased plan M0–M5 is in [design/architecture.md §8](design/architecture.md). When a milestone lands, update this line and the Commands section.

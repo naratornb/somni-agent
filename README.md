@@ -1,1 +1,26 @@
-# somni-agent
+# somni
+
+A macOS desktop app that puts your Claude Max subscription to work while you sleep.
+
+somni orchestrates the **Claude Code CLI** to run coding workflows in parallel, unattended, overnight. You define workflows of ordered tasks (each with a role/persona like *Senior Developer* or *Senior Tester*), tick the ones you want run, and hit **Run Pipeline**. Each workflow executes in its own git worktree; in the morning you review branches and summary reports.
+
+## How it works
+
+- **Workflows** — ordered tasks sharing one workspace; each task sees the previous task's output (files, git state).
+- **Roles** — reusable persona preambles prepended to task prompts.
+- **Pipeline** — checkbox-selected workflows run sequentially-within, parallel-across, under a configurable concurrency cap.
+- **Isolation** — the app creates a dedicated worktree + `somni/<slug>-<date>` branch per workflow; merging back is up to you.
+- **Reliability** — one retry then halt-workflow on failure; rate limits pause the whole pipeline with backoff; crash-safe resume from SQLite.
+- **Reports** — per-workflow summaries; style configurable (Minimal / Compact / Full).
+
+## Stack
+
+Electron + TypeScript + React + Vite, better-sqlite3. Details in [design/architecture.md](design/architecture.md); requirements in [design/design.md](design/design.md); agent conventions in [AGENTS.md](AGENTS.md).
+
+## Status
+
+Pre-M0 — design approved, implementation not started. Roadmap: architecture.md §8.
+
+## Note on unattended runs
+
+Tasks run with `--dangerously-skip-permissions` inside worktrees on your own machine. Keep the Mac awake (energy settings or `caffeinate`) and review branches before merging.
