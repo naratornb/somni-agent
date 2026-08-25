@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { PipelineStatus, RepoData, RunState } from '../../preload/index'
+import type { DrainState, RepoData, RunState } from '../../preload/index'
 import { Playground } from './Playground'
 import { LogLine, PipelineView } from './PipelineView'
 import { RolesView } from './RolesView'
@@ -18,14 +18,14 @@ const timeAgo = (iso: string): string => {
 
 function App(): React.JSX.Element {
   const [repo, setRepo] = useState<string | null>(null)
-  const [data, setData] = useState<RepoData>({ roles: [], workflows: [] })
+  const [data, setData] = useState<RepoData>({ roles: [], workflows: [], backlog: [] })
   const [view, setView] = useState<View>('Workflows')
   const [runs, setRuns] = useState<Record<string, RunState>>({})
   const [logs, setLogs] = useState<Record<string, LogLine[]>>({})
-  const [pipelineStatus, setPipelineStatus] = useState<{
-    status: PipelineStatus
-    resumeAt?: string
-  } | null>(null)
+  // Drain state is owned by main (Decision 8): seeded from pipeline:state on
+  // mount — a renderer opened mid-drain shows the truth — then kept live by the
+  // pipeline:status pushes, which carry the mode.
+  const [drain, setDrain] = useState<DrainState | null>(null)
   const [orphans, setOrphans] = useState<RunState[]>([])
   // Post-Apply handoff: the Draft view names a slug, WorkflowsView opens it
   // once and clears it (consume-once, no lifted editor state).
@@ -58,7 +58,10 @@ function App(): React.JSX.Element {
         [runId]: [...(l[runId] ?? []), { taskIndex, text }].slice(-400)
       }))
     )
-    const offPipeline = window.somni.onPipelineStatus(setPipelineStatus)
+    void window.somni.pipelineState().then(setDrain)
+    const offPipeline = window.somni.onPipelineStatus(({ status, resumeAt, mode }) =>
+      setDrain({ status, resumeAt, mode: mode ?? null })
+    )
     return () => {
       offState()
       offLog()
@@ -75,20 +78,17 @@ function App(): React.JSX.Element {
     }
   }
 
+  // Tick the named slugs (none = just drain the Queue) and start or join the
+  // drain. Finished runs stay on the board — a drain is continuous now, so
+  // wiping runs/logs on every join would erase the night's work (Decision 8).
   const startPipeline = (slugs: string[]): void => {
-    if (!repo || slugs.length === 0) return
-    setRuns({})
-    setLogs({})
-    setPipelineStatus(null)
+    if (!repo) return
     setView('Pipeline')
-    void window.somni.startPipeline(repo, slugs)
+    void window.somni.startPipeline(repo, slugs).then(() => refresh())
   }
 
   const resumeRun = (runId: string): void => {
     if (!repo) return
-    setRuns({})
-    setLogs({})
-    setPipelineStatus(null)
     setView('Pipeline')
     setOrphans((o) => o.filter((r) => r.runId !== runId))
     void window.somni.resumePipeline(repo, [runId])
@@ -100,7 +100,9 @@ function App(): React.JSX.Element {
     void window.somni.abandonRun(repo, runId)
   }
 
-  const busy = Object.values(runs).some((r) => r.finishedAt == null)
+  // Busy = a drain is live, per main — not derived from the run board.
+  const busy = drain != null && drain.mode != null
+  const keepRunning = drain?.mode === 'keep'
   // Decision 9: chat is refused only for a workflow currently executing, not
   // for the whole app — so the editor chat gates on these slugs, not on busy.
   const runningSlugs = Object.values(runs)
@@ -157,8 +159,10 @@ function App(): React.JSX.Element {
             runs={runs}
             logs={logs}
             busy={busy}
-            pipelineStatus={pipelineStatus}
-            onStart={() => startPipeline(selected.map((w) => w.slug))}
+            drain={drain}
+            keepRunning={keepRunning}
+            onToggleKeepRunning={(on) => void window.somni.setKeepRunning(repo, on)}
+            onStart={() => startPipeline([])}
             onCancel={() => void window.somni.cancelPipeline()}
           />
         ) : view === 'Draft' ? (
@@ -177,10 +181,10 @@ function App(): React.JSX.Element {
           <WorkflowsView
             repo={repo}
             workflows={data.workflows}
+            backlog={data.backlog}
             roles={data.roles}
             refresh={refresh}
             onRun={(slug) => startPipeline([slug])}
-            running={busy}
             runningSlugs={runningSlugs}
             openSlug={openSlug}
             onOpened={() => setOpenSlug(null)}

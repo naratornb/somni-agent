@@ -1,5 +1,6 @@
 // Orchestrator (architecture.md §3): runs one workflow per worktree, tasks
-// sequential within it; the pipeline schedules selected workflows FIFO with
+// sequential within it. The pipeline is a drain (M9): one supervisor loop
+// re-scans the Queue for ticked workflows, consuming each tick at pickup, with
 // bounded concurrency. Every state transition is written to
 // .somni/runs/<runId>/run.json before it is acted on.
 
@@ -10,7 +11,15 @@ import { promisify } from 'util'
 import { writeReport } from './report'
 import { spawnRunner, SpawnHandle } from './runner'
 import { getRunner } from './runners'
-import { atomicWrite, loadRepo, resolveProfile, RunnerName, Settings, slugify } from './store'
+import {
+  atomicWrite,
+  loadRepo,
+  resolveProfile,
+  RunnerName,
+  setSelected,
+  Settings,
+  slugify
+} from './store'
 
 const git = promisify(execFile)
 
@@ -64,8 +73,15 @@ export type RunState = {
 export type RunEvents = {
   onState: (state: RunState) => void
   onLog: (runId: string, taskIndex: number, text: string) => void
-  onPipeline?: (status: PipelineStatus, info?: { resumeAt?: string }) => void
+  onPipeline?: (
+    status: PipelineStatus,
+    info?: { resumeAt?: string; mode?: DrainMode | null }
+  ) => void
 }
+
+// How a drain was entered (M9 Decision 1). They differ only by stop rule.
+export type DrainMode = 'manual' | 'nightly' | 'keep' | 'resume'
+export type DrainState = { mode: DrainMode | null; status: PipelineStatus; resumeAt?: string }
 
 type Ctrl = { cancelled: boolean; handle: SpawnHandle | null }
 
@@ -85,6 +101,7 @@ export type RunOpts = {
   backoffMs?: number
   maxBackoffMs?: number
   settings?: Settings // resolved repo+global settings (profile, report style)
+  pollMs?: number // drain idle poll interval (default 2000)
   ctrl?: Ctrl // internal: set by the pipeline
   gate?: Gate // internal: set by the pipeline
 }
@@ -130,7 +147,18 @@ function makeGate(events: RunEvents, opts: RunOpts): Gate {
   }
 }
 
-let pipeline: { cancelled: boolean; ctrls: Set<Ctrl>; gate: Gate } | null = null
+type Pipeline = {
+  cancelled: boolean
+  stopping: boolean
+  ctrls: Set<Ctrl>
+  gate: Gate
+  mode: DrainMode
+  status: PipelineStatus
+  resumeAt?: string
+}
+let pipeline: Pipeline | null = null
+// Keep Running (M9 Decision 6): never persisted, cleared by cancel.
+let keepRunning = false
 // Workflow slugs with a job currently executing — lets the chat guard refuse
 // only the workflow being executed rather than the whole app (M8 Decision 9).
 const activeSlugs = new Set<string>()
@@ -139,14 +167,62 @@ export function isRunning(slug?: string): boolean {
   return slug === undefined ? pipeline !== null : activeSlugs.has(slug)
 }
 
+export function getDrainState(): DrainState {
+  if (!pipeline) return { mode: null, status: 'Idle' }
+  return { mode: pipeline.mode, status: pipeline.status, resumeAt: pipeline.resumeAt }
+}
+
+// A live drain sleeps between scans; anything that adds work (a tick, a promote,
+// a Keep Running toggle) wakes it so the pickup is immediate rather than ≤pollMs.
+let wakeSleeper: (() => void) | null = null
+export function wakeDrain(): void {
+  wakeSleeper?.()
+}
+
+function sleepOrWake(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(done, ms)
+    function done(): void {
+      clearTimeout(timer)
+      wakeSleeper = null
+      resolve()
+    }
+    wakeSleeper = done
+  })
+}
+
+export function setKeepRunning(on: boolean): void {
+  keepRunning = on
+  // Toggling mid-drain changes the stop rule in place (Decision 6): on = idle
+  // and keep scanning; off = finish what's in flight and pick up nothing more
+  // (unconsumed ticks stay on disk).
+  if (pipeline && pipeline.mode !== 'resume') {
+    pipeline.mode = on ? 'keep' : 'manual'
+    pipeline.stopping = !on
+  }
+  wakeDrain()
+}
+
 export function cancelPipeline(): void {
+  keepRunning = false
   if (!pipeline) return
   pipeline.cancelled = true
+  pipeline.stopping = true
   pipeline.gate.abort()
   for (const c of pipeline.ctrls) {
     c.cancelled = true
     c.handle?.kill()
   }
+  wakeDrain()
+}
+
+// Pure so the nightly timer is testable: ms from `now` to the next HH:MM.
+export function msUntil(hhmm: string, now: Date): number {
+  const [h, m] = hhmm.split(':').map(Number)
+  const at = new Date(now)
+  at.setHours(h, m, 0, 0)
+  const ms = at.getTime() - now.getTime()
+  return ms > 0 ? ms : ms + 24 * 60 * 60_000
 }
 
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -154,65 +230,127 @@ const taskTitle = (t: { title?: string }, i: number): string => t.title || `task
 const human = (ms: number): string =>
   ms >= 60_000 ? `${Math.round(ms / 60_000)}m` : `${Math.round(ms / 1000)}s`
 
-// Sequential within a workflow, parallel across workflows, bounded by
-// maxConcurrency (each workflow has at most one running task, so bounding
-// concurrent workflows bounds concurrent tasks).
-async function runJobs(
-  jobs: { id: string; slug: string; run: (ctrl: Ctrl, gate: Gate) => Promise<RunState> }[],
+type Job = { id: string; slug: string; run: (ctrl: Ctrl, gate: Gate) => Promise<RunState> }
+
+// The drain (M9 §3): one supervisor loop. It refills up to maxConcurrency from
+// `next()`, then waits for either a job to finish or the poll interval to
+// elapse, and re-asks. Sequential within a workflow, parallel across them (each
+// workflow has at most one running task, so bounding workflows bounds tasks).
+// Stop rule: nothing in flight and either stopping (cancel) or not keep-running.
+async function drainLoop(
+  next: () => Job | undefined,
   maxConcurrency: number,
   events: RunEvents,
-  opts: RunOpts
+  opts: RunOpts,
+  mode: DrainMode
 ): Promise<RunState[]> {
   if (pipeline) throw new Error('a pipeline is already running')
-  const gate = opts.gate ?? makeGate(events, opts)
-  pipeline = { cancelled: false, ctrls: new Set(), gate }
-  const mine = pipeline
-  events.onPipeline?.('Running')
-  try {
-    const queue = [...jobs]
-    const results: RunState[] = []
-    const workers = Math.max(1, Math.min(maxConcurrency, queue.length))
-    await Promise.all(
-      Array.from({ length: workers }, async () => {
-        while (queue.length > 0 && !mine.cancelled) {
-          const job = queue.shift()!
-          const ctrl: Ctrl = { cancelled: false, handle: null }
-          mine.ctrls.add(ctrl)
-          activeSlugs.add(job.slug)
-          try {
-            results.push(await job.run(ctrl, gate))
-          } catch (err) {
-            events.onLog(job.id, -1, `[error] ${message(err)}`)
-          } finally {
-            mine.ctrls.delete(ctrl)
-            activeSlugs.delete(job.slug)
-          }
-        }
+  const emit = (status: PipelineStatus, info?: { resumeAt?: string }): void => {
+    // Paused always re-emits (each backoff window carries a fresh resumeAt);
+    // Running/Idle only on change, so an idling drain doesn't flap.
+    if (mine.status === status && status !== 'Paused') return
+    mine.status = status
+    mine.resumeAt = info?.resumeAt
+    events.onPipeline?.(status, { ...info, mode: mine.mode })
+  }
+  const gate = opts.gate ?? makeGate({ ...events, onPipeline: emit }, opts)
+  const mine: Pipeline = {
+    cancelled: false,
+    stopping: false,
+    ctrls: new Set(),
+    gate,
+    mode,
+    status: 'Idle'
+  }
+  pipeline = mine
+
+  const results: RunState[] = []
+  const running = new Set<Promise<void>>()
+  const workers = Math.max(1, maxConcurrency)
+  const pollMs = opts.pollMs ?? 2000
+  // A resume is a fixed set and never idles, whatever Keep Running says (Decision 7).
+  const idles = (): boolean => keepRunning && mode !== 'resume'
+
+  const launch = (job: Job): void => {
+    const ctrl: Ctrl = { cancelled: false, handle: null }
+    mine.ctrls.add(ctrl)
+    activeSlugs.add(job.slug)
+    emit('Running') // only ever on an actual launch
+    const p = Promise.resolve()
+      .then(() => job.run(ctrl, gate))
+      .then((r) => {
+        results.push(r)
       })
-    )
+      .catch((err) => events.onLog(job.id, -1, `[error] ${message(err)}`))
+      .finally(() => {
+        mine.ctrls.delete(ctrl)
+        activeSlugs.delete(job.slug)
+        running.delete(p)
+      })
+    running.add(p)
+  }
+
+  try {
+    for (;;) {
+      while (!mine.stopping && running.size < workers) {
+        const job = next()
+        if (!job) break
+        launch(job)
+      }
+      if (running.size === 0) {
+        if (mine.stopping || !idles()) break
+        emit('Idle') // keep-running, nothing to do — "waiting for work"
+      }
+      const sleep = sleepOrWake(pollMs)
+      await Promise.race([...running, sleep])
+      wakeDrain() // settle the sleeper if a job won the race
+    }
     return results
   } finally {
     pipeline = null
     activeSlugs.clear()
-    events.onPipeline?.('Idle')
+    wakeSleeper = null
+    events.onPipeline?.('Idle', { mode: null }) // mode null = the drain is over
   }
 }
 
-export function runPipeline(
+// Manual / nightly / keep-running all land here: a scanning drain over the
+// Queue (ticked workflows), consuming each tick as it picks the work up.
+export function startDrain(
   repo: string,
-  slugs: string[],
   worktreeBase: string,
   maxConcurrency: number,
   events: RunEvents,
-  opts: RunOpts = {}
+  opts: RunOpts = {},
+  mode: DrainMode = 'manual'
 ): Promise<RunState[]> {
-  const jobs = slugs.map((slug) => ({
-    id: slug,
-    slug,
-    run: (ctrl: Ctrl, gate: Gate) =>
-      runWorkflow(repo, slug, worktreeBase, events, { ...opts, ctrl, gate })
-  }))
-  return runJobs(jobs, maxConcurrency, events, opts)
+  const skip = new Set<string>() // untick failed → don't retry it this drain
+  const next = (): Job | undefined => {
+    // ponytail: queue order is alphabetical by slug (loadRepo lists sorted).
+    // A `tickedAt` stamp on the workflow would make it FIFO if that ever matters.
+    for (const wf of loadRepo(repo).workflows) {
+      // A re-tick of a running workflow stays on disk and runs after, never
+      // concurrently with itself (Decision 2).
+      if (!wf.selected || skip.has(wf.slug) || activeSlugs.has(wf.slug)) continue
+      try {
+        setSelected(repo, wf.slug, false) // the tick is consumed before the spawn
+      } catch (err) {
+        // Skip *this* slug for the rest of the drain and keep looking — one bad
+        // workflow must not stall the ones behind it (Decision 2, fail-soft).
+        skip.add(wf.slug)
+        events.onLog(wf.slug, -1, `[somni] could not untick ${wf.slug}: ${message(err)} — skipping`)
+        continue
+      }
+      return {
+        id: wf.slug,
+        slug: wf.slug,
+        run: (ctrl, gate) =>
+          runWorkflow(repo, wf.slug, worktreeBase, events, { ...opts, ctrl, gate })
+      }
+    }
+    return undefined
+  }
+  return drainLoop(next, maxConcurrency, events, opts, mode)
 }
 
 // Crash/quit recovery (§3): a run.json still marked Running on disk belongs to a
@@ -257,7 +395,8 @@ export function resumePipeline(
   events: RunEvents,
   opts: RunOpts = {}
 ): Promise<RunState[]> {
-  const jobs = runIds.map((runId) => ({
+  // Fixed set over the drain loop: a resume never scans the Queue (Decision 7).
+  const queue: Job[] = runIds.map((runId) => ({
     id: runId,
     slug: runSlug(repo, runId),
     run: (ctrl: Ctrl, gate: Gate) => {
@@ -266,7 +405,7 @@ export function resumePipeline(
       return execute(repo, state, events, { ...opts, ctrl, gate })
     }
   }))
-  return runJobs(jobs, maxConcurrency, events, opts)
+  return drainLoop(() => queue.shift(), maxConcurrency, events, opts, 'resume')
 }
 
 export function runWorkflow(

@@ -42,7 +42,7 @@ No microservices, no job-queue library, no worker threads. The orchestrator is a
 
 ## 3. Orchestration engine
 
-**Scheduling.** A pipeline run captures the checkbox-selected workflows/tasks. The runnable set at any moment = the first not-yet-completed task of each selected workflow whose predecessors have all completed. Loop: while `running < maxConcurrency` and runnable tasks exist, spawn the next (FIFO by workflow order). This yields sequential-within-workflow, parallel-across-workflows with no extra machinery. Every state transition is written to the run's `run.json` (atomic write-temp-then-rename) *before* it is acted on, so the files are always the source of truth.
+**Scheduling (M9: the pipeline is a drain).** One supervisor loop owns the concurrency slots. Whenever a slot is free it re-scans the Queue from disk (workflows with `selected: true`, alphabetical by slug) and picks the next workflow, **consuming its tick** with an atomic write *before* spawning — a tick means run once, and re-ticking a running workflow queues a follow-up run, never a concurrent one. Newly ticked or promoted workflows are picked up mid-run (a wake signal from the UI, plus a ~2 s poll that also catches external file edits). Three entry points share the one mechanism, differing only by stop rule: **Drain queue** (manual; stops when the Queue is empty and nothing is in flight), **Nightly Window** (a timer starts the same drain, having disarmed itself first — one night runs one night's consciously queued work), and **Keep Running** (idles when the Queue is empty and keeps scanning until toggled off; never persisted across restarts; Cancel clears it). Within a workflow, tasks stay sequential; across workflows, parallel up to `maxConcurrency`. Every state transition is written to the run's `run.json` (atomic write-temp-then-rename) *before* it is acted on, so the files are always the source of truth. Crash-resume stays a fixed-set path over the same loop — a resume never scans the Queue.
 
 **Worktree isolation.** On workflow start:
 
@@ -73,6 +73,7 @@ All per-repo state lives **inside the target repo** at `<repo>/.somni/` as plain
   workflows/<slug>.brief.md # the polished Brief (M8) — written on Apply, deleted with its workflow
   chats/<slug>.jsonl    # "Draft with AI" transcript for that workflow (committable)
   chats/_draft.jsonl    # the one in-progress brief-first draft (M8) — renamed to <slug>.jsonl on Apply
+  backlog.json          # the ordered Backlog (M9): a bare array of workflow slugs; missing slugs pruned on load
   runs/<runId>/
     run.json            # execution state: pipeline/workflow/task statuses, attempts,
                         # session_ids, timestamps, cost, exit codes — crash-resume source of truth
@@ -87,7 +88,7 @@ All per-repo state lives **inside the target repo** at `<repo>/.somni/` as plain
 
 Statuses: `Queued / Running / Completed / Failed / Skipped / Cancelled`, plus `Paused` at the pipeline level for rate-limit waits.
 
-**App-level state** (Electron `userData`, machine-specific): global settings (claude path, default concurrency, default report style, task timeout), the list of known repos, and worktrees under `<appData>/worktrees/` — worktrees are disposable local build artifacts; the `somni/…` branches are the portable part.
+**App-level state** (Electron `userData`, machine-specific): global settings (claude path, default concurrency, default report style, task timeout, and the Nightly Window — `nightlyTime` "HH:MM" + `nightlyArmed`, armed state surviving restart, time surviving disarm; it drains the last-opened repo), the list of known repos, and worktrees under `<appData>/worktrees/` — worktrees are disposable local build artifacts; the `somni/…` branches are the portable part. Keep Running is deliberately not persisted.
 
 ## 5. Runners & CLI invocation
 
@@ -172,12 +173,12 @@ A chat button in the workflow editor lets you yap a rough idea; an assistant ref
 
 Sidebar navigation, six views:
 
-1. **Workflows** — list with per-workflow pipeline checkboxes. Click into the **Workflow editor**: ordered task list (drag to reorder), each task = title, prompt, role dropdown, checkbox; repo picker for the workspace; the persisted Brief shown read-only above the tasks (collapsed by default); **Draft with AI** button → side chat panel (message list, input, streaming reply, question cards, proposal preview with Apply/Dismiss; disabled while this workflow is running in a pipeline).
+1. **Workflows** — list with per-workflow pipeline checkboxes. Click into the **Workflow editor**: ordered task list (drag to reorder), each task = title, prompt, role dropdown, checkbox; repo picker for the workspace; the persisted Brief shown read-only above the tasks (collapsed by default); **Draft with AI** button → side chat panel (message list, input, streaming reply, question cards, proposal preview with Apply/Dismiss; disabled while this workflow is running in a pipeline). Below the main list, the **Backlog** (M9): an ordered section of parked workflows — up/down reorder, **Promote** (into the Queue), and a "To backlog" park action on workflow rows; parked work has no tick checkbox and never runs by itself.
 2. **Draft** (M8) — the brief-first drafting view: describe an outcome with no saved workflow, answer the Interview's question cards, Propose Now anytime; Apply creates the queued workflow and lands in its editor.
 3. **Roles** — CRUD library of `name` + `preamble`.
-4. **Pipeline** — the dashboard: selected workflows as cards, each task a chip colored by status, overall progress bar, **Run / Pause / Cancel**. Click any running task → **live log pane** (streamed stdout tail).
+4. **Pipeline** — the drain dashboard: queued/running workflows as cards, each task a chip colored by status, overall progress bar, **Drain queue / Cancel** plus the **Keep Running** toggle and the drain mode/status (running, rate-limit paused with resume time, or "draining — waiting for work" while Keep Running idles). Click any running task → **live log pane** (streamed stdout tail).
 5. **Runs & Reports** — history of pipeline runs; per-workflow report (stats table + summary); links to the worktree/branch for review.
-6. **Settings** — max concurrency, runner binary paths, **default execution profile** (runner dropdown, per-runner model list, effort), **report style (Minimal / Compact / Full)**, task timeout. Role editor gains optional model/effort override fields.
+6. **Settings** — max concurrency, runner binary paths, **default execution profile** (runner dropdown, per-runner model list, effort), **report style (Minimal / Compact / Full)**, task timeout, and the **Nightly Window** (time-of-day + armed toggle with visible armed/disarmed state). Role editor gains optional model/effort override fields.
 
 ## 9. Phased build plan
 

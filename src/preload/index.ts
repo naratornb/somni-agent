@@ -13,6 +13,8 @@ export type Settings = {
   antigravityBinary?: string
   model?: string
   effort?: Effort
+  nightlyTime?: string
+  nightlyArmed?: boolean
 }
 export type Role = {
   slug: string
@@ -30,9 +32,12 @@ export type Workflow = {
   tasks: Task[]
   brief?: string
 }
-export type RepoData = { roles: Role[]; workflows: Workflow[] }
+export type RepoData = { roles: Role[]; workflows: Workflow[]; backlog: string[] }
 export type TaskStatus = 'Queued' | 'Running' | 'Completed' | 'Failed' | 'Skipped' | 'Cancelled'
 export type PipelineStatus = 'Running' | 'Paused' | 'Idle'
+export type DrainMode = 'manual' | 'nightly' | 'keep' | 'resume'
+export type DrainState = { mode: DrainMode | null; status: PipelineStatus; resumeAt?: string }
+export type PipelinePush = { status: PipelineStatus; resumeAt?: string; mode?: DrainMode | null }
 export type TaskRun = {
   title: string
   role: string
@@ -99,15 +104,22 @@ const somni = {
   startPipeline: (repo: string, slugs: string[]): Promise<void> =>
     ipcRenderer.invoke('pipeline:start', repo, slugs),
   cancelPipeline: (): Promise<void> => ipcRenderer.invoke('pipeline:cancel'),
+  pipelineState: (): Promise<DrainState> => ipcRenderer.invoke('pipeline:state'),
+  setKeepRunning: (repo: string, on: boolean): Promise<void> =>
+    ipcRenderer.invoke('pipeline:keepRunning', repo, on),
+  setBacklog: (repo: string, slugs: string[]): Promise<void> =>
+    ipcRenderer.invoke('backlog:set', repo, slugs),
+  park: (repo: string, slug: string): Promise<void> =>
+    ipcRenderer.invoke('backlog:park', repo, slug),
+  promote: (repo: string, slug: string): Promise<void> =>
+    ipcRenderer.invoke('backlog:promote', repo, slug),
   orphanedRuns: (repo: string): Promise<RunState[]> => ipcRenderer.invoke('pipeline:orphan', repo),
   resumePipeline: (repo: string, runIds: string[]): Promise<void> =>
     ipcRenderer.invoke('pipeline:resume', repo, runIds),
   abandonRun: (repo: string, runId: string): Promise<void> =>
     ipcRenderer.invoke('pipeline:abandon', repo, runId),
-  onPipelineStatus: (
-    cb: (s: { status: PipelineStatus; resumeAt?: string }) => void
-  ): (() => void) =>
-    on('pipeline:status', (p) => cb(p as { status: PipelineStatus; resumeAt?: string })),
+  onPipelineStatus: (cb: (s: PipelinePush) => void): (() => void) =>
+    on('pipeline:status', (p) => cb(p as PipelinePush)),
   onRunState: (cb: (state: RunState) => void): (() => void) =>
     on('run:state', (p) => cb(p as RunState)),
   onRunLog: (cb: (log: { runId: string; taskIndex: number; text: string }) => void): (() => void) =>

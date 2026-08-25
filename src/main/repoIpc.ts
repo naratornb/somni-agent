@@ -10,7 +10,7 @@ import {
   newChat,
   sendChat
 } from './chat'
-import { isRunning, lockedGit, RunState } from './executor'
+import { isRunning, lockedGit, RunState, wakeDrain } from './executor'
 import * as store from './store'
 import { atomicWrite, Settings } from './store'
 
@@ -25,7 +25,7 @@ export function readSettings(): Settings & { lastRepo?: string } {
   }
 }
 
-function writeSettings(patch: Partial<Settings & { lastRepo: string }>): void {
+export function patchSettings(patch: Partial<Settings & { lastRepo: string }>): void {
   atomicWrite(settingsPath(), JSON.stringify({ ...readSettings(), ...patch }, null, 2))
 }
 
@@ -54,7 +54,7 @@ function listRuns(repo: string): RunRow[] {
 const gitError = (err: unknown): string =>
   String((err as { stderr?: string })?.stderr || (err as Error)?.message || err).trim()
 
-export function wireRepoIpc(): void {
+export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
   ipcMain.handle('repo:last', () => {
     const { lastRepo } = readSettings()
     return lastRepo && existsSync(lastRepo) ? lastRepo : null
@@ -64,7 +64,7 @@ export function wireRepoIpc(): void {
     const res = await dialog.showOpenDialog({ properties: ['openDirectory'] })
     const path = res.filePaths[0]
     if (!path) return null
-    writeSettings({ lastRepo: path })
+    patchSettings({ lastRepo: path })
     return path
   })
 
@@ -74,7 +74,30 @@ export function wireRepoIpc(): void {
   })
 
   ipcMain.handle('settings:get', () => ({ ...store.SETTINGS_DEFAULTS, ...readSettings() }))
-  ipcMain.handle('settings:set', (_e, s: Settings) => writeSettings(s))
+  ipcMain.handle('settings:set', (_e, s: Settings) => {
+    patchSettings(s)
+    onSettingsChanged() // the nightly timer re-arms off the new time/armed flag
+  })
+
+  // Backlog (M9 Decision 4): parked work, ordered by the user. Promote =
+  // unpark + tick + wake, so a live drain picks it up without restarting.
+  ipcMain.handle('backlog:set', (_e, repo: string, slugs: string[]) =>
+    store.saveBacklog(repo, slugs)
+  )
+  // Park: untick + append. One IPC so the two writes can't half-land.
+  ipcMain.handle('backlog:park', (_e, repo: string, slug: string) => {
+    store.setSelected(repo, slug, false)
+    const backlog = store.loadBacklog(repo)
+    if (!backlog.includes(slug)) store.saveBacklog(repo, [...backlog, slug])
+  })
+  ipcMain.handle('backlog:promote', (_e, repo: string, slug: string) => {
+    store.saveBacklog(
+      repo,
+      store.loadBacklog(repo).filter((s) => s !== slug)
+    )
+    store.setSelected(repo, slug, true)
+    wakeDrain()
+  })
 
   ipcMain.handle('runs:list', (_e, repo: string) => listRuns(repo))
   ipcMain.handle('runs:report', (_e, repo: string, runId: string) => {

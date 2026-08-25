@@ -16,12 +16,15 @@ import {
   cancelPipeline,
   findOrphanedRuns,
   isRunning,
+  getDrainState,
+  msUntil,
   resumePipeline,
   RunState,
-  runPipeline,
-  runWorkflow
+  runWorkflow,
+  setKeepRunning,
+  startDrain
 } from './executor'
-import { saveRole, saveWorkflow } from './store'
+import { loadBacklog, saveBacklog, saveRole, saveWorkflow, setSelected } from './store'
 
 // A fake `claude` on PATH: emits a valid stream-json conversation and drops a
 // file in its cwd (proving it ran inside the worktree). Behaviours via env:
@@ -136,7 +139,16 @@ beforeEach(() => {
     selected: true,
     tasks: [{ title: 'Write docs', prompt: 'write docs', role: 'dev', selected: true }]
   })
+  // A scanning drain sees every tick on disk, so tests tick explicitly.
+  setSelected(repo, 'docs', false)
 })
+
+// The Queue: tick workflows for the drain to pick up.
+const tick = (...slugs: string[]): void => {
+  for (const s of slugs) setSelected(repo, s, true)
+}
+const selectedOnDisk = (slug: string): boolean =>
+  JSON.parse(readFileSync(join(repo, '.somni/workflows', slug + '.json'), 'utf8')).selected
 
 afterEach(() => {
   process.env.PATH = savedPath
@@ -392,6 +404,21 @@ describe('crash resume', () => {
     expect(onDisk.tasks[0].status).toBe('Cancelled')
   })
 
+  // Decision 7: resume is a fixed set over the drain loop and never scans the Queue.
+  it('a tick landing during a resume is not picked up', async () => {
+    const first = await runWorkflow(repo, 'docs', base, noEvents)
+    orphan(first.runId, (s) => {
+      s.status = 'Running'
+      s.tasks[0].status = 'Running'
+    })
+    rmSync(join(first.worktree, 'task-ran-here'))
+    fake({ FAKE_SLEEP: '0.15' })
+    tick('feature') // ticked before the resume starts — must still be ignored
+    const results = await resumePipeline(repo, [first.runId], 2, noEvents)
+    expect(results.map((r) => r.workflow)).toEqual(['docs'])
+    expect(selectedOnDisk('feature')).toBe(true) // untouched, never picked up
+  })
+
   // M8 Decision 9: the chat guard must key off the workflow's slug correctly
   // even for a resumed run (not just a freshly-started pipeline).
   it('isRunning(slug) reflects the correct workflow slug during a resumed run', async () => {
@@ -421,9 +448,10 @@ describe('crash resume', () => {
   })
 })
 
-describe('runPipeline', () => {
+describe('startDrain', () => {
   it('runs workflows concurrently in separate worktrees, all complete', async () => {
-    const results = await runPipeline(repo, ['feature', 'docs'], base, 2, noEvents)
+    tick('feature', 'docs')
+    const results = await startDrain(repo, base, 2, noEvents)
     expect(results.map((r) => r.status).sort()).toEqual(['Completed', 'Completed'])
     const ids = results.map((r) => r.runId)
     expect(new Set(ids).size).toBe(2) // same-second starts still get unique run dirs
@@ -433,15 +461,65 @@ describe('runPipeline', () => {
     }
   })
 
-  it('cancels an actively running task: current task Cancelled, rest Skipped, isRunning() false after', async () => {
-    // FAKE_HANG never exits on its own — the only way this test finishes is
-    // via cancelPipeline() actually killing the child mid-execution.
-    fake({ FAKE_HANG: '1' })
+  it('consumes the tick at pickup and runs the workflow exactly once', async () => {
+    tick('docs')
+    const results = await startDrain(repo, base, 1, noEvents)
+    expect(results.map((r) => r.workflow)).toEqual(['docs'])
+    expect(selectedOnDisk('docs')).toBe(false)
+  })
+
+  it('resolves immediately with [] when the Queue is empty', async () => {
+    expect(await startDrain(repo, base, 2, noEvents)).toEqual([])
+    expect(getDrainState()).toEqual({ mode: null, status: 'Idle' })
+  })
+
+  it('picks up a workflow ticked mid-drain without restarting', async () => {
+    fake({ FAKE_SLEEP: '0.3' })
+    tick('docs')
     let armed = (): void => {}
     const spawning = new Promise<void>((resolve) => {
       armed = resolve
     })
-    const run = runPipeline(repo, ['feature'], base, 1, {
+    const run = startDrain(
+      repo,
+      base,
+      1, // concurrency 1: 'feature' can only run if the drain re-scans
+      { onState: (s) => s.tasks[0]?.status === 'Running' && armed(), onLog: (): void => {} },
+      { pollMs: 20 }
+    )
+    await spawning
+    tick('feature')
+    const results = await run
+    expect(results.map((r) => r.workflow).sort()).toEqual(['docs', 'feature'])
+  })
+
+  it('keep running: idles on an empty Queue, picks up a later tick, stops when toggled off', async () => {
+    setKeepRunning(true)
+    const run = startDrain(repo, base, 1, noEvents, { pollMs: 20 }, 'keep')
+    await new Promise((r) => setTimeout(r, 60)) // idling, nothing in the Queue
+    expect(getDrainState().mode).toBe('keep')
+    expect(getDrainState().status).toBe('Idle')
+    tick('docs')
+    await new Promise((r) => setTimeout(r, 150))
+    setKeepRunning(false) // in-flight work finishes; 'feature' is never picked up
+    tick('feature')
+    const results = await run
+    expect(results.map((r) => r.workflow)).toEqual(['docs'])
+    expect(selectedOnDisk('feature')).toBe(true) // unconsumed tick stays on disk
+    expect(getDrainState().mode).toBe(null)
+  })
+
+  it('cancels an actively running task: current task Cancelled, rest Skipped, isRunning() false after', async () => {
+    // FAKE_HANG never exits on its own — the only way this test finishes is
+    // via cancelPipeline() actually killing the child mid-execution.
+    fake({ FAKE_HANG: '1' })
+    setKeepRunning(true) // ...and cancel must clear it, or the drain never ends
+    tick('feature')
+    let armed = (): void => {}
+    const spawning = new Promise<void>((resolve) => {
+      armed = resolve
+    })
+    const run = startDrain(repo, base, 1, {
       // attempts is bumped to 1 immediately before spawnClaude() is called
       // (synchronously, no await in between), so by the time this resolves
       // and cancelPipeline() runs, ctrl.handle is guaranteed to be set.
@@ -457,16 +535,18 @@ describe('runPipeline', () => {
     expect(state.status).toBe('Cancelled')
     expect(state.tasks.map((t) => t.status)).toEqual(['Cancelled', 'Skipped'])
     expect(isRunning()).toBe(false)
+    expect(getDrainState().mode).toBe(null)
   })
 
   // M8 Decision 9: the chat guard asks per workflow, not per pipeline.
   it('isRunning(slug) is true only for the workflow actually executing', async () => {
     fake({ FAKE_HANG: '1' })
+    tick('feature')
     let armed = (): void => {}
     const spawning = new Promise<void>((resolve) => {
       armed = resolve
     })
-    const run = runPipeline(repo, ['feature'], base, 1, {
+    const run = startDrain(repo, base, 1, {
       onState: (s) => {
         if (s.tasks[0]?.attempts === 1) armed()
       },
@@ -492,7 +572,7 @@ describe('runPipeline', () => {
     fake({ FAKE_SLEEP: '0.15' }) // gives concurrent runs a real window to overlap in
     const running = new Set<string>()
     let maxOverlap = 0
-    const results = await runPipeline(repo, ['w1', 'w2', 'w3', 'w4'], base, 2, {
+    const results = await startDrain(repo, base, 2, {
       onState: (s) => {
         if (s.tasks[0].status === 'Running') {
           if (!running.has(s.runId)) {
@@ -513,13 +593,13 @@ describe('runPipeline', () => {
 
   it('cancel aborts a pause wait instead of waiting out the backoff', async () => {
     fake({ FAKE_FAIL: '1', FAKE_RATE_LIMIT: '1' })
+    tick('docs')
     let paused = (): void => {}
     const gotPause = new Promise<void>((resolve) => {
       paused = () => resolve()
     })
-    const run = runPipeline(
+    const run = startDrain(
       repo,
-      ['docs'],
       base,
       1,
       { ...noEvents, onPipeline: (s) => s === 'Paused' && paused() },
@@ -535,10 +615,10 @@ describe('runPipeline', () => {
     // feature/Design is rate-limited on every attempt; docs succeeds ~100ms in,
     // i.e. inside the first pause window. That success must not reset the backoff.
     fake({ FAKE_RL_MATCH: 'design it', FAKE_SLEEP: '0.1' })
+    tick('feature', 'docs')
     const waits: number[] = []
-    const state = await runPipeline(
+    const state = await startDrain(
       repo,
-      ['feature', 'docs'],
       base,
       2,
       {
@@ -557,13 +637,194 @@ describe('runPipeline', () => {
     expect(waits[1]).toBeGreaterThan(waits[0] * 1.5) // doubled, not reset to base
   })
 
-  it('a missing workflow fails soft, the rest still run', async () => {
+  it('a workflow that cannot start fails soft, the rest still run', async () => {
+    saveWorkflow(repo, {
+      slug: '',
+      name: 'Empty',
+      selected: false,
+      tasks: [{ title: 'Off', prompt: 'no', role: 'dev', selected: false }]
+    })
+    tick('empty', 'docs')
     const errors: string[] = []
-    const results = await runPipeline(repo, ['nope', 'docs'], base, 2, {
+    const results = await startDrain(repo, base, 2, {
       onState: () => {},
       onLog: (_id, _i, text) => errors.push(text)
     })
     expect(results.map((r) => r.workflow)).toEqual(['docs'])
-    expect(errors.some((e) => e.includes('workflow not found'))).toBe(true)
+    expect(errors.some((e) => e.includes('no tasks selected'))).toBe(true)
+  })
+
+  it('a re-tick of a running workflow never runs concurrently with itself, only after', async () => {
+    fake({ FAKE_SLEEP: '0.15' })
+    tick('feature', 'docs')
+    const started = new Set<string>()
+    const finished = new Set<string>()
+    let overlap = 0
+    let maxOverlapFeature = 0
+    let retickedOnce = false
+    const results = await startDrain(
+      repo,
+      base,
+      2,
+      {
+        onState: (s) => {
+          if (s.status === 'Running' && !started.has(s.runId)) {
+            started.add(s.runId)
+            if (s.workflow === 'feature') {
+              overlap++
+              maxOverlapFeature = Math.max(maxOverlapFeature, overlap)
+              if (!retickedOnce) {
+                retickedOnce = true
+                tick('feature') // re-tick while it's still mid-run
+              }
+            }
+          } else if (
+            (s.status === 'Completed' || s.status === 'Failed') &&
+            !finished.has(s.runId)
+          ) {
+            finished.add(s.runId)
+            if (s.workflow === 'feature') overlap--
+          }
+        },
+        onLog: (): void => {}
+      },
+      { pollMs: 20 }
+    )
+    expect(maxOverlapFeature).toBe(1) // never picked up while its own run is in flight
+    expect(results.filter((r) => r.workflow === 'feature')).toHaveLength(2) // ran again after
+  })
+
+  it('a tick landing exactly as the last in-flight job finishes is still picked up (no shutdown race)', async () => {
+    tick('docs')
+    let retickedOnce = false
+    const results = await startDrain(
+      repo,
+      base,
+      1,
+      {
+        onState: (s) => {
+          if (!retickedOnce && s.status === 'Completed') {
+            retickedOnce = true
+            tick('feature')
+          }
+        },
+        onLog: (): void => {}
+      },
+      { pollMs: 20 }
+    )
+    expect(results.map((r) => r.workflow).sort()).toEqual(['docs', 'feature'])
+  })
+
+  it('untick failure fails soft and does not spam the log on every poll', async () => {
+    tick('docs') // alphabetically first — the one next() will try to untick
+    chmodSync(join(repo, '.somni', 'workflows'), 0o555) // read-only: setSelected write fails
+    const errors: string[] = []
+    try {
+      const results = await startDrain(
+        repo,
+        base,
+        2,
+        { onState: (): void => {}, onLog: (_id, _i, text) => errors.push(text) },
+        { pollMs: 20 }
+      )
+      expect(results).toEqual([]) // nothing ever ran
+    } finally {
+      chmodSync(join(repo, '.somni', 'workflows'), 0o755)
+    }
+    // The per-drain skip set means the slug is logged once, not once per scan.
+    expect(errors.filter((e) => e.includes('could not untick')).length).toBe(1)
+  })
+
+  it('untick failure on one slug does not block a different ticked slug from running', async () => {
+    // 'docs' sorts before 'feature', so next() tries it first. A directory in
+    // place of the atomic write's temp file makes *only* docs' untick fail
+    // (loadRepo still lists both — it only reads *.json).
+    tick('feature', 'docs')
+    mkdirSync(join(repo, '.somni', 'workflows', 'docs.json.tmp'))
+    const errors: string[] = []
+    const results = await startDrain(
+      repo,
+      base,
+      2,
+      { onState: (): void => {}, onLog: (_id, _i, text) => errors.push(text) },
+      { pollMs: 20 }
+    )
+    expect(results.map((r) => r.workflow)).toEqual(['feature']) // skipped, not stalled
+    expect(errors.filter((e) => e.includes('could not untick docs')).length).toBe(1)
+  })
+
+  it('cancel during a keep-running idle exits promptly and leaves a clean Idle state', async () => {
+    setKeepRunning(true)
+    const run = startDrain(repo, base, 1, noEvents, { pollMs: 20 }, 'keep')
+    await new Promise((r) => setTimeout(r, 40)) // idling, nothing in the Queue
+    expect(getDrainState().status).toBe('Idle')
+    const t0 = Date.now()
+    cancelPipeline()
+    const results = await run
+    expect(Date.now() - t0).toBeLessThan(300) // doesn't wait out a poll interval, let alone longer
+    expect(results).toEqual([])
+    expect(getDrainState()).toEqual({ mode: null, status: 'Idle' })
+  })
+
+  it('does not flap Running/Idle across sequential pickups within one drain', async () => {
+    tick('feature', 'docs')
+    const statuses: string[] = []
+    await startDrain(repo, base, 2, { ...noEvents, onPipeline: (s) => statuses.push(s) })
+    // two workflows launch in this drain; Running fires once (dedup), Idle once at the very end
+    expect(statuses.filter((s) => s === 'Running')).toHaveLength(1)
+    expect(statuses.filter((s) => s === 'Idle')).toHaveLength(1)
+  })
+
+  it('getDrainState() reflects Running mid-drain and resets to null/Idle after', async () => {
+    tick('docs')
+    let sawRunning = false
+    await startDrain(repo, base, 1, {
+      onState: () => {
+        if (getDrainState().status === 'Running') sawRunning = true
+      },
+      onLog: (): void => {}
+    })
+    expect(sawRunning).toBe(true)
+    expect(getDrainState()).toEqual({ mode: null, status: 'Idle' })
+  })
+
+  it('the push payload carries the drain mode, and the final Idle carries null', async () => {
+    tick('docs')
+    const modes: (string | null | undefined)[] = []
+    await startDrain(repo, base, 1, {
+      ...noEvents,
+      onPipeline: (_s, info) => modes.push(info?.mode)
+    })
+    expect(modes[0]).toBe('manual')
+    expect(modes[modes.length - 1]).toBe(null)
+  })
+})
+
+describe('msUntil', () => {
+  const at = (h: number, m: number): Date => new Date(2026, 0, 1, h, m, 0, 0)
+
+  it('counts forward to a time later today', () => {
+    expect(msUntil('03:30', at(1, 30))).toBe(2 * 60 * 60_000)
+  })
+
+  it('wraps to tomorrow when the time has passed', () => {
+    expect(msUntil('01:00', at(3, 0))).toBe(22 * 60 * 60_000)
+  })
+
+  it('treats exactly-now as tomorrow rather than firing instantly', () => {
+    expect(msUntil('03:00', at(3, 0))).toBe(24 * 60 * 60_000)
+  })
+})
+
+describe('backlog', () => {
+  it('round-trips and prunes slugs whose workflow is gone', () => {
+    saveBacklog(repo, ['docs', 'feature'])
+    expect(loadBacklog(repo)).toEqual(['docs', 'feature'])
+    saveBacklog(repo, ['feature', 'ghost', 'docs'])
+    expect(loadBacklog(repo)).toEqual(['feature', 'docs'])
+  })
+
+  it('is empty when the file is missing', () => {
+    expect(loadBacklog(repo)).toEqual([])
   })
 })

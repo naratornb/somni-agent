@@ -53,6 +53,26 @@ export function SettingsView(): React.JSX.Element {
         </select>
       </label>
       <label className="row">
+        <span className="field-label">Nightly Window</span>
+        <input
+          type="time"
+          value={s.nightlyTime ?? ''}
+          onChange={(e) => patch({ nightlyTime: e.target.value || undefined })}
+        />
+        {/* Chip, not just the checkbox: the app auto-disarms after firing. */}
+        <label className="row" style={{ width: 'auto' }}>
+          <input
+            type="checkbox"
+            checked={!!s.nightlyArmed}
+            disabled={!s.nightlyTime}
+            onChange={(e) => patch({ nightlyArmed: e.target.checked })}
+          />
+          <span className={s.nightlyArmed ? 'chip ok' : 'chip'}>
+            {s.nightlyArmed ? 'Armed' : 'Disarmed'}
+          </span>
+        </label>
+      </label>
+      <label className="row">
         <span className="field-label">Runner</span>
         <select value={s.runner} onChange={(e) => patch({ runner: e.target.value as RunnerName })}>
           <option value="claude">Claude Code (claude)</option>

@@ -24,6 +24,10 @@ export type Settings = Profile & {
   // Empty = look the binary up on PATH (§8).
   claudeBinary?: string
   antigravityBinary?: string
+  // Nightly Window (M9 Decision 5): the time survives a disarm; armed persists
+  // across restarts and is re-armed on app ready.
+  nightlyTime?: string // "HH:MM"
+  nightlyArmed?: boolean
 }
 
 export const SETTINGS_DEFAULTS = {
@@ -43,7 +47,7 @@ export type Workflow = {
   // The Brief sidecar (workflows/<slug>.brief.md, M8 §4) — absent if never written.
   brief?: string
 }
-export type RepoData = { roles: Role[]; workflows: Workflow[] }
+export type RepoData = { roles: Role[]; workflows: Workflow[]; backlog: string[] }
 
 export function slugify(name: string): string {
   return (
@@ -127,7 +131,11 @@ function parseRole(slug: string, raw: string): Role {
 
 function listFiles(path: string, ext: string): string[] {
   if (!existsSync(path)) return []
-  return readdirSync(path).filter((f) => f.endsWith(ext))
+  // Sorted: the drain picks the alphabetically-first ticked workflow, so the
+  // listing order must not depend on the filesystem.
+  return readdirSync(path)
+    .filter((f) => f.endsWith(ext))
+    .sort()
 }
 
 export function loadRepo(repo: string): RepoData {
@@ -150,7 +158,26 @@ export function loadRepo(repo: string): RepoData {
       return [] // a malformed file shouldn't take the whole repo down
     }
   })
-  return { roles, workflows }
+  return { roles, workflows, backlog: loadBacklog(repo) }
+}
+
+// Backlog (M9 Decision 4): a bare ordered array of slugs in .somni/backlog.json.
+// Slugs whose workflow is gone are pruned in memory; the prune lands on disk on
+// the next save.
+export function loadBacklog(repo: string): string[] {
+  let slugs: unknown
+  try {
+    slugs = JSON.parse(readFileSync(dir(repo, 'backlog.json'), 'utf8'))
+  } catch {
+    return []
+  }
+  if (!Array.isArray(slugs)) return []
+  const known = new Set(listFiles(dir(repo, 'workflows'), '.json').map((f) => f.slice(0, -5)))
+  return slugs.filter((s): s is string => typeof s === 'string' && known.has(s))
+}
+
+export function saveBacklog(repo: string, slugs: string[]): void {
+  atomicWrite(dir(repo, 'backlog.json'), JSON.stringify(slugs, null, 2) + '\n')
 }
 
 export function saveRole(repo: string, role: Role): Role {
@@ -187,6 +214,15 @@ export function saveWorkflow(repo: string, wf: Workflow): Workflow {
     JSON.stringify({ name, selected, tasks }, null, 2) + '\n'
   )
   return { ...wf, slug }
+}
+
+// Tick / untick only. Deliberately not `saveWorkflow`: the drain unticks from a
+// stale in-memory snapshot's slug, and a full save would clobber `tasks` edited
+// meanwhile. Throws if the file is unreadable/unwritable — callers fail soft.
+export function setSelected(repo: string, slug: string, selected: boolean): void {
+  const path = dir(repo, 'workflows', slug + '.json')
+  const w = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+  atomicWrite(path, JSON.stringify({ ...w, selected }, null, 2) + '\n')
 }
 
 export function deleteWorkflow(repo: string, slug: string): void {

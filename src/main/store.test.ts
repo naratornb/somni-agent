@@ -5,13 +5,16 @@ import { join } from 'path'
 import {
   slugify,
   ensureSomni,
+  loadBacklog,
   loadRepo,
+  saveBacklog,
   saveRole,
   deleteRole,
   saveWorkflow,
   deleteWorkflow,
   resolveProfile,
-  resolveSettings
+  resolveSettings,
+  setSelected
 } from './store'
 
 let repo: string
@@ -51,7 +54,7 @@ describe('store round-trips', () => {
     deleteRole(repo, 'x')
     saveWorkflow(repo, { slug: '', name: 'Y', selected: false, tasks: [] })
     deleteWorkflow(repo, 'y')
-    expect(loadRepo(repo)).toEqual({ roles: [], workflows: [] })
+    expect(loadRepo(repo)).toEqual({ roles: [], workflows: [], backlog: [] })
     expect(existsSync(join(repo, '.somni/roles/x.md'))).toBe(false)
   })
 
@@ -131,5 +134,55 @@ describe('execution profile & settings resolution', () => {
   it('round-trips a runner override through role frontmatter', () => {
     saveRole(repo, { slug: 'dev', name: 'Dev', preamble: 'p', runner: 'antigravity' })
     expect(loadRepo(repo).roles[0].runner).toBe('antigravity')
+  })
+})
+
+describe('setSelected', () => {
+  it('flips only the tick, leaving tasks and the Brief sidecar untouched', () => {
+    saveWorkflow(repo, {
+      slug: '',
+      name: 'Ship it',
+      selected: false,
+      brief: 'the why',
+      tasks: [{ title: 'T', prompt: 'p', role: 'dev', selected: true }]
+    })
+    setSelected(repo, 'ship-it', true)
+    const wf = loadRepo(repo).workflows[0]
+    expect(wf.selected).toBe(true)
+    expect(wf.tasks).toEqual([{ title: 'T', prompt: 'p', role: 'dev', selected: true }])
+    expect(wf.brief).toBe('the why\n')
+    setSelected(repo, 'ship-it', false)
+    expect(loadRepo(repo).workflows[0].selected).toBe(false)
+  })
+
+  it('throws for a workflow that is not on disk (callers fail soft)', () => {
+    expect(() => setSelected(repo, 'ghost', true)).toThrow()
+  })
+})
+
+// repoIpc's backlog:promote and backlog:park handlers are thin compositions of
+// these store functions (M9 Decision 4) — exercised here since the IPC layer
+// itself needs an Electron mock to unit test.
+describe('backlog promote/park (mirrors repoIpc composition)', () => {
+  it('promote removes the slug from backlog and ticks its workflow', () => {
+    saveWorkflow(repo, { slug: '', name: 'Ship it', selected: false, tasks: [] })
+    saveWorkflow(repo, { slug: '', name: 'Other', selected: false, tasks: [] })
+    saveBacklog(repo, ['ship-it', 'other'])
+    saveBacklog(
+      repo,
+      loadBacklog(repo).filter((s) => s !== 'ship-it')
+    )
+    setSelected(repo, 'ship-it', true)
+    expect(loadBacklog(repo)).toEqual(['other'])
+    expect(loadRepo(repo).workflows.find((w) => w.slug === 'ship-it')?.selected).toBe(true)
+  })
+
+  it('park unticks the workflow and appends it to backlog', () => {
+    saveWorkflow(repo, { slug: '', name: 'Ship it', selected: true, tasks: [] })
+    setSelected(repo, 'ship-it', false)
+    const backlog = loadBacklog(repo)
+    saveBacklog(repo, [...backlog, 'ship-it'])
+    expect(loadBacklog(repo)).toEqual(['ship-it'])
+    expect(loadRepo(repo).workflows.find((w) => w.slug === 'ship-it')?.selected).toBe(false)
   })
 })
