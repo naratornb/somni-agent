@@ -15,7 +15,10 @@ Glossary of domain terms. Definitions only — no implementation details. When a
 
 ## Drafting & queueing (Phase 2)
 
-- **Brief** — an outcome-focused statement of what the user wants built, written (or dictated) in the Product-Owner hat. Input to drafting; never executed directly.
+- **Brief** — an outcome-focused statement of what the user wants built, written (or dictated) in the Product-Owner hat, and sharpened by the Interview. Input to drafting; never executed directly. The polished Brief is part of its Workflow and travels with it.
+- **Interview** — the structured questioning the drafting AI conducts before proposing: one Question at a time, each with concrete options and a recommended answer, relentless until every branch that materially changes the Workflow is resolved. Applies to both conversational drafting surfaces; never to one-shot Refine.
+- **Question** — one step of the Interview, presented as selectable choices (custom answers always possible). Answering is the user's only obligation in drafting.
+- **Propose Now** — the user's ever-present right to end the Interview early and receive a Proposal built on stated assumptions. Only the user may cut an Interview short.
 - **Proposal** — AI-drafted Workflow content produced from a Brief or chat: Tasks *and any new Roles they need*. Inert until Applied.
 - **Apply** — the single user-triggered act that writes a Proposal into definitions. Nothing about a Proposal touches disk before Apply; there is no other mutation path from drafting.
 - **Refine** — an inline AI rewrite of one existing field (a Task prompt, a Role preamble) into a sharper version of itself; same Apply rule.
