@@ -236,6 +236,16 @@ button.chip.focused {
   padding: 10px;
 }
 
+.error-banner {
+  padding: 8px 10px;
+  background: #3d2222;
+  color: #f0a3a3;
+  border-radius: 6px;
+  font:
+    12px/1.5 ui-monospace,
+    monospace;
+}
+
 .footer {
   font:
     12px ui-monospace,

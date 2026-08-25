@@ -10,7 +10,7 @@ export type TaskEvent =
 
 export type SpawnHandle = {
   done: Promise<{ code: number | null; ok: boolean }>
-  kill: () => void
+  kill: (signal?: NodeJS.Signals) => void
 }
 
 // Shared claude spawn/stream plumbing (used by the Playground and the executor).
@@ -49,7 +49,7 @@ export function spawnClaude(
       resolve({ code, ok: resultOk && code === 0 })
     })
   })
-  return { done, kill: () => child.kill('SIGTERM') }
+  return { done, kill: (signal = 'SIGTERM') => child.kill(signal) }
 }
 
 let playground: SpawnHandle | null = null

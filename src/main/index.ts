@@ -1,10 +1,18 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, powerSaveBlocker } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { wireTaskIpc, killTask } from './runner'
 import { wireRepoIpc } from './repoIpc'
-import { cancelPipeline, isRunning, runPipeline } from './executor'
+import {
+  abandonRun,
+  cancelPipeline,
+  findOrphanedRuns,
+  isRunning,
+  resumePipeline,
+  RunState,
+  runPipeline
+} from './executor'
 
 function createWindow(): void {
   // Create the browser window.
@@ -56,15 +64,38 @@ app.whenReady().then(() => {
   wireRepoIpc()
 
   const wc = (): Electron.WebContents | undefined => BrowserWindow.getAllWindows()[0]?.webContents
+  const events = {
+    onState: (state: RunState) => wc()?.send('run:state', state),
+    onLog: (runId: string, taskIndex: number, text: string) =>
+      wc()?.send('run:log', { runId, taskIndex, text }),
+    onPipeline: (status: string, info?: { resumeAt?: string }) =>
+      wc()?.send('pipeline:status', { status, ...info })
+  }
+
+  // Keep the Mac awake for the whole pipeline (lid-closed sleep still needs
+  // user energy settings — see architecture.md §10).
+  const awake = (run: Promise<unknown>): void => {
+    const id = powerSaveBlocker.start('prevent-app-suspension')
+    void run.finally(() => {
+      if (powerSaveBlocker.isStarted(id)) powerSaveBlocker.stop(id)
+    })
+  }
+
+  // ponytail: concurrency hardcoded at 2 until M5 settings
   ipcMain.handle('pipeline:start', (_e, repo: string, slugs: string[]) => {
     if (isRunning() || slugs.length === 0) return
-    // ponytail: concurrency hardcoded at 2 until M5 settings
-    void runPipeline(repo, slugs, join(app.getPath('userData'), 'worktrees'), 2, {
-      onState: (state) => wc()?.send('run:state', state),
-      onLog: (runId, taskIndex, text) => wc()?.send('run:log', { runId, taskIndex, text })
-    })
+    awake(runPipeline(repo, slugs, join(app.getPath('userData'), 'worktrees'), 2, events))
   })
   ipcMain.handle('pipeline:cancel', () => cancelPipeline())
+  // A run.json still marked Running while nothing runs here belongs to a dead process.
+  ipcMain.handle('pipeline:orphan', (_e, repo: string) =>
+    isRunning() ? [] : findOrphanedRuns(repo)
+  )
+  ipcMain.handle('pipeline:resume', (_e, repo: string, runIds: string[]) => {
+    if (isRunning() || runIds.length === 0) return
+    awake(resumePipeline(repo, runIds, 2, events))
+  })
+  ipcMain.handle('pipeline:abandon', (_e, repo: string, runId: string) => abandonRun(repo, runId))
 
   createWindow()
 

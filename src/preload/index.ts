@@ -6,10 +6,12 @@ export type Task = { title: string; prompt: string; role: string; selected: bool
 export type Workflow = { slug: string; name: string; selected: boolean; tasks: Task[] }
 export type RepoData = { roles: Role[]; workflows: Workflow[] }
 export type TaskStatus = 'Queued' | 'Running' | 'Completed' | 'Failed' | 'Skipped' | 'Cancelled'
+export type PipelineStatus = 'Running' | 'Paused' | 'Idle'
 export type TaskRun = {
   title: string
   role: string
   status: TaskStatus
+  attempts?: number
   sessionId?: string
   exitCode?: number | null
   costUsd?: number
@@ -41,6 +43,15 @@ const somni = {
   startPipeline: (repo: string, slugs: string[]): Promise<void> =>
     ipcRenderer.invoke('pipeline:start', repo, slugs),
   cancelPipeline: (): Promise<void> => ipcRenderer.invoke('pipeline:cancel'),
+  orphanedRuns: (repo: string): Promise<RunState[]> => ipcRenderer.invoke('pipeline:orphan', repo),
+  resumePipeline: (repo: string, runIds: string[]): Promise<void> =>
+    ipcRenderer.invoke('pipeline:resume', repo, runIds),
+  abandonRun: (repo: string, runId: string): Promise<void> =>
+    ipcRenderer.invoke('pipeline:abandon', repo, runId),
+  onPipelineStatus: (
+    cb: (s: { status: PipelineStatus; resumeAt?: string }) => void
+  ): (() => void) =>
+    on('pipeline:status', (p) => cb(p as { status: PipelineStatus; resumeAt?: string })),
   onRunState: (cb: (state: RunState) => void): (() => void) =>
     on('run:state', (p) => cb(p as RunState)),
   onRunLog: (cb: (log: { runId: string; taskIndex: number; text: string }) => void): (() => void) =>
