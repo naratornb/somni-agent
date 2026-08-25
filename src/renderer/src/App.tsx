@@ -6,8 +6,9 @@ import { RolesView } from './RolesView'
 import { RunsView } from './RunsView'
 import { SettingsView } from './SettingsView'
 import { WorkflowsView } from './WorkflowsView'
+import { DraftView } from './DraftView'
 
-const VIEWS = ['Workflows', 'Pipeline', 'Runs', 'Roles', 'Settings', 'Playground'] as const
+const VIEWS = ['Workflows', 'Draft', 'Pipeline', 'Runs', 'Roles', 'Settings', 'Playground'] as const
 type View = (typeof VIEWS)[number]
 
 const timeAgo = (iso: string): string => {
@@ -26,6 +27,9 @@ function App(): React.JSX.Element {
     resumeAt?: string
   } | null>(null)
   const [orphans, setOrphans] = useState<RunState[]>([])
+  // Post-Apply handoff: the Draft view names a slug, WorkflowsView opens it
+  // once and clears it (consume-once, no lifted editor state).
+  const [openSlug, setOpenSlug] = useState<string | null>(null)
 
   const refresh = useCallback(
     (path = repo): void => {
@@ -97,6 +101,11 @@ function App(): React.JSX.Element {
   }
 
   const busy = Object.values(runs).some((r) => r.finishedAt == null)
+  // Decision 9: chat is refused only for a workflow currently executing, not
+  // for the whole app — so the editor chat gates on these slugs, not on busy.
+  const runningSlugs = Object.values(runs)
+    .filter((r) => r.finishedAt == null)
+    .map((r) => r.workflow)
   const selected = data.workflows.filter((w) => w.selected)
 
   return (
@@ -152,6 +161,16 @@ function App(): React.JSX.Element {
             onStart={() => startPipeline(selected.map((w) => w.slug))}
             onCancel={() => void window.somni.cancelPipeline()}
           />
+        ) : view === 'Draft' ? (
+          <DraftView
+            repo={repo}
+            roles={data.roles}
+            onApplied={(wf) => {
+              refresh()
+              setOpenSlug(wf.slug)
+              setView('Workflows')
+            }}
+          />
         ) : view === 'Runs' ? (
           <RunsView repo={repo} />
         ) : view === 'Workflows' ? (
@@ -162,6 +181,9 @@ function App(): React.JSX.Element {
             refresh={refresh}
             onRun={(slug) => startPipeline([slug])}
             running={busy}
+            runningSlugs={runningSlugs}
+            openSlug={openSlug}
+            onOpened={() => setOpenSlug(null)}
           />
         ) : (
           <RolesView repo={repo} roles={data.roles} refresh={refresh} />

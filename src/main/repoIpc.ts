@@ -1,7 +1,15 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { ChatEvent, loadChat, newChat, sendChat } from './chat'
+import {
+  applyProposal,
+  ChatEvent,
+  ChatProposal,
+  DRAFT_KEY,
+  loadChat,
+  newChat,
+  sendChat
+} from './chat'
 import { isRunning, lockedGit, RunState } from './executor'
 import * as store from './store'
 import { atomicWrite, Settings } from './store'
@@ -102,17 +110,22 @@ export function wireRepoIpc(): void {
     store.deleteWorkflow(repo, slug)
   )
 
-  // Draft with AI (§7). Read-only chat; Apply goes through workflow:save above.
+  // Draft with AI (§7). Read-only chat; `proposal:apply` is the only write out
+  // of it, and it happens in main so definitions never round-trip the renderer.
   ipcMain.handle('chat:load', (_e, repo: string, slug: string) => loadChat(repo, slug))
   ipcMain.handle('chat:new', (_e, repo: string, slug: string) => newChat(repo, slug))
   ipcMain.handle('chat:send', (_e, repo: string, slug: string, text: string) => {
-    // ponytail: pipeline-wide guard — per-workflow granularity once the
-    // executor tracks which slugs are live.
-    if (isRunning()) return { ok: false, error: 'a pipeline is running' }
+    // Only a workflow currently executing is refused; the draft chat and
+    // unrelated workflows stay usable during a pipeline (Decision 9).
+    if (slug !== DRAFT_KEY && isRunning(slug))
+      return { ok: false, error: 'this workflow is currently running' }
     const settings = repoSettings(repo)
     const roleSlugs = store.loadRepo(repo).roles.map((r) => r.slug)
     return sendChat(repo, slug, text, settings, roleSlugs, (ev: ChatEvent) =>
       BrowserWindow.getAllWindows()[0]?.webContents.send('chat:event', ev)
     )
   })
+  ipcMain.handle('proposal:apply', (_e, repo: string, slug: string, proposal: ChatProposal) =>
+    applyProposal(repo, slug, proposal)
+  )
 }

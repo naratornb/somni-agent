@@ -70,7 +70,9 @@ All per-repo state lives **inside the target repo** at `<repo>/.somni/` as plain
   roles/<slug>.md       # role preamble as Markdown; H1 = display name; optional
                         # frontmatter: runner/model/effort override (§5)
   workflows/<slug>.json # name, ordered tasks (title, prompt, role, selected)
+  workflows/<slug>.brief.md # the polished Brief (M8) — written on Apply, deleted with its workflow
   chats/<slug>.jsonl    # "Draft with AI" transcript for that workflow (committable)
+  chats/_draft.jsonl    # the one in-progress brief-first draft (M8) — renamed to <slug>.jsonl on Apply
   runs/<runId>/
     run.json            # execution state: pipeline/workflow/task statuses, attempts,
                         # session_ids, timestamps, cost, exit codes — crash-resume source of truth
@@ -160,19 +162,22 @@ A chat button in the workflow editor lets you yap a rough idea; an assistant ref
 
 - **Each chat turn is the same spawn path as task execution**: `claude -p <message> --output-format stream-json --verbose`, with `--resume <session_id>` from the second turn on. No API calls, no new dependency; uses the Max plan.
 - `cwd` = the target repo, tools restricted to read-only via `--allowedTools "Read,Glob,Grep"` and **no** `--dangerously-skip-permissions` — the assistant can inspect the actual codebase while refining the brief, but cannot change anything.
-- A fixed drafting preamble is prepended: interview briefly, then propose a workflow; whenever proposing, end the reply with a fenced ` ```somni-workflow ` JSON block matching the `workflows/<slug>.json` schema.
-- The app parses the last such block into a **proposal preview** (task cards) with **Apply / Dismiss**. Apply merges it into the open workflow definition (atomic write, like all `.somni/` writes). The chat itself never writes files — Apply is the only mutation, and it is user-triggered.
-- The transcript persists to `.somni/chats/<workflow-slug>.jsonl` so drafting context survives sessions and machines; "New chat" starts a fresh session.
+- A fixed drafting preamble (turn 1 only — resume carries it) sets the **Interview discipline**: one Question at a time as a fenced ` ```somni-question ` block — `{"question", "options": [...], "recommended"}` — rendered as clickable choices (recommended highlighted), degrading to plain text if malformed. Clicking sends the option text as a normal user turn; the input stays active for custom answers. **Propose Now** is an always-visible button sending a fixed, transcript-visible message that ends the Interview on stated assumptions.
+- Whenever proposing, the assistant ends the reply with a fenced ` ```somni-workflow ` JSON block: `{name, brief, tasks, roles?}` — `brief` is the polished Brief, `roles` any **new Roles** the tasks need (`{slug, name, preamble, runner?, model?, effort?}`).
+- The app parses the last such block into a **proposal preview** (task cards, the Brief, new-role cards — a role slug that already exists is marked "already exists — will reuse") with **Apply / Dismiss**. Apply writes the workflow, the Brief sidecar (`workflows/<slug>.brief.md`), and only the roles whose slugs don't exist — an existing role always wins. The chat itself never writes files — Apply is the only mutation, and it is user-triggered.
+- Two drafting surfaces share this machinery: the **Draft view** (brief-first, no saved workflow — chat runs under the reserved `_draft` key; Apply creates the workflow *ticked into the Queue*, renames the transcript to `chats/<slug>.jsonl`, and hands off to the editor) and the **editor chat** (existing workflow — the stored Brief is prepended to turn-1 context; Apply preserves the current tick).
+- Transcripts persist under `.somni/chats/` so drafting context survives sessions and machines; "New chat" starts a fresh session. Chat is refused only for a workflow currently executing in a pipeline (the draft chat never is); turns remain read-only spawns.
 
 ## 8. UI / screen breakdown
 
-Sidebar navigation, five views:
+Sidebar navigation, six views:
 
-1. **Workflows** — list with per-workflow pipeline checkboxes. Click into the **Workflow editor**: ordered task list (drag to reorder), each task = title, prompt, role dropdown, checkbox; repo picker for the workspace; **Draft with AI** button → side chat panel (message list, input, streaming reply, proposal preview with Apply/Dismiss; disabled while the workflow is running in a pipeline).
-2. **Roles** — CRUD library of `name` + `preamble`.
-3. **Pipeline** — the dashboard: selected workflows as cards, each task a chip colored by status, overall progress bar, **Run / Pause / Cancel**. Click any running task → **live log pane** (streamed stdout tail).
-4. **Runs & Reports** — history of pipeline runs; per-workflow report (stats table + summary); links to the worktree/branch for review.
-5. **Settings** — max concurrency, runner binary paths, **default execution profile** (runner dropdown, per-runner model list, effort), **report style (Minimal / Compact / Full)**, task timeout. Role editor gains optional model/effort override fields.
+1. **Workflows** — list with per-workflow pipeline checkboxes. Click into the **Workflow editor**: ordered task list (drag to reorder), each task = title, prompt, role dropdown, checkbox; repo picker for the workspace; the persisted Brief shown read-only above the tasks (collapsed by default); **Draft with AI** button → side chat panel (message list, input, streaming reply, question cards, proposal preview with Apply/Dismiss; disabled while this workflow is running in a pipeline).
+2. **Draft** (M8) — the brief-first drafting view: describe an outcome with no saved workflow, answer the Interview's question cards, Propose Now anytime; Apply creates the queued workflow and lands in its editor.
+3. **Roles** — CRUD library of `name` + `preamble`.
+4. **Pipeline** — the dashboard: selected workflows as cards, each task a chip colored by status, overall progress bar, **Run / Pause / Cancel**. Click any running task → **live log pane** (streamed stdout tail).
+5. **Runs & Reports** — history of pipeline runs; per-workflow report (stats table + summary); links to the worktree/branch for review.
+6. **Settings** — max concurrency, runner binary paths, **default execution profile** (runner dropdown, per-runner model list, effort), **report style (Minimal / Compact / Full)**, task timeout. Role editor gains optional model/effort override fields.
 
 ## 9. Phased build plan
 

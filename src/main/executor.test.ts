@@ -391,6 +391,34 @@ describe('crash resume', () => {
     expect(onDisk.status).toBe('Cancelled')
     expect(onDisk.tasks[0].status).toBe('Cancelled')
   })
+
+  // M8 Decision 9: the chat guard must key off the workflow's slug correctly
+  // even for a resumed run (not just a freshly-started pipeline).
+  it('isRunning(slug) reflects the correct workflow slug during a resumed run', async () => {
+    const first = await runWorkflow(repo, 'feature', base, noEvents)
+    orphan(first.runId, (s) => {
+      s.status = 'Running'
+      s.tasks[1].status = 'Running'
+    })
+    rmSync(join(first.worktree, 'task-ran-here'))
+    fake({ FAKE_HANG: '1' })
+    let armed = (): void => {}
+    const spawning = new Promise<void>((resolve) => {
+      armed = resolve
+    })
+    const run = resumePipeline(repo, [first.runId], 1, {
+      onState: (s) => {
+        if (s.tasks[1]?.attempts === 2) armed()
+      },
+      onLog: (): void => {}
+    })
+    await spawning
+    expect(isRunning('feature')).toBe(true)
+    expect(isRunning('docs')).toBe(false)
+    cancelPipeline()
+    await run
+    expect(isRunning('feature')).toBe(false)
+  })
 })
 
 describe('runPipeline', () => {
@@ -429,6 +457,27 @@ describe('runPipeline', () => {
     expect(state.status).toBe('Cancelled')
     expect(state.tasks.map((t) => t.status)).toEqual(['Cancelled', 'Skipped'])
     expect(isRunning()).toBe(false)
+  })
+
+  // M8 Decision 9: the chat guard asks per workflow, not per pipeline.
+  it('isRunning(slug) is true only for the workflow actually executing', async () => {
+    fake({ FAKE_HANG: '1' })
+    let armed = (): void => {}
+    const spawning = new Promise<void>((resolve) => {
+      armed = resolve
+    })
+    const run = runPipeline(repo, ['feature'], base, 1, {
+      onState: (s) => {
+        if (s.tasks[0]?.attempts === 1) armed()
+      },
+      onLog: (): void => {}
+    })
+    await spawning
+    expect(isRunning('feature')).toBe(true)
+    expect(isRunning('docs')).toBe(false)
+    cancelPipeline()
+    await run
+    expect(isRunning('feature')).toBe(false)
   })
 
   it('bounds in-flight tasks at maxConcurrency across a bigger queue', async () => {

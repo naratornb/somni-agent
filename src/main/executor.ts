@@ -131,9 +131,12 @@ function makeGate(events: RunEvents, opts: RunOpts): Gate {
 }
 
 let pipeline: { cancelled: boolean; ctrls: Set<Ctrl>; gate: Gate } | null = null
+// Workflow slugs with a job currently executing — lets the chat guard refuse
+// only the workflow being executed rather than the whole app (M8 Decision 9).
+const activeSlugs = new Set<string>()
 
-export function isRunning(): boolean {
-  return pipeline !== null
+export function isRunning(slug?: string): boolean {
+  return slug === undefined ? pipeline !== null : activeSlugs.has(slug)
 }
 
 export function cancelPipeline(): void {
@@ -155,7 +158,7 @@ const human = (ms: number): string =>
 // maxConcurrency (each workflow has at most one running task, so bounding
 // concurrent workflows bounds concurrent tasks).
 async function runJobs(
-  jobs: { id: string; run: (ctrl: Ctrl, gate: Gate) => Promise<RunState> }[],
+  jobs: { id: string; slug: string; run: (ctrl: Ctrl, gate: Gate) => Promise<RunState> }[],
   maxConcurrency: number,
   events: RunEvents,
   opts: RunOpts
@@ -175,12 +178,14 @@ async function runJobs(
           const job = queue.shift()!
           const ctrl: Ctrl = { cancelled: false, handle: null }
           mine.ctrls.add(ctrl)
+          activeSlugs.add(job.slug)
           try {
             results.push(await job.run(ctrl, gate))
           } catch (err) {
             events.onLog(job.id, -1, `[error] ${message(err)}`)
           } finally {
             mine.ctrls.delete(ctrl)
+            activeSlugs.delete(job.slug)
           }
         }
       })
@@ -188,6 +193,7 @@ async function runJobs(
     return results
   } finally {
     pipeline = null
+    activeSlugs.clear()
     events.onPipeline?.('Idle')
   }
 }
@@ -202,6 +208,7 @@ export function runPipeline(
 ): Promise<RunState[]> {
   const jobs = slugs.map((slug) => ({
     id: slug,
+    slug,
     run: (ctrl: Ctrl, gate: Gate) =>
       runWorkflow(repo, slug, worktreeBase, events, { ...opts, ctrl, gate })
   }))
@@ -233,6 +240,15 @@ export function abandonRun(repo: string, runId: string): void {
   atomicWrite(path, JSON.stringify(state, null, 2) + '\n')
 }
 
+const runSlug = (repo: string, runId: string): string => {
+  try {
+    const path = join(repo, '.somni', 'runs', runId, 'run.json')
+    return (JSON.parse(readFileSync(path, 'utf8')) as RunState).workflow
+  } catch {
+    return runId
+  }
+}
+
 // Re-runs the not-yet-completed tasks of orphaned runs in their existing worktrees.
 export function resumePipeline(
   repo: string,
@@ -243,6 +259,7 @@ export function resumePipeline(
 ): Promise<RunState[]> {
   const jobs = runIds.map((runId) => ({
     id: runId,
+    slug: runSlug(repo, runId),
     run: (ctrl: Ctrl, gate: Gate) => {
       const path = join(repo, '.somni', 'runs', runId, 'run.json')
       const state = JSON.parse(readFileSync(path, 'utf8')) as RunState

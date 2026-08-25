@@ -23,7 +23,13 @@ export type Role = {
   effort?: Effort
 }
 export type Task = { title: string; prompt: string; role: string; selected: boolean }
-export type Workflow = { slug: string; name: string; selected: boolean; tasks: Task[] }
+export type Workflow = {
+  slug: string
+  name: string
+  selected: boolean
+  tasks: Task[]
+  brief?: string
+}
 export type RepoData = { roles: Role[]; workflows: Workflow[] }
 export type TaskStatus = 'Queued' | 'Running' | 'Completed' | 'Failed' | 'Skipped' | 'Cancelled'
 export type PipelineStatus = 'Running' | 'Paused' | 'Idle'
@@ -58,10 +64,17 @@ export type RunState = {
 export type RunRow = RunState & { worktreeExists: boolean }
 
 export type ChatMessage = { role: 'user' | 'assistant'; text: string; ts: string }
-export type ChatProposal = { name: string; tasks: Task[] }
+export type ChatProposal = { name: string; brief: string; tasks: Task[]; roles: Role[] }
+export type ChatQuestion = { question: string; options: string[]; recommended: string }
 export type ChatEvent =
   | { slug: string; kind: 'text'; text: string }
-  | { slug: string; kind: 'done'; message: ChatMessage; proposal: ChatProposal | null }
+  | {
+      slug: string
+      kind: 'done'
+      message: ChatMessage
+      proposal: ChatProposal | null
+      question: ChatQuestion | null
+    }
   | { slug: string; kind: 'error'; message: string }
 
 function on(channel: string, cb: (payload: unknown) => void): () => void {
@@ -70,7 +83,17 @@ function on(channel: string, cb: (payload: unknown) => void): () => void {
   return () => ipcRenderer.removeListener(channel, listener)
 }
 
+// Reserved chat key for the one pre-Apply brief-first draft (keep in sync with
+// DRAFT_KEY in src/main/chat.ts).
+export const DRAFT_KEY = '_draft'
+// The fixed Propose Now message (keep in sync with PROPOSE_NOW in chat.ts).
+export const PROPOSE_NOW =
+  'Stop interviewing and propose the workflow now, from my answers so far plus ' +
+  'your own stated assumptions for anything still open.'
+
 const somni = {
+  draftKey: DRAFT_KEY,
+  proposeNow: PROPOSE_NOW,
   runTask: (prompt: string): Promise<void> => ipcRenderer.invoke('task:run', prompt),
   onTaskEvent: (cb: (ev: unknown) => void): (() => void) => on('task:event', cb),
   startPipeline: (repo: string, slugs: string[]): Promise<void> =>
@@ -113,6 +136,15 @@ const somni = {
     ipcRenderer.invoke('chat:new', repo, slug),
   sendChat: (repo: string, slug: string, text: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('chat:send', repo, slug, text),
+  // Apply — the only write out of a chat. `slug` is DRAFT_KEY for the Draft
+  // view (creates a ticked workflow, renames the transcript) or an existing
+  // workflow slug from the editor (tick preserved).
+  applyProposal: (
+    repo: string,
+    slug: string,
+    proposal: ChatProposal
+  ): Promise<{ ok: true; workflow: Workflow } | { ok: false; error: string }> =>
+    ipcRenderer.invoke('proposal:apply', repo, slug, proposal),
   onChatEvent: (cb: (ev: ChatEvent) => void): (() => void) =>
     on('chat:event', (p) => cb(p as ChatEvent))
 }

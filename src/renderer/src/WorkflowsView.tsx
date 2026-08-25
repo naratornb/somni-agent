@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ChatProposal, Role, Task, Workflow } from '../../preload/index'
 import { DraftChatPanel } from './DraftChatPanel'
 
@@ -9,6 +9,10 @@ type Props = {
   refresh: () => void
   onRun: (slug: string) => void
   running: boolean
+  // Slugs with a run still in flight — only these have their chat refused.
+  runningSlugs: string[]
+  openSlug?: string | null
+  onOpened?: () => void
 }
 
 const emptyTask = (role: string): Task => ({ title: '', prompt: '', role, selected: true })
@@ -19,10 +23,24 @@ export function WorkflowsView({
   roles,
   refresh,
   onRun,
-  running
+  running,
+  runningSlugs,
+  openSlug,
+  onOpened
 }: Props): React.JSX.Element {
   const [editing, setEditing] = useState<Workflow | null>(null)
   const [chatOpen, setChatOpen] = useState(false)
+
+  // Handoff from the Draft view: open the freshly applied workflow, once.
+  useEffect(() => {
+    if (!openSlug) return
+    const wf = workflows.find((w) => w.slug === openSlug)
+    if (wf) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot handoff from the Draft view; onOpened() clears the trigger immediately
+      setEditing(wf)
+      onOpened?.()
+    }
+  }, [openSlug, workflows, onOpened])
 
   // Apply is the one user-triggered write from the chat (architecture.md §7).
   const applyProposal = async (proposal: ChatProposal): Promise<void> => {
@@ -30,9 +48,9 @@ export function WorkflowsView({
     const stored = workflows.find((w) => w.slug === editing.slug)
     const dirty = stored && JSON.stringify(stored) !== JSON.stringify(editing)
     if (dirty && !confirm('Discard your unsaved edits and apply the proposed workflow?')) return
-    const next = { ...editing, name: proposal.name, tasks: proposal.tasks }
-    await window.somni.saveWorkflow(repo, next)
-    setEditing(next)
+    const res = await window.somni.applyProposal(repo, editing.slug, proposal)
+    if (!res.ok) return alert(res.error)
+    setEditing(res.workflow)
     refresh()
   }
 
@@ -64,6 +82,8 @@ export function WorkflowsView({
     setEditing({ ...editing, tasks })
   }
 
+  const chatRunning = !!editing?.slug && runningSlugs.includes(editing.slug)
+
   if (editing) {
     return (
       <div className="split">
@@ -73,6 +93,13 @@ export function WorkflowsView({
             value={editing.name}
             onChange={(e) => setEditing({ ...editing, name: e.target.value })}
           />
+          {/* Read-only, collapsed by default — no in-app Brief editing (Decision 8). */}
+          {editing.brief && (
+            <details className="brief-box">
+              <summary>Brief</summary>
+              <p className="dim brief-text">{editing.brief}</p>
+            </details>
+          )}
           {editing.tasks.map((t, i) => (
             <div className="task-card" key={i}>
               <div className="row">
@@ -135,11 +162,11 @@ export function WorkflowsView({
             )}
             <button
               className="ghost"
-              disabled={!editing.slug || running}
+              disabled={!editing.slug || chatRunning}
               title={
                 !editing.slug
                   ? 'Save the workflow first'
-                  : running
+                  : chatRunning
                     ? 'Workflow is running'
                     : undefined
               }
@@ -153,8 +180,9 @@ export function WorkflowsView({
           <DraftChatPanel
             repo={repo}
             slug={editing.slug}
+            roles={roles}
             open={chatOpen}
-            running={running}
+            running={chatRunning}
             onApply={(p) => void applyProposal(p)}
           />
         )}
