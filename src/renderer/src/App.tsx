@@ -3,9 +3,11 @@ import type { PipelineStatus, RepoData, RunState } from '../../preload/index'
 import { Playground } from './Playground'
 import { LogLine, PipelineView } from './PipelineView'
 import { RolesView } from './RolesView'
+import { RunsView } from './RunsView'
+import { SettingsView } from './SettingsView'
 import { WorkflowsView } from './WorkflowsView'
 
-const VIEWS = ['Workflows', 'Pipeline', 'Roles', 'Playground'] as const
+const VIEWS = ['Workflows', 'Pipeline', 'Runs', 'Roles', 'Settings', 'Playground'] as const
 type View = (typeof VIEWS)[number]
 
 const timeAgo = (iso: string): string => {
@@ -136,6 +138,8 @@ function App(): React.JSX.Element {
         ))}
         {view === 'Playground' ? (
           <Playground />
+        ) : view === 'Settings' ? (
+          <SettingsView />
         ) : !repo ? (
           <p className="dim">Choose a repo to manage its workflows and roles.</p>
         ) : view === 'Pipeline' ? (
@@ -148,6 +152,8 @@ function App(): React.JSX.Element {
             onStart={() => startPipeline(selected.map((w) => w.slug))}
             onCancel={() => void window.somni.cancelPipeline()}
           />
+        ) : view === 'Runs' ? (
+          <RunsView repo={repo} />
         ) : view === 'Workflows' ? (
           <WorkflowsView
             repo={repo}

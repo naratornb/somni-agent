@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Role } from '../../preload/index'
+import type { Effort, Role } from '../../preload/index'
 
 type Props = { repo: string; roles: Role[]; refresh: () => void }
 
@@ -33,6 +33,25 @@ export function RolesView({ repo, roles, refresh }: Props): React.JSX.Element {
           value={editing.preamble}
           onChange={(e) => setEditing({ ...editing, preamble: e.target.value })}
         />
+        <div className="row">
+          <span className="field-label">Model / effort override</span>
+          <input
+            placeholder="Model (inherit)"
+            value={editing.model ?? ''}
+            onChange={(e) => setEditing({ ...editing, model: e.target.value })}
+          />
+          <select
+            value={editing.effort ?? ''}
+            onChange={(e) =>
+              setEditing({ ...editing, effort: (e.target.value || undefined) as Effort })
+            }
+          >
+            <option value="">Effort (inherit)</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+          </select>
+        </div>
         <div className="row">
           <button onClick={save} disabled={!editing.name.trim()}>
             Save

@@ -12,7 +12,22 @@ import {
 } from 'fs'
 import { dirname, join } from 'path'
 
-export type Role = { slug: string; name: string; preamble: string }
+export type Effort = 'low' | 'medium' | 'high'
+export type ReportStyle = 'minimal' | 'compact' | 'full'
+export type Profile = { model?: string; effort?: Effort }
+export type Settings = Profile & {
+  concurrency?: number
+  timeoutMinutes?: number
+  reportStyle?: ReportStyle
+}
+
+export const SETTINGS_DEFAULTS = {
+  concurrency: 2,
+  timeoutMinutes: 30,
+  reportStyle: 'minimal' as ReportStyle
+}
+
+export type Role = { slug: string; name: string; preamble: string } & Profile
 export type Task = { title: string; prompt: string; role: string; selected: boolean }
 export type Workflow = { slug: string; name: string; selected: boolean; tasks: Task[] }
 export type RepoData = { roles: Role[]; workflows: Workflow[] }
@@ -41,7 +56,46 @@ export function ensureSomni(repo: string): void {
   if (!existsSync(gi)) atomicWrite(gi, 'runs/*/logs/\n')
 }
 
-function parseRole(slug: string, md: string): Role {
+// Optional `---\nmodel: x\neffort: high\n---` frontmatter before the H1 (§5).
+// ponytail: two known keys, hand-parsed — a YAML dependency for this is absurd.
+function parseFrontmatter(md: string): { profile: Profile; body: string } {
+  const m = /^---\n([\s\S]*?)\n---\n?/.exec(md)
+  if (!m) return { profile: {}, body: md }
+  const profile: Profile = {}
+  for (const line of m[1].split('\n')) {
+    const kv = /^\s*(model|effort)\s*:\s*(.+?)\s*$/.exec(line)
+    if (kv?.[1] === 'model') profile.model = kv[2]
+    if (kv?.[1] === 'effort' && ['low', 'medium', 'high'].includes(kv[2]))
+      profile.effort = kv[2] as Effort
+  }
+  return { profile, body: md.slice(m[0].length) }
+}
+
+// Execution profile resolution (§5): role → repo config → global settings.
+export function resolveProfile(role: Profile | undefined, settings: Settings): Profile {
+  return { model: role?.model ?? settings.model, effort: role?.effort ?? settings.effort }
+}
+
+// Per-repo overrides layered over the machine-global settings (§4).
+export function loadConfig(repo: string): Settings {
+  try {
+    return JSON.parse(readFileSync(dir(repo, 'config.json'), 'utf8')) as Settings
+  } catch {
+    return {}
+  }
+}
+
+export function resolveSettings(
+  repo: string,
+  global: Settings
+): Settings & typeof SETTINGS_DEFAULTS {
+  const strip = (s: Settings): Settings =>
+    Object.fromEntries(Object.entries(s).filter(([, v]) => v != null && v !== ''))
+  return { ...SETTINGS_DEFAULTS, ...strip(global), ...strip(loadConfig(repo)) }
+}
+
+function parseRole(slug: string, raw: string): Role {
+  const { profile, body: md } = parseFrontmatter(raw)
   const lines = md.split('\n')
   const h1 = lines.findIndex((l) => l.startsWith('# '))
   const name = h1 >= 0 ? lines[h1].slice(2).trim() : slug
@@ -49,7 +103,7 @@ function parseRole(slug: string, md: string): Role {
     .slice(h1 + 1)
     .join('\n')
     .trim()
-  return { slug, name, preamble }
+  return { slug, name, preamble, ...profile }
 }
 
 function listFiles(path: string, ext: string): string[] {
@@ -81,7 +135,12 @@ export function loadRepo(repo: string): RepoData {
 
 export function saveRole(repo: string, role: Role): Role {
   const slug = role.slug || slugify(role.name)
-  atomicWrite(dir(repo, 'roles', slug + '.md'), `# ${role.name}\n\n${role.preamble}\n`)
+  const fm = [
+    role.model ? `model: ${role.model}` : '',
+    role.effort ? `effort: ${role.effort}` : ''
+  ].filter(Boolean)
+  const head = fm.length ? `---\n${fm.join('\n')}\n---\n` : ''
+  atomicWrite(dir(repo, 'roles', slug + '.md'), `${head}# ${role.name}\n\n${role.preamble}\n`)
   return { ...role, slug }
 }
 

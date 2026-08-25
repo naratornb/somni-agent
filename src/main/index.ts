@@ -3,7 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { wireTaskIpc, killTask } from './runner'
-import { wireRepoIpc } from './repoIpc'
+import { repoSettings, wireRepoIpc } from './repoIpc'
 import {
   abandonRun,
   cancelPipeline,
@@ -81,10 +81,19 @@ app.whenReady().then(() => {
     })
   }
 
-  // ponytail: concurrency hardcoded at 2 until M5 settings
   ipcMain.handle('pipeline:start', (_e, repo: string, slugs: string[]) => {
     if (isRunning() || slugs.length === 0) return
-    awake(runPipeline(repo, slugs, join(app.getPath('userData'), 'worktrees'), 2, events))
+    const settings = repoSettings(repo)
+    awake(
+      runPipeline(
+        repo,
+        slugs,
+        join(app.getPath('userData'), 'worktrees'),
+        settings.concurrency,
+        events,
+        { settings }
+      )
+    )
   })
   ipcMain.handle('pipeline:cancel', () => cancelPipeline())
   // A run.json still marked Running while nothing runs here belongs to a dead process.
@@ -93,7 +102,8 @@ app.whenReady().then(() => {
   )
   ipcMain.handle('pipeline:resume', (_e, repo: string, runIds: string[]) => {
     if (isRunning() || runIds.length === 0) return
-    awake(resumePipeline(repo, runIds, 2, events))
+    const settings = repoSettings(repo)
+    awake(resumePipeline(repo, runIds, settings.concurrency, events, { settings }))
   })
   ipcMain.handle('pipeline:abandon', (_e, repo: string, runId: string) => abandonRun(repo, runId))
 
