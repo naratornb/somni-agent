@@ -19,12 +19,16 @@ Glossary of domain terms. Definitions only — no implementation details. When a
 - **Proposal** — AI-drafted Workflow content produced from a Brief or chat: Tasks *and any new Roles they need*. Inert until Applied.
 - **Apply** — the single user-triggered act that writes a Proposal into definitions. Nothing about a Proposal touches disk before Apply; there is no other mutation path from drafting.
 - **Refine** — an inline AI rewrite of one existing field (a Task prompt, a Role preamble) into a sharper version of itself; same Apply rule.
-- **Queue** — the set of ticked Workflows. A tick means *run once, next window*; running a Workflow drains its tick. Re-queueing is always a deliberate act.
-- **Nightly Window** — the single scheduled time at which the Queue runs unattended. There is one window, not per-Workflow schedules.
+- **Queue** — the set of ticked Workflows. A tick means *run once, when draining starts*; running a Workflow drains its tick. Every queued run was consciously chosen — nothing enters the Queue by itself.
+- **Backlog** — an ordered list of Workflows kept for later, above *saved* but below *queued*. Order expresses intent ("in this sequence, when I get to them"). Work leaves the Backlog only by **Promote** — a deliberate act moving it into the Queue.
+- **Draining** — the state in which the Queue is being executed: running Workflows as concurrency allows and picking up newly ticked or promoted ones as slots free. There is one drain mechanism with two entry points, distinguished only by their stop rules.
+- **Nightly Window** — the single scheduled time that starts a drain which stops when the Queue is empty: one night runs one night's consciously queued work, then disarms.
+- **Keep Running** — the manual toggle that starts a drain which continues until switched off, so work promoted during the day keeps flowing while the user is away from the screen.
 - **Product Owner (PO) hat / Engineer hat** — the two working modes of the *same single user*. PO mode: brief, queue, review outcomes. Engineer mode: full editing of definitions and settings. Modes are presentation only — same data, same person, no permissions.
 
 ## Boundaries worth remembering
 
 - A Brief is not a Task prompt: Briefs describe outcomes; Task prompts are self-contained agent instructions derived from them.
 - The Queue is not a schedule: it drains. Recurring work re-enters the Queue only by a person's hand.
+- The Backlog is not the Queue: parked work never runs by itself, no matter how long a drain stays on.
 - A Proposal is not a Workflow: it becomes one (or updates one) only at Apply.
