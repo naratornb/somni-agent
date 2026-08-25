@@ -6,8 +6,9 @@ import { execFile } from 'child_process'
 import { appendFileSync } from 'fs'
 import { join } from 'path'
 import { promisify } from 'util'
-import { spawnClaude } from './runner'
-import { atomicWrite, Profile, Settings } from './store'
+import { spawnRunner } from './runner'
+import { getRunner, RunnerOpts } from './runners'
+import { atomicWrite, Settings } from './store'
 import type { RunState, TaskRun } from './executor'
 
 const git = promisify(execFile)
@@ -77,25 +78,30 @@ async function collectStats(state: RunState): Promise<Stats> {
   return summarize(await run(['diff', '--name-status', base]), await run(['diff', '--stat', base]))
 }
 
-const profileArgs = (p: Profile): string[] => [
-  ...(p.model ? ['--model', p.model] : []),
-  ...(p.effort ? ['--effort', p.effort] : [])
-]
-
-// One claude call, plain text out. Resolves to null on any failure — a report
-// must never be the thing that fails a run.
-function claudeText(args: string[], cwd: string, logPath?: string): Promise<string | null> {
+// One runner call, final text out (every adapter puts the full reply on the
+// result event). Resolves to null on any failure — a report must never be the
+// thing that fails a run.
+function runnerText(
+  settings: Settings,
+  prompt: string,
+  opts: RunnerOpts,
+  cwd: string,
+  logPath?: string
+): Promise<string | null> {
+  const runner = getRunner(settings.runner, settings)
   let out = ''
-  const handle = spawnClaude(
-    ['-p', ...args],
+  const handle = spawnRunner(
+    runner,
+    runner.buildArgs(prompt, { model: settings.model, effort: settings.effort, ...opts }),
     cwd,
-    () => {},
+    (ev) => {
+      if (ev.kind === 'result' && ev.detail) out = ev.detail
+    },
     (chunk) => {
-      out += chunk
       if (logPath) appendFileSync(logPath, chunk)
     }
   )
-  return handle.done.then(({ code }) => (code === 0 && out.trim() ? out.trim() : null))
+  return handle.done.then(({ ok }) => (ok && out.trim() ? out.trim() : null))
 }
 
 const REPORT_PROMPT =
@@ -115,7 +121,6 @@ export async function writeReport(
     testFiles: []
   }))
   let body = minimalReport(state, stats)
-  const profile = profileArgs(settings)
 
   if (settings.reportStyle === 'compact') {
     const prompt = [
@@ -128,11 +133,10 @@ export async function writeReport(
       'Diff stat:',
       stats.diffStat
     ].join('\n')
-    // Read-only: no --dangerously-skip-permissions here (§7 chat rules).
-    const text = await claudeText(
-      [prompt, '--allowedTools', 'Read,Glob,Grep', ...profile],
-      state.worktree
-    ).catch(() => null)
+    // Read-only: never an autonomous turn here (§7 chat rules).
+    const text = await runnerText(settings, prompt, { readOnly: true }, state.worktree).catch(
+      () => null
+    )
     body += text ? `\n## Summary\n\n${text}\n` : '\n_(summary call failed — minimal report only)_\n'
   }
 
@@ -146,9 +150,12 @@ export async function writeReport(
       status: 'Running',
       log: 'logs/report.log'
     }
+    task.runner = settings.runner
     state.tasks.push(task)
-    const text = await claudeText(
-      [REPORT_PROMPT, '--dangerously-skip-permissions', ...profile],
+    const text = await runnerText(
+      settings,
+      REPORT_PROMPT,
+      { autonomous: true },
       state.worktree,
       join(runDir, task.log)
     ).catch(() => null)

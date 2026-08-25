@@ -63,6 +63,29 @@ touch task-ran-here
 echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"duration_ms":5}'
 `
 
+// A fake `agy` on PATH mirroring FAKE_CLAUDE but emitting antigravity's stream
+// shape (architecture.md §5): init event carries conversation_id, step_update
+// carries the text delta, result carries status SUCCESS/ERROR.
+const FAKE_AGY = `#!/bin/sh
+n=1
+if [ -n "$FAKE_COUNT" ]; then
+  n=$(( $(cat "$FAKE_COUNT" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" > "$FAKE_COUNT"
+fi
+if [ -n "$FAKE_FAIL" ] || [ "$n" -le "\${FAKE_FAIL_TIMES:-0}" ]; then
+  if [ -n "$FAKE_RATE_LIMIT" ]; then
+    echo '{"event":"result","result":{"status":"ERROR","response":"RESOURCE_EXHAUSTED: quota exceeded"}}'
+  else
+    echo '{"event":"result","result":{"status":"ERROR","response":"boom"}}'
+  fi
+  exit 1
+fi
+echo '{"event":"init","conversation_id":"agy-s1"}'
+echo '{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"did work"}}'
+touch task-ran-here
+echo '{"event":"result","result":{"status":"SUCCESS","response":"done","duration_seconds":0.005}}'
+`
+
 let repo: string
 let base: string
 let root: string
@@ -87,6 +110,8 @@ beforeEach(() => {
   mkdirSync(bin)
   writeFileSync(join(bin, 'claude'), FAKE_CLAUDE)
   chmodSync(join(bin, 'claude'), 0o755)
+  writeFileSync(join(bin, 'agy'), FAKE_AGY)
+  chmodSync(join(bin, 'agy'), 0o755)
   savedPath = process.env.PATH!
   process.env.PATH = `${bin}:${savedPath}`
   const g = (...args: string[]): void => {
@@ -210,6 +235,78 @@ describe('runWorkflow', () => {
     expect(state.status).toBe('Completed')
     expect(state.tasks[0].attempts).toBe(3)
     expect(statuses.filter((s) => s === 'Paused')).toHaveLength(2)
+  })
+})
+
+describe('antigravity runner end-to-end', () => {
+  it('runs a task through the agy adapter and records sessionId + runner', async () => {
+    saveRole(repo, {
+      slug: 'agy-dev',
+      name: 'AgyDev',
+      preamble: 'You are dev.',
+      runner: 'antigravity'
+    })
+    saveWorkflow(repo, {
+      slug: '',
+      name: 'AgyFlow',
+      selected: true,
+      tasks: [{ title: 'Write docs', prompt: 'write docs', role: 'agy-dev', selected: true }]
+    })
+    const state = await runWorkflow(repo, 'agyflow', base, noEvents)
+    expect(state.status).toBe('Completed')
+    expect(state.tasks[0].sessionId).toBe('agy-s1')
+    expect(state.tasks[0].runner).toBe('antigravity')
+    expect(existsSync(join(state.worktree, 'task-ran-here'))).toBe(true)
+    expect(
+      readFileSync(join(repo, '.somni/runs', state.runId, state.tasks[0].log), 'utf8')
+    ).toContain('did work')
+  })
+
+  it('pauses the pipeline on an agy rate-limit instead of burning the retry', async () => {
+    saveRole(repo, {
+      slug: 'agy-dev',
+      name: 'AgyDev',
+      preamble: 'You are dev.',
+      runner: 'antigravity'
+    })
+    saveWorkflow(repo, {
+      slug: '',
+      name: 'AgyFlow',
+      selected: true,
+      tasks: [{ title: 'Write docs', prompt: 'write docs', role: 'agy-dev', selected: true }]
+    })
+    fake({ FAKE_COUNT: join(root, 'n'), FAKE_FAIL_TIMES: '1', FAKE_RATE_LIMIT: '1' })
+    const statuses: string[] = []
+    const state = await runWorkflow(
+      repo,
+      'agyflow',
+      base,
+      { ...noEvents, onPipeline: (s) => statuses.push(s) },
+      { backoffMs: 10 }
+    )
+    expect(state.status).toBe('Completed')
+    expect(state.tasks[0].attempts).toBe(2) // rate-limited attempt didn't count as a failure
+    expect(statuses.filter((s) => s === 'Paused')).toHaveLength(1)
+  })
+
+  it('keeps the same runner recorded across a retried task', async () => {
+    saveRole(repo, {
+      slug: 'agy-dev',
+      name: 'AgyDev',
+      preamble: 'You are dev.',
+      runner: 'antigravity'
+    })
+    saveWorkflow(repo, {
+      slug: '',
+      name: 'AgyFlow',
+      selected: true,
+      tasks: [{ title: 'Write docs', prompt: 'write docs', role: 'agy-dev', selected: true }]
+    })
+    fake({ FAKE_COUNT: join(root, 'n'), FAKE_FAIL_TIMES: '1' })
+    const state = await runWorkflow(repo, 'agyflow', base, noEvents)
+    expect(state.status).toBe('Completed')
+    expect(state.tasks[0].attempts).toBe(2)
+    expect(state.tasks[0].runner).toBe('antigravity')
   })
 })
 

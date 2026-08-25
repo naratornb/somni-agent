@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Effort, Role } from '../../preload/index'
+import type { Effort, Role, RunnerName } from '../../preload/index'
 
 type Props = { repo: string; roles: Role[]; refresh: () => void }
 
@@ -34,7 +34,17 @@ export function RolesView({ repo, roles, refresh }: Props): React.JSX.Element {
           onChange={(e) => setEditing({ ...editing, preamble: e.target.value })}
         />
         <div className="row">
-          <span className="field-label">Model / effort override</span>
+          <span className="field-label">Runner / model / effort override</span>
+          <select
+            value={editing.runner ?? ''}
+            onChange={(e) =>
+              setEditing({ ...editing, runner: (e.target.value || undefined) as RunnerName })
+            }
+          >
+            <option value="">Runner (inherit)</option>
+            <option value="claude">claude</option>
+            <option value="antigravity">antigravity</option>
+          </select>
           <input
             placeholder="Model (inherit)"
             value={editing.model ?? ''}

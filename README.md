@@ -77,7 +77,7 @@ Electron + TypeScript + React + Vite — no database. Details in [design/archite
 
 ## Status
 
-M6 done — workflows, roles, pipeline with unattended reliability, reports & settings, run history, and Draft-with-AI chat are all in. Remaining: M7, the Antigravity (`agy`) runner adapter. Roadmap: [architecture.md §9](design/architecture.md).
+M7 done — all phased milestones M0–M7 are complete: workflows, roles, pipeline with unattended reliability, reports & settings, run history, Draft-with-AI chat, and both runners (Claude Code `claude` and Antigravity `agy`) behind the Runner adapter, selectable per role / repo / globally. Roadmap: [architecture.md §9](design/architecture.md).
 
 ## Note on unattended runs
 

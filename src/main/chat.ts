@@ -4,8 +4,9 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'fs'
 import { dirname, join } from 'path'
-import { spawnClaude, SpawnHandle } from './runner'
-import type { Profile, Task } from './store'
+import { spawnRunner, SpawnHandle } from './runner'
+import { getRunner } from './runners'
+import type { Profile, Settings, Task } from './store'
 
 export type ChatMessage = { role: 'user' | 'assistant'; text: string; ts: string }
 export type ChatProposal = { name: string; tasks: Task[] }
@@ -34,25 +35,24 @@ export function draftPreamble(roleSlugs: string[]): string {
   ].join('\n')
 }
 
-// Args for one turn. First turn carries the preamble; later turns --resume.
+// Both agy and claude support multi-turn resume (`--conversation` / `--resume`,
+// both verified against the installed CLIs), so the §5 "chat falls back to
+// ClaudeRunner" escape hatch isn't needed — the chat uses the profile's runner.
+const chatRunner = (profile: Profile, settings: Settings): ReturnType<typeof getRunner> =>
+  getRunner(profile.runner, settings)
+
+// Args for one turn. First turn carries the preamble; later turns resume.
 export function turnArgs(
   message: string,
   sessionId: string | null,
   profile: Profile,
-  roleSlugs: string[]
+  roleSlugs: string[],
+  settings: Settings = {}
 ): string[] {
-  return [
-    '-p',
+  return chatRunner(profile, settings).buildArgs(
     sessionId ? message : `${draftPreamble(roleSlugs)}\n${message}`,
-    '--output-format',
-    'stream-json',
-    '--verbose',
-    '--allowedTools',
-    'Read,Glob,Grep',
-    ...(sessionId ? ['--resume', sessionId] : []),
-    ...(profile.model ? ['--model', profile.model] : []),
-    ...(profile.effort ? ['--effort', profile.effort] : [])
-  ]
+    { ...profile, resumeSessionId: sessionId ?? undefined, readOnly: true }
+  )
 }
 
 // Last ```somni-workflow block in an assistant message, or null if absent/malformed.
@@ -131,27 +131,33 @@ export function sendChat(
   repo: string,
   slug: string,
   text: string,
-  profile: Profile,
+  settings: Settings,
   roleSlugs: string[],
   onEvent: (ev: ChatEvent) => void
 ): { ok: boolean; error?: string } {
+  const profile: Profile = settings
   if (inFlight.has(slug)) return { ok: false, error: 'a chat turn is already in flight' }
   const lines = readLines(repo, slug)
   let sessionId = sessionOf(lines)
   appendLine(repo, slug, { role: 'user', text, ts: new Date().toISOString() })
 
   let reply = ''
-  const handle = spawnClaude(turnArgs(text, sessionId, profile, roleSlugs), repo, (ev) => {
-    if (ev.kind === 'session' && ev.sessionId !== sessionId) {
-      sessionId = ev.sessionId
-      appendLine(repo, slug, { sessionId: ev.sessionId })
+  const handle = spawnRunner(
+    chatRunner(profile, settings),
+    turnArgs(text, sessionId, profile, roleSlugs, settings),
+    repo,
+    (ev) => {
+      if (ev.kind === 'session' && ev.sessionId !== sessionId) {
+        sessionId = ev.sessionId
+        appendLine(repo, slug, { sessionId: ev.sessionId })
+      }
+      if (ev.kind === 'text') {
+        reply += ev.text
+        onEvent({ slug, kind: 'text', text: ev.text })
+      }
+      if (ev.kind === 'spawn-error') onEvent({ slug, kind: 'error', message: ev.message })
     }
-    if (ev.kind === 'text') {
-      reply += ev.text
-      onEvent({ slug, kind: 'text', text: ev.text })
-    }
-    if (ev.kind === 'spawn-error') onEvent({ slug, kind: 'error', message: ev.message })
-  })
+  )
   inFlight.set(slug, handle)
   void handle.done.then(({ code }) => {
     inFlight.delete(slug)

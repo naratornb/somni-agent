@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Effort, ReportStyle, Settings } from '../../preload/index'
+import type { Effort, ReportStyle, RunnerName, Settings } from '../../preload/index'
 
 export function SettingsView(): React.JSX.Element {
   const [s, setS] = useState<Settings | null>(null)
@@ -53,6 +53,31 @@ export function SettingsView(): React.JSX.Element {
         </select>
       </label>
       <label className="row">
+        <span className="field-label">Runner</span>
+        <select value={s.runner} onChange={(e) => patch({ runner: e.target.value as RunnerName })}>
+          <option value="claude">Claude Code (claude)</option>
+          <option value="antigravity">Antigravity (agy)</option>
+        </select>
+      </label>
+      <label className="row">
+        <span className="field-label">claude binary</span>
+        <input
+          placeholder="claude (found on PATH)"
+          value={s.claudeBinary ?? ''}
+          onChange={(e) => patch({ claudeBinary: e.target.value })}
+        />
+      </label>
+      <label className="row">
+        <span className="field-label">agy binary</span>
+        <input
+          placeholder="agy (found on PATH)"
+          value={s.antigravityBinary ?? ''}
+          onChange={(e) => patch({ antigravityBinary: e.target.value })}
+        />
+      </label>
+      <label className="row">
+        {/* ponytail: one free-text model field for both runners — a per-runner
+            dropdown means shipping model lists that go stale. */}
         <span className="field-label">Model</span>
         <input
           placeholder="CLI default"
@@ -78,7 +103,7 @@ export function SettingsView(): React.JSX.Element {
       </div>
       <p className="dim">
         A repo can override any of these in <code>.somni/config.json</code>; a role can override
-        model/effort in its frontmatter.
+        runner/model/effort in its frontmatter.
       </p>
     </div>
   )

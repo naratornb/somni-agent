@@ -8,8 +8,9 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from
 import { join } from 'path'
 import { promisify } from 'util'
 import { writeReport } from './report'
-import { spawnClaude, SpawnHandle } from './runner'
-import { atomicWrite, loadRepo, resolveProfile, Settings, slugify } from './store'
+import { spawnRunner, SpawnHandle } from './runner'
+import { getRunner } from './runners'
+import { atomicWrite, loadRepo, resolveProfile, RunnerName, Settings, slugify } from './store'
 
 const git = promisify(execFile)
 
@@ -18,7 +19,6 @@ const KILL_GRACE_MS = 5_000 // SIGTERM → SIGKILL grace
 const BACKOFF_START_MS = 60_000
 const BACKOFF_MAX_MS = 30 * 60_000
 const MAX_ATTEMPTS = 2 // one automatic retry; rate limits don't count (§3)
-const RATE_LIMIT = /rate.?limit|usage limit|overloaded|429/i
 
 // ponytail: concurrent `git worktree add` on one repo can race on .git locks —
 // serialize the mutating git calls; the task processes themselves run in parallel.
@@ -42,6 +42,7 @@ export type TaskRun = {
   costUsd?: number
   durationMs?: number
   error?: string
+  runner?: RunnerName
   model?: string
   effort?: string
   log: string
@@ -345,6 +346,10 @@ async function execute(
       const def = defs[i]
       const role = roles.find((r) => r.slug === def.role)
       const profile = resolveProfile(role, settings)
+      // Resolved once per task, outside the attempt loop: a retry always reuses
+      // the same profile, so runners are never mixed within one task (§5).
+      const runner = getRunner(profile.runner, settings)
+      task.runner = profile.runner
       task.model = profile.model
       task.effort = profile.effort
       const preamble = role?.preamble
@@ -369,17 +374,9 @@ async function execute(
         let stderr: string | undefined
         let resultMs: number | undefined
         let timedOut = false
-        const handle = spawnClaude(
-          [
-            '-p',
-            prompt,
-            '--output-format',
-            'stream-json',
-            '--verbose',
-            '--dangerously-skip-permissions',
-            ...(profile.model ? ['--model', profile.model] : []),
-            ...(profile.effort ? ['--effort', profile.effort] : [])
-          ],
+        const handle = spawnRunner(
+          runner,
+          runner.buildArgs(prompt, { ...profile, autonomous: true }),
           state.worktree,
           (ev) => {
             if (ev.kind === 'session') task.sessionId = ev.sessionId
@@ -429,7 +426,7 @@ async function execute(
           task.status = 'Completed'
           break
         }
-        if (!timedOut && RATE_LIMIT.test(`${detail ?? ''} ${stderr ?? ''}`)) {
+        if (!timedOut && runner.isRateLimit(`${detail ?? ''} ${stderr ?? ''}`)) {
           // Rate limits pause the whole pipeline instead of burning the retry (§3).
           // ponytail: re-attempts are unbounded by design — the point is to outlast
           // a 5-hour usage window; cancel is the way out.

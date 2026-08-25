@@ -106,7 +106,30 @@ describe('execution profile & settings resolution', () => {
       timeoutMinutes: 10
     })
     expect(settings.reportStyle).toBe('minimal') // default
-    expect(resolveProfile({ model: 'role' }, settings)).toEqual({ model: 'role', effort: 'low' })
-    expect(resolveProfile(undefined, settings)).toEqual({ model: 'repo', effort: 'low' })
+    expect(resolveProfile({ model: 'role' }, settings)).toEqual({
+      runner: 'claude',
+      model: 'role',
+      effort: 'low'
+    })
+    expect(resolveProfile(undefined, settings)).toEqual({
+      runner: 'claude',
+      model: 'repo',
+      effort: 'low'
+    })
+  })
+
+  it('resolves the runner role → repo → global, defaulting to claude', () => {
+    mkdirSync(join(repo, '.somni'), { recursive: true })
+    writeFileSync(join(repo, '.somni/config.json'), '{"runner":"antigravity"}')
+    const settings = resolveSettings(repo, { runner: 'claude' })
+    expect(settings.runner).toBe('antigravity')
+    expect(resolveProfile(undefined, settings).runner).toBe('antigravity')
+    expect(resolveProfile({ runner: 'claude' }, settings).runner).toBe('claude')
+    expect(resolveProfile(undefined, {}).runner).toBe('claude')
+  })
+
+  it('round-trips a runner override through role frontmatter', () => {
+    saveRole(repo, { slug: 'dev', name: 'Dev', preamble: 'p', runner: 'antigravity' })
+    expect(loadRepo(repo).roles[0].runner).toBe('antigravity')
   })
 })

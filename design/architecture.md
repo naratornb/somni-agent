@@ -123,7 +123,26 @@ claude -p --output-format stream-json --verbose \
 - Parsed from stream-json: `session_id` (stored per task run), assistant text deltas (live log), final `result` event → success/error, `total_cost_usd`, duration.
 - Effort maps to the CLI's thinking controls — exact mechanism pinned at implementation time.
 
-**AntigravityRunner:** `agy` headless/print mode with machine-readable output and its auto-approve mode; multi-turn resume for chat if supported (else chat falls back to ClaudeRunner). The CLI is young and moving fast — exact flags are pinned during implementation against https://antigravity.google/docs/cli/headless/. A workflow run's retry always reuses the same profile; runners are never mixed within a retry.
+**AntigravityRunner:**
+
+```
+agy -p --output-format stream-json \
+  [--model <m>] [--effort low|medium|high] [--conversation <id>] \
+  --dangerously-skip-permissions            # autonomous task mode
+  | --mode plan --sandbox                   # read-only chat mode
+  "<role preamble>\n\n---\n\n<task prompt>"
+```
+
+Flags and event shapes were pinned at implementation time against the installed CLI (`agy --help` plus live `-p --output-format stream-json` round trips), not against the docs — https://antigravity.google/docs/cli/headless/ remains the page to re-check when the CLI moves. Decisions recorded there:
+
+- **Resume is supported** — `--conversation <id>`, verified live across a two-turn conversation. The chat therefore uses the profile's runner directly; the "chat falls back to ClaudeRunner" hedge is dropped and unimplemented.
+- **Read-only is two overlapping levers**, `--mode plan` (keeps it out of the workspace) plus `--sandbox` (denies shell commands). agy has no per-tool allowlist, and plan mode alone is advisory — the agent honouring a mode, not the CLI refusing a tool — so both are always applied together for the §7 read-only invariant. Verified: an explicit "overwrite this file now" instruction left the workspace file untouched.
+- **No dollar cost.** agy reports token usage only, so `costUsd` is undefined for antigravity tasks and report cost columns render as em-dash. Not worth maintaining a price table to synthesise one.
+- **Rate-limit classification is inferred**, not observed: the adapter matches Google's conventional quota/`RESOURCE_EXHAUSTED`/429 wording, but no live agy rate limit has been seen yet. If unattended runs start burning retries instead of pausing, this regex is the first thing to check.
+
+Parsed from agy's stream: `{event: "init", conversation_id}` → session, `{event: "step_update", step_update: {step_type: "agent_response", text_delta}}` → live log, `{event: "result", result: {status, response, duration_seconds}}` → success/duration.
+
+A workflow run's retry always reuses the same profile; runners are never mixed within a retry — the adapter is resolved once per task, outside the attempt loop.
 
 ## 6. Summary reports — `Report style` setting
 
