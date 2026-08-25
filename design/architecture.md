@@ -185,6 +185,13 @@ Sidebar navigation, five views:
 - **M6 — AI workflow drafting.** The "Draft with AI" chat (§7). Depends only on M0's spawn/parse and M1's file store, so it can be pulled earlier if wanted.
 - **M7 — Antigravity runner.** Extract the Runner adapter interface, add the `agy` adapter, runner dropdown + per-runner models in settings.
 
+**Phase 2 — least-effort briefing & queueing.** Domain terms in [CONTEXT.md](../CONTEXT.md); voice decision in [ADR 0001](../docs/adr/0001-in-app-whisper-voice-input.md).
+
+- **M8 — Brief-first drafting.** "New from brief" entry point (no saved workflow needed); relentless structured Interview — the assistant emits fenced `somni-question` blocks (question, options, recommended answer) rendered as clickable choices, degrading gracefully to plain text; ever-present **Propose Now** escape; proposals may include new Roles (previewed, written only on Apply); the polished Brief persists on the workflow and feeds later AI calls; Apply auto-ticks the workflow into the Queue. The editor chat adopts the same interview discipline.
+- **M9 — Backlog & drain.** Ordered Backlog with manual Promote only; the pipeline becomes a drain that picks up newly ticked/promoted workflows mid-run; Nightly Window setting (drains until the Queue empties, unticks what it ran, then disarms); Keep Running toggle (drains until switched off). Rate-limit pause and the concurrency cap apply to draining unchanged.
+- **M10 — Refine, model lists, view modes.** One-shot "Refine with AI" on task prompts and role preambles (workflow-structure refinement routes through the editor chat as a canned message); Runner adapters gain `listModels()` (CLI query → curated fallback → free-text combo in the UI); PO/Engineer view modes — presentation-only sidebar switch for the same single user.
+- **M11 — Voice input.** In-app mic on every AI text field via locally run whisper.cpp `base.en`, model downloaded on first use; macOS dictation remains the fallback. Deliberately last: riskiest dependency, nothing else needs it.
+
 Each milestone is shippable and exercises the one before it.
 
 ## 10. Risks & open questions
