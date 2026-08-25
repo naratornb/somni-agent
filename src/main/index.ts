@@ -1,18 +1,26 @@
 import { app, shell, BrowserWindow, ipcMain, powerSaveBlocker } from 'electron'
+import { existsSync } from 'fs'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { wireTaskIpc, killTask } from './runner'
 import { killChats } from './chat'
-import { repoSettings, wireRepoIpc } from './repoIpc'
+import { patchSettings, readSettings, repoSettings, wireRepoIpc } from './repoIpc'
+import { setSelected } from './store'
 import {
   abandonRun,
   cancelPipeline,
+  DrainMode,
   findOrphanedRuns,
+  getDrainState,
   isRunning,
+  msUntil,
+  PipelineStatus,
   resumePipeline,
   RunState,
-  runPipeline
+  setKeepRunning,
+  startDrain,
+  wakeDrain
 } from './executor'
 
 function createWindow(): void {
@@ -62,39 +70,80 @@ app.whenReady().then(() => {
   })
 
   wireTaskIpc(ipcMain, () => BrowserWindow.getAllWindows()[0]?.webContents ?? null)
-  wireRepoIpc()
+  wireRepoIpc(() => armNightly())
 
   const wc = (): Electron.WebContents | undefined => BrowserWindow.getAllWindows()[0]?.webContents
+
+  // Keep the Mac awake while a drain has work, and let it sleep while a
+  // keep-running drain idles (Decision 9; lid-closed sleep still needs user
+  // energy settings — architecture.md §10).
+  let blockerId: number | null = null
+  const blocker = (status: PipelineStatus): void => {
+    if (status !== 'Idle' && blockerId === null) {
+      blockerId = powerSaveBlocker.start('prevent-app-suspension')
+    } else if (status === 'Idle' && blockerId !== null) {
+      if (powerSaveBlocker.isStarted(blockerId)) powerSaveBlocker.stop(blockerId)
+      blockerId = null
+    }
+  }
+
   const events = {
     onState: (state: RunState) => wc()?.send('run:state', state),
     onLog: (runId: string, taskIndex: number, text: string) =>
       wc()?.send('run:log', { runId, taskIndex, text }),
-    onPipeline: (status: string, info?: { resumeAt?: string }) =>
+    onPipeline: (status: PipelineStatus, info?: { resumeAt?: string; mode?: DrainMode | null }) => {
+      blocker(status)
       wc()?.send('pipeline:status', { status, ...info })
+    }
   }
 
-  // Keep the Mac awake for the whole pipeline (lid-closed sleep still needs
-  // user energy settings — see architecture.md §10).
-  const awake = (run: Promise<unknown>): void => {
-    const id = powerSaveBlocker.start('prevent-app-suspension')
-    void run.finally(() => {
-      if (powerSaveBlocker.isStarted(id)) powerSaveBlocker.stop(id)
-    })
-  }
-
-  ipcMain.handle('pipeline:start', (_e, repo: string, slugs: string[]) => {
-    if (isRunning() || slugs.length === 0) return
+  const drain = (repo: string, mode: DrainMode): void => {
     const settings = repoSettings(repo)
-    awake(
-      runPipeline(
-        repo,
-        slugs,
-        join(app.getPath('userData'), 'worktrees'),
-        settings.concurrency,
-        events,
-        { settings }
-      )
+    void startDrain(
+      repo,
+      join(app.getPath('userData'), 'worktrees'),
+      settings.concurrency,
+      events,
+      { settings },
+      mode
     )
+  }
+
+  // Nightly Window (Decision 5): one timer, one repo (lastRepo).
+  let nightlyTimer: NodeJS.Timeout | null = null
+  const armNightly = (): void => {
+    if (nightlyTimer) clearTimeout(nightlyTimer)
+    nightlyTimer = null
+    const { nightlyArmed, nightlyTime } = readSettings()
+    if (!nightlyArmed || !nightlyTime) return
+    nightlyTimer = setTimeout(fireNightly, msUntil(nightlyTime, new Date()))
+  }
+  const fireNightly = (): void => {
+    const { lastRepo } = readSettings()
+    patchSettings({ nightlyArmed: false }) // disarm on disk before acting on it
+    if (!lastRepo || !existsSync(lastRepo)) return
+    if (isRunning()) return wakeDrain() // a live drain just picks the Queue up
+    drain(lastRepo, 'nightly')
+  }
+  armNightly()
+
+  // Decision 3: tick the named slugs, then wake a live drain or start one.
+  // PipelineView's "Drain queue" sends [] — it only starts/joins.
+  ipcMain.handle('pipeline:start', (_e, repo: string, slugs: string[]) => {
+    for (const slug of slugs) {
+      try {
+        setSelected(repo, slug, true)
+      } catch {
+        /* a missing/unwritable workflow just doesn't join */
+      }
+    }
+    if (isRunning()) return wakeDrain()
+    drain(repo, 'manual')
+  })
+  ipcMain.handle('pipeline:state', () => getDrainState())
+  ipcMain.handle('pipeline:keepRunning', (_e, repo: string, on: boolean) => {
+    setKeepRunning(on)
+    if (on && !isRunning()) drain(repo, 'keep')
   })
   ipcMain.handle('pipeline:cancel', () => cancelPipeline())
   // A run.json still marked Running while nothing runs here belongs to a dead process.
@@ -104,7 +153,7 @@ app.whenReady().then(() => {
   ipcMain.handle('pipeline:resume', (_e, repo: string, runIds: string[]) => {
     if (isRunning() || runIds.length === 0) return
     const settings = repoSettings(repo)
-    awake(resumePipeline(repo, runIds, settings.concurrency, events, { settings }))
+    void resumePipeline(repo, runIds, settings.concurrency, events, { settings })
   })
   ipcMain.handle('pipeline:abandon', (_e, repo: string, runId: string) => abandonRun(repo, runId))
 

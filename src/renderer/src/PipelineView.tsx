@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { PipelineStatus, RunState, Workflow } from '../../preload/index'
+import type { DrainState, RunState, Workflow } from '../../preload/index'
 
 export type LogLine = { taskIndex: number; text: string }
 
@@ -8,9 +8,18 @@ type Props = {
   runs: Record<string, RunState> // keyed by runId, this pipeline only
   logs: Record<string, LogLine[]>
   busy: boolean
-  pipelineStatus: { status: PipelineStatus; resumeAt?: string } | null
+  drain: DrainState | null
+  keepRunning: boolean
+  onToggleKeepRunning: (on: boolean) => void
   onStart: () => void
   onCancel: () => void
+}
+
+const MODE_LABEL: Record<string, string> = {
+  manual: 'Draining',
+  nightly: 'Nightly drain',
+  keep: 'Draining (Keep Running)',
+  resume: 'Resuming'
 }
 
 const clock = (iso: string): string =>
@@ -32,7 +41,9 @@ export function PipelineView({
   runs,
   logs,
   busy,
-  pipelineStatus,
+  drain,
+  keepRunning,
+  onToggleKeepRunning,
   onStart,
   onCancel
 }: Props): React.JSX.Element {
@@ -47,8 +58,11 @@ export function PipelineView({
 
   const focusTask = focus ? runs[focus.runId]?.tasks[focus.taskIndex] : undefined
 
+  // One card per workflow: the latest run wins — history is Runs & Reports' job.
   const byWorkflow = (slug: string): RunState | undefined =>
-    Object.values(runs).find((r) => r.workflow === slug)
+    Object.values(runs)
+      .filter((r) => r.workflow === slug)
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0]
   // A resumed run's workflow may not be checkbox-selected — card it from the run itself.
   const cards = [
     ...workflows.map((w) => ({
@@ -59,7 +73,8 @@ export function PipelineView({
     })),
     ...Object.values(runs)
       .filter((r) => !workflows.some((w) => w.slug === r.workflow))
-      .map((r) => ({ key: r.runId, name: r.name, run: r, tasks: r.tasks }))
+      .filter((r) => byWorkflow(r.workflow)?.runId === r.runId)
+      .map((r) => ({ key: r.workflow, name: r.name, run: r, tasks: r.tasks }))
   ]
   const allTasks = Object.values(runs).flatMap((r) => r.tasks)
   const total = Object.keys(runs).length
@@ -67,26 +82,49 @@ export function PipelineView({
     : workflows.reduce((n, w) => n + w.tasks.filter((t) => t.selected !== false).length, 0)
   const done = allTasks.filter((t) => DONE.includes(t.status)).length
 
+  const statusChip =
+    drain?.status === 'Paused' ? (
+      <span className="chip skip" title="Rate limit reached">
+        ⏸ Paused
+        {drain.resumeAt && ` — resumes ${clock(drain.resumeAt)}`}
+      </span>
+    ) : drain?.status === 'Running' && drain.mode ? (
+      <span className="chip running">{MODE_LABEL[drain.mode]}</span>
+    ) : drain?.mode === 'keep' ? (
+      <span className="chip">Draining — waiting for work</span>
+    ) : null
+
   if (cards.length === 0)
-    return <p className="dim">No workflows selected — tick them in the Workflows view.</p>
+    return (
+      <p className="dim">
+        Queue is empty — tick workflows in the Workflows view, or park them in the Backlog for
+        later.
+      </p>
+    )
 
   return (
     <div className="stack">
       <div className="row">
-        <button onClick={onStart} disabled={busy}>
-          ▶ Run pipeline
+        <button onClick={onStart} disabled={busy && drain?.mode !== 'keep'}>
+          ▶ Drain queue
         </button>
+        {/* Never disabled by busy: toggling mid-drain changes the stop rule. */}
+        <label className="row" style={{ width: 'auto' }}>
+          <input
+            type="checkbox"
+            checked={keepRunning}
+            onChange={(e) => onToggleKeepRunning(e.target.checked)}
+          />
+          <span className="field-label" style={{ width: 'auto' }}>
+            Keep Running
+          </span>
+        </label>
         {busy && (
           <button className="danger" onClick={onCancel}>
             Cancel
           </button>
         )}
-        {pipelineStatus?.status === 'Paused' && (
-          <span className="chip skip" title="Rate limit reached">
-            ⏸ Paused
-            {pipelineStatus.resumeAt && ` — resumes ${clock(pipelineStatus.resumeAt)}`}
-          </span>
-        )}
+        {statusChip}
         <progress value={done} max={total || 1} />
         <span className="dim">
           {done}/{total} tasks

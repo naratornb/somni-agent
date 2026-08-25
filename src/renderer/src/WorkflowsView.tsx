@@ -5,10 +5,10 @@ import { DraftChatPanel } from './DraftChatPanel'
 type Props = {
   repo: string
   workflows: Workflow[]
+  backlog: string[] // parked slugs, in the user's order
   roles: Role[]
   refresh: () => void
   onRun: (slug: string) => void
-  running: boolean
   // Slugs with a run still in flight — only these have their chat refused.
   runningSlugs: string[]
   openSlug?: string | null
@@ -20,10 +20,10 @@ const emptyTask = (role: string): Task => ({ title: '', prompt: '', role, select
 export function WorkflowsView({
   repo,
   workflows,
+  backlog,
   roles,
   refresh,
   onRun,
-  running,
   runningSlugs,
   openSlug,
   onOpened
@@ -83,6 +83,25 @@ export function WorkflowsView({
   }
 
   const chatRunning = !!editing?.slug && runningSlugs.includes(editing.slug)
+
+  // Parked work lives only in the Backlog section — no tick, never runs by itself.
+  const backlogWorkflows = backlog.flatMap((slug) => workflows.filter((w) => w.slug === slug))
+  const queueWorkflows = workflows.filter((w) => !backlog.includes(w.slug))
+
+  const park = (slug: string): void => {
+    void window.somni.park(repo, slug).then(() => refresh())
+  }
+  const promote = (slug: string): void => {
+    void window.somni.promote(repo, slug).then(() => refresh())
+  }
+  const reorder = (i: number, delta: -1 | 1): void => {
+    const next = [...backlog]
+    const from = next.indexOf(backlogWorkflows[i].slug)
+    const to = from + delta
+    if (to < 0 || to >= next.length) return
+    ;[next[from], next[to]] = [next[to], next[from]]
+    void window.somni.setBacklog(repo, next).then(() => refresh())
+  }
 
   if (editing) {
     return (
@@ -196,7 +215,7 @@ export function WorkflowsView({
         New workflow
       </button>
       <ul className="list">
-        {workflows.map((w) => (
+        {queueWorkflows.map((w) => (
           <li key={w.slug} onClick={() => setEditing(w)}>
             <input
               type="checkbox"
@@ -216,7 +235,7 @@ export function WorkflowsView({
             </span>
             <button
               className="run-btn"
-              disabled={running || w.tasks.length === 0}
+              disabled={runningSlugs.includes(w.slug) || w.tasks.length === 0}
               onClick={(e) => {
                 e.stopPropagation()
                 onRun(w.slug)
@@ -224,9 +243,60 @@ export function WorkflowsView({
             >
               ▶ Run
             </button>
+            <button
+              className="ghost"
+              disabled={runningSlugs.includes(w.slug)}
+              title="Park in the Backlog"
+              onClick={(e) => {
+                e.stopPropagation()
+                park(w.slug)
+              }}
+            >
+              To backlog
+            </button>
           </li>
         ))}
       </ul>
+      {backlogWorkflows.length > 0 && (
+        <>
+          <div className="row">
+            <b>Backlog</b>
+            <span className="dim">— parked, promote to queue when ready</span>
+          </div>
+          <ul className="list">
+            {backlogWorkflows.map((w, i) => (
+              <li key={w.slug} className="plain" onClick={() => setEditing(w)}>
+                <span className="dim">{i + 1}.</span> <b>{w.name}</b>
+                <span className="dim">
+                  {' '}
+                  · {w.tasks.length} task{w.tasks.length === 1 ? '' : 's'}
+                </span>
+                <div className="row" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    className="ghost"
+                    disabled={i === 0}
+                    onClick={() => reorder(i, -1)}
+                    title="Move up"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    className="ghost"
+                    disabled={i === backlogWorkflows.length - 1}
+                    onClick={() => reorder(i, 1)}
+                    title="Move down"
+                  >
+                    ↓
+                  </button>
+                  <button className="run-btn" onClick={() => promote(w.slug)}>
+                    Promote
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   )
 }
