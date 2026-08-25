@@ -6,10 +6,10 @@ How work gets executed in this repo: a four-member team. The **Technical Directo
 
 | Role | Agent | Model / effort | When it runs |
 |---|---|---|---|
-| **Technical Director** | main session | Fable 5, medium | Always. Decision maker: turns the user's objective into briefs, reviews returned work, green-lights design, implementation, and testing. Talks to the user. Does not write code under this process. |
-| **Senior Fullstack Engineer** | [`fullstack-engineer`](../.claude/agents/fullstack-engineer.md) | Opus 5, low | Main implementor. Receives briefs from the TD and feedback from the Tester. |
+| **Technical Director** | main session | Fable 5, extra high | Always. Decision maker: turns the user's objective into briefs, reviews returned work, green-lights design, implementation, and testing. Talks to the user. Does not write code under this process. |
+| **Senior Fullstack Engineer** | [`fullstack-engineer`](../.claude/agents/fullstack-engineer.md) | Opus 5, medium | Main implementor. Receives briefs from the TD and feedback from the Tester. |
 | **Senior Tester** | [`tester`](../.claude/agents/tester.md) | Sonnet 5, low | After implementation (or in parallel on independent parts). Guards against errors on launch. |
-| **UX/UI Designer** | [`ux-designer`](../.claude/agents/ux-designer.md) | Sonnet 5, medium | Spawned only when the task touches user interface. |
+| **UX/UI Designer** | [`ux-designer`](../.claude/agents/ux-designer.md) | Opus 5, medium | Spawned only when the task touches user interface. |
 
 ## Workflow
 
