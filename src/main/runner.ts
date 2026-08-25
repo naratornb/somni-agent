@@ -3,6 +3,7 @@ import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { WebContents } from 'electron'
+import { getRunner, Runner } from './runners'
 import { feed, StreamEvent } from './stream'
 
 export type TaskEvent =
@@ -13,21 +14,22 @@ export type SpawnHandle = {
   kill: (signal?: NodeJS.Signals) => void
 }
 
-// Shared claude spawn/stream plumbing (used by the Playground and the executor).
-// Becomes ClaudeRunner behind the Runner adapter at M7.
-export function spawnClaude(
+// Shared spawn/stream plumbing. Runner-agnostic: the binary and the line parser
+// both come from the adapter (architecture.md §5).
+export function spawnRunner(
+  runner: Runner,
   args: string[],
   cwd: string,
   onEvent: (ev: TaskEvent) => void,
   onRaw?: (chunk: string) => void
 ): SpawnHandle {
-  const child = spawn('claude', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(runner.binary, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
   let buf = ''
   let resultOk = false
   child.stdout.setEncoding('utf8')
   child.stdout.on('data', (chunk: string) => {
     onRaw?.(chunk)
-    const { events, rest } = feed(buf, chunk)
+    const { events, rest } = feed(buf, chunk, runner.parseLine)
     buf = rest
     for (const ev of events) {
       if (ev.kind === 'result') resultOk = ev.ok
@@ -57,7 +59,8 @@ let playground: SpawnHandle | null = null
 export function runTask(prompt: string, send: (ev: TaskEvent) => void): void {
   if (playground) return
   const cwd = mkdtempSync(join(tmpdir(), 'somni-m0-'))
-  playground = spawnClaude(['-p', prompt, '--output-format', 'stream-json', '--verbose'], cwd, send)
+  const runner = getRunner()
+  playground = spawnRunner(runner, runner.buildArgs(prompt, {}), cwd, send)
   void playground.done.then(() => {
     playground = null
   })

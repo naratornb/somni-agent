@@ -3,10 +3,14 @@ import { contextBridge, ipcRenderer } from 'electron'
 // Shared shapes (duplicated from src/main/store.ts types; keep in sync)
 export type Effort = 'low' | 'medium' | 'high'
 export type ReportStyle = 'minimal' | 'compact' | 'full'
+export type RunnerName = 'claude' | 'antigravity'
 export type Settings = {
   concurrency: number
   timeoutMinutes: number
   reportStyle: ReportStyle
+  runner: RunnerName
+  claudeBinary?: string
+  antigravityBinary?: string
   model?: string
   effort?: Effort
 }
@@ -14,6 +18,7 @@ export type Role = {
   slug: string
   name: string
   preamble: string
+  runner?: RunnerName
   model?: string
   effort?: Effort
 }
@@ -32,6 +37,7 @@ export type TaskRun = {
   costUsd?: number
   durationMs?: number
   error?: string
+  runner?: RunnerName
   model?: string
   effort?: string
   log: string

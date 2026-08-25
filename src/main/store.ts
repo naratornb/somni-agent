@@ -14,17 +14,23 @@ import { dirname, join } from 'path'
 
 export type Effort = 'low' | 'medium' | 'high'
 export type ReportStyle = 'minimal' | 'compact' | 'full'
-export type Profile = { model?: string; effort?: Effort }
+export type RunnerName = 'claude' | 'antigravity'
+export const RUNNER_NAMES: RunnerName[] = ['claude', 'antigravity']
+export type Profile = { runner?: RunnerName; model?: string; effort?: Effort }
 export type Settings = Profile & {
   concurrency?: number
   timeoutMinutes?: number
   reportStyle?: ReportStyle
+  // Empty = look the binary up on PATH (§8).
+  claudeBinary?: string
+  antigravityBinary?: string
 }
 
 export const SETTINGS_DEFAULTS = {
   concurrency: 2,
   timeoutMinutes: 30,
-  reportStyle: 'minimal' as ReportStyle
+  reportStyle: 'minimal' as ReportStyle,
+  runner: 'claude' as RunnerName
 }
 
 export type Role = { slug: string; name: string; preamble: string } & Profile
@@ -56,24 +62,30 @@ export function ensureSomni(repo: string): void {
   if (!existsSync(gi)) atomicWrite(gi, 'runs/*/logs/\n')
 }
 
-// Optional `---\nmodel: x\neffort: high\n---` frontmatter before the H1 (§5).
-// ponytail: two known keys, hand-parsed — a YAML dependency for this is absurd.
+// Optional `---\nrunner: agy\nmodel: x\neffort: high\n---` frontmatter before the H1 (§5).
+// ponytail: three known keys, hand-parsed — a YAML dependency for this is absurd.
 function parseFrontmatter(md: string): { profile: Profile; body: string } {
   const m = /^---\n([\s\S]*?)\n---\n?/.exec(md)
   if (!m) return { profile: {}, body: md }
   const profile: Profile = {}
   for (const line of m[1].split('\n')) {
-    const kv = /^\s*(model|effort)\s*:\s*(.+?)\s*$/.exec(line)
+    const kv = /^\s*(model|effort|runner)\s*:\s*(.+?)\s*$/.exec(line)
     if (kv?.[1] === 'model') profile.model = kv[2]
     if (kv?.[1] === 'effort' && ['low', 'medium', 'high'].includes(kv[2]))
       profile.effort = kv[2] as Effort
+    if (kv?.[1] === 'runner' && (RUNNER_NAMES as string[]).includes(kv[2]))
+      profile.runner = kv[2] as RunnerName
   }
   return { profile, body: md.slice(m[0].length) }
 }
 
 // Execution profile resolution (§5): role → repo config → global settings.
 export function resolveProfile(role: Profile | undefined, settings: Settings): Profile {
-  return { model: role?.model ?? settings.model, effort: role?.effort ?? settings.effort }
+  return {
+    runner: role?.runner ?? settings.runner ?? SETTINGS_DEFAULTS.runner,
+    model: role?.model ?? settings.model,
+    effort: role?.effort ?? settings.effort
+  }
 }
 
 // Per-repo overrides layered over the machine-global settings (§4).
@@ -136,6 +148,7 @@ export function loadRepo(repo: string): RepoData {
 export function saveRole(repo: string, role: Role): Role {
   const slug = role.slug || slugify(role.name)
   const fm = [
+    role.runner ? `runner: ${role.runner}` : '',
     role.model ? `model: ${role.model}` : '',
     role.effort ? `effort: ${role.effort}` : ''
   ].filter(Boolean)
