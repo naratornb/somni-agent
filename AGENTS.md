@@ -32,7 +32,7 @@ Electron + TypeScript (strict) + React + Vite (electron-vite). No database — p
 
 ## Team — multi-agent approach
 
-Non-trivial work is executed by the agent team defined in [design/team.md](design/team.md): the main session acts as **Technical Director** (briefs, reviews, green-lights) and spawns the project agents in `.claude/agents/` — `fullstack-engineer` (implements), `tester` (verifies), `ux-designer` (UI tasks). Apply that process for feature/milestone work; trivial mechanical changes don't need it.
+Non-trivial work is executed by the agent team defined in [design/team.md](design/team.md): the main session acts as **Technical Director** (briefs, reviews, green-lights) and spawns the project agents in `.claude/agents/` — `fullstack-engineer` (implements), `tester` (verifies), `ux-designer` (UI tasks). The TD sizes the work first and staffs per the tiers in design/team.md — often a single engineer for small tasks, the full roster only when scope/risk warrants it; trivial mechanical changes need no agents at all.
 
 ## Commit messages
 
