@@ -13,12 +13,22 @@ How work gets executed in this repo: a four-member team. The **Technical Directo
 
 ## Workflow
 
-1. **Brief.** TD turns the user's objective into a small, milestone-sized brief per specialist (context, goal, constraints, success criterion). One task per brief.
-2. **Design (UI tasks only).** If the task is UI-related, the Designer is spawned first (or alongside) to propose the interface; the TD relays any open questions to the user before implementation locks in.
-3. **Implement.** Engineer implements the brief — simplest approach that works, respecting the architecture rules in [AGENTS.md](../AGENTS.md).
-4. **Test.** Tester verifies the implementation in context and reports failures with concrete output.
-5. **Feedback loop.** Tester findings go back to the Engineer as a new brief. After 2 failed rounds the TD arbitrates instead of looping again.
-6. **Green light.** TD reviews, approves, and commits per the AGENTS.md commit-message rules.
+1. **Size.** TD assesses the objective's scope and risk first, then staffs the smallest team that covers it (see Staffing tiers below), stating the staffing choice in one line when reporting to the user. Spawning the full roster by default wastes tokens.
+2. **Brief.** TD turns the user's objective into a small, milestone-sized brief per staffed specialist (context, goal, constraints, success criterion). One task per brief.
+3. **Design (UI tasks only).** If the task is UI-related, the Designer is spawned first (or alongside) to propose the interface; the TD relays any open questions to the user before implementation locks in.
+4. **Implement.** Engineer implements the brief — simplest approach that works, respecting the architecture rules in [AGENTS.md](../AGENTS.md).
+5. **Test.** Tester verifies the implementation in context and reports failures with concrete output.
+6. **Feedback loop.** Tester findings go back to the Engineer as a new brief. After 2 failed rounds the TD arbitrates instead of looping again.
+7. **Green light.** TD reviews, approves, and commits per the AGENTS.md commit-message rules.
+
+## Staffing tiers
+
+| Size | Signals | Team |
+|---|---|---|
+| **Trivial** | Typo, one-liner, doc tweak | TD does it directly — no agents. |
+| **Small** | One well-understood change, clear approach, low blast radius | Engineer only. The TD reviews the diff and runs `npm test` / `npm run lint` / `npm run build` itself instead of spawning the Tester. |
+| **Standard / milestone** | Multi-file feature, new subsystem, reliability-sensitive logic | Engineer + Tester. |
+| **UI involved** | New view or interaction design | Add the Designer. Mechanical UI edits that follow the existing design system (`src/renderer/src/assets/main.css`) don't need one. |
 
 ## Rules
 
@@ -26,4 +36,4 @@ How work gets executed in this repo: a four-member team. The **Technical Directo
 - Specialists return finished work and findings — never questions addressed directly to the user. Open questions are listed at the end of their report for the TD to relay (subagents cannot prompt the user).
 - Independent briefs may run in parallel (e.g. Engineer on main-process work while Designer drafts UI).
 - Keep briefs small: one milestone-sized task each. Big objectives become a sequence of briefs, not one giant one.
-- Trivial mechanical changes (typos, one-liners, doc tweaks) don't need the team — the TD just does them.
+- Staffing follows the tiers above and is revisable: if a "small" task grows (risky logic appears, tester-worthy failures), the TD adds the missing specialist then — never pre-spawn "just in case". The user can always override ("full team" / "single agent only").
