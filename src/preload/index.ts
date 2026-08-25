@@ -51,6 +51,13 @@ export type RunState = {
 
 export type RunRow = RunState & { worktreeExists: boolean }
 
+export type ChatMessage = { role: 'user' | 'assistant'; text: string; ts: string }
+export type ChatProposal = { name: string; tasks: Task[] }
+export type ChatEvent =
+  | { slug: string; kind: 'text'; text: string }
+  | { slug: string; kind: 'done'; message: ChatMessage; proposal: ChatProposal | null }
+  | { slug: string; kind: 'error'; message: string }
+
 function on(channel: string, cb: (payload: unknown) => void): () => void {
   const listener = (_e: Electron.IpcRendererEvent, payload: unknown): void => cb(payload)
   ipcRenderer.on(channel, listener)
@@ -93,7 +100,15 @@ const somni = {
   saveWorkflow: (repo: string, wf: Workflow): Promise<Workflow> =>
     ipcRenderer.invoke('workflow:save', repo, wf),
   deleteWorkflow: (repo: string, slug: string): Promise<void> =>
-    ipcRenderer.invoke('workflow:delete', repo, slug)
+    ipcRenderer.invoke('workflow:delete', repo, slug),
+  loadChat: (repo: string, slug: string): Promise<{ messages: ChatMessage[]; busy: boolean }> =>
+    ipcRenderer.invoke('chat:load', repo, slug),
+  newChat: (repo: string, slug: string): Promise<void> =>
+    ipcRenderer.invoke('chat:new', repo, slug),
+  sendChat: (repo: string, slug: string, text: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('chat:send', repo, slug, text),
+  onChatEvent: (cb: (ev: ChatEvent) => void): (() => void) =>
+    on('chat:event', (p) => cb(p as ChatEvent))
 }
 
 export type SomniApi = typeof somni

@@ -270,3 +270,68 @@ button.chip.focused {
   padding: 4px 8px;
   border-bottom: 1px solid #2f2f36;
 }
+
+.split {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.split > .stack {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-panel {
+  width: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  border-left: 1px solid #2a2a30;
+  padding-left: 12px;
+}
+
+.chat-messages {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.chat-msg {
+  max-width: 90%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.chat-msg.user {
+  align-self: flex-end;
+  background: #332b5c;
+  color: #e4e4e7;
+}
+
+.chat-msg.assistant {
+  align-self: flex-start;
+  background: #202024;
+  border: 1px solid #2f2f36;
+}
+
+.task-card.proposed {
+  border-color: #6d5ae0;
+}
+
+.proposal-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 40vh;
+  overflow: auto;
+  flex-shrink: 0;
+}

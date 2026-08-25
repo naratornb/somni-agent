@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { wireTaskIpc, killTask } from './runner'
+import { killChats } from './chat'
 import { repoSettings, wireRepoIpc } from './repoIpc'
 import {
   abandonRun,
@@ -125,7 +126,10 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => killTask())
+app.on('before-quit', () => {
+  killTask()
+  killChats()
+})
 
 // In this file you can include the rest of your app's specific main process
 // code. You can also put them in separate files and require them here.
