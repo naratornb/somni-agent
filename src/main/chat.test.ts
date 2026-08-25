@@ -2,8 +2,21 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { killChats, loadChat, newChat, parseProposal, sendChat, turnArgs } from './chat'
+import {
+  applyProposal,
+  DRAFT_KEY,
+  killChats,
+  loadChat,
+  newChat,
+  parseProposal,
+  parseQuestion,
+  PROPOSE_NOW,
+  sendChat,
+  turnArgs
+} from './chat'
 import type { ChatEvent } from './chat'
+import { existsSync } from 'fs'
+import { deleteWorkflow, loadRepo, saveRole, saveWorkflow } from './store'
 
 const block = (json: string): string => '```somni-workflow\n' + json + '\n```'
 
@@ -19,6 +32,8 @@ describe('parseProposal', () => {
     ].join('\n')
     expect(parseProposal(text)).toEqual({
       name: 'New',
+      brief: '',
+      roles: [],
       tasks: [
         { title: 't', prompt: 'p', role: 'dev', selected: true },
         { title: 'u', prompt: 'q', role: 'qa', selected: false }
@@ -67,19 +82,38 @@ describe('turnArgs', () => {
       expect(args[i + 1]).toBe('Read,Glob,Grep')
     }
   })
+
+  // The antigravity runner scopes read-only differently (--mode plan --sandbox,
+  // not --allowedTools) — this must hold for chat turns too, not just tasks.
+  it('scopes the antigravity runner to --mode plan --sandbox and never autonomy', () => {
+    for (const args of [
+      turnArgs('hi', null, { runner: 'antigravity' }, ['dev']),
+      turnArgs('hi', 'sess-1', { runner: 'antigravity', model: 'x' }, [])
+    ]) {
+      expect(args).not.toContain('--dangerously-skip-permissions')
+      expect(args).toEqual(expect.arrayContaining(['--mode', 'plan', '--sandbox']))
+    }
+  })
 })
 
 describe('parseProposal edge cases', () => {
   it('preserves selected:false and empty tasks arrays', () => {
     expect(parseProposal(block('{"name":"Empty","tasks":[]}'))).toEqual({
       name: 'Empty',
+      brief: '',
+      roles: [],
       tasks: []
     })
     expect(
       parseProposal(
         block('{"name":"N","tasks":[{"title":"t","prompt":"p","role":"dev","selected":false}]}')
       )
-    ).toEqual({ name: 'N', tasks: [{ title: 't', prompt: 'p', role: 'dev', selected: false }] })
+    ).toEqual({
+      name: 'N',
+      brief: '',
+      roles: [],
+      tasks: [{ title: 't', prompt: 'p', role: 'dev', selected: false }]
+    })
   })
 
   it('ignores unknown extra keys on the block and on tasks', () => {
@@ -87,6 +121,8 @@ describe('parseProposal edge cases', () => {
       '{"name":"N","extra":"x","tasks":[{"title":"t","prompt":"p","role":"dev","weight":5}]}'
     expect(parseProposal(block(json))).toEqual({
       name: 'N',
+      brief: '',
+      roles: [],
       tasks: [{ title: 't', prompt: 'p', role: 'dev', selected: true }]
     })
   })
@@ -115,6 +151,197 @@ describe('parseProposal edge cases', () => {
       block('{"name":"C","tasks":[]}')
     ].join('\n')
     expect(parseProposal(text)?.name).toBe('C')
+  })
+})
+
+const qBlock = (json: string): string => '```somni-question\n' + json + '\n```'
+
+describe('parseQuestion', () => {
+  it('parses a valid block and keeps the recommended option', () => {
+    expect(
+      parseQuestion(
+        'Some prose\n' + qBlock('{"question":"Which?","options":["a","b"],"recommended":"b"}')
+      )
+    ).toEqual({ question: 'Which?', options: ['a', 'b'], recommended: 'b' })
+  })
+
+  it('takes the last block and drops a recommendation not among the options', () => {
+    const text = [
+      qBlock('{"question":"first","options":["x"],"recommended":"x"}'),
+      qBlock('{"question":"second","options":["x","y"],"recommended":"zzz"}')
+    ].join('\n')
+    expect(parseQuestion(text)).toEqual({
+      question: 'second',
+      options: ['x', 'y'],
+      recommended: ''
+    })
+  })
+
+  it('degrades to null on malformed or empty blocks', () => {
+    expect(parseQuestion('just prose')).toBeNull()
+    expect(parseQuestion(qBlock('{not json'))).toBeNull()
+    expect(parseQuestion(qBlock('{"question":"q"}'))).toBeNull()
+    expect(parseQuestion(qBlock('{"question":"q","options":[]}'))).toBeNull()
+    expect(parseQuestion(qBlock('{"question":"q","options":["a",3]}'))).toBeNull()
+  })
+
+  it('survives a fence nested inside a question string', () => {
+    const json = JSON.stringify({
+      question: 'Use ```npm test``` or make?',
+      options: ['npm', 'make'],
+      recommended: 'npm'
+    })
+    expect(parseQuestion(qBlock(json))?.options).toEqual(['npm', 'make'])
+  })
+})
+
+describe('parseProposal brief + roles (M8)', () => {
+  it('parses the brief and new roles, keeping known profile keys', () => {
+    const json = JSON.stringify({
+      name: 'N',
+      brief: '# Brief\n\nDo the thing.',
+      tasks: [{ title: 't', prompt: 'p', role: 'writer' }],
+      roles: [
+        { slug: 'writer', name: 'Writer', preamble: 'write', runner: 'antigravity' },
+        { slug: 'x', name: 'X', preamble: 'p', effort: 'bogus', model: 'opus' }
+      ]
+    })
+    expect(parseProposal(block(json))).toEqual({
+      name: 'N',
+      brief: '# Brief\n\nDo the thing.',
+      tasks: [{ title: 't', prompt: 'p', role: 'writer', selected: true }],
+      roles: [
+        { slug: 'writer', name: 'Writer', preamble: 'write', runner: 'antigravity' },
+        { slug: 'x', name: 'X', preamble: 'p', model: 'opus' }
+      ]
+    })
+  })
+
+  it('rejects the whole proposal when a role entry is invalid', () => {
+    expect(
+      parseProposal(block('{"name":"N","tasks":[],"roles":[{"slug":"a","name":"A"}]}'))
+    ).toBeNull()
+    expect(parseProposal(block('{"name":"N","tasks":[],"roles":"nope"}'))).toBeNull()
+  })
+})
+
+// Crash-safety (M8): nothing about finding/loading a draft depends on
+// in-process state — a transcript written by a prior process lifetime (i.e.
+// before an app restart) must load exactly like one written this session.
+describe('draft transcript survives a simulated restart', () => {
+  it('loadChat finds a transcript it never wrote itself', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'somni-restart-'))
+    mkdirSync(join(repo, '.somni', 'chats'), { recursive: true })
+    writeFileSync(
+      join(repo, '.somni', 'chats', DRAFT_KEY + '.jsonl'),
+      [
+        JSON.stringify({ role: 'user', text: 'hi', ts: '2020-01-01T00:00:00Z' }),
+        JSON.stringify({ sessionId: 'sess-from-before-restart' }),
+        JSON.stringify({ role: 'assistant', text: 'hello', ts: '2020-01-01T00:00:01Z' })
+      ].join('\n') + '\n'
+    )
+    const { messages, busy } = loadChat(repo, DRAFT_KEY)
+    expect(messages.map((m) => `${m.role}:${m.text}`)).toEqual(['user:hi', 'assistant:hello'])
+    expect(busy).toBe(false) // inFlight is in-memory and correctly empty post-restart
+  })
+})
+
+describe('applyProposal', () => {
+  let repo: string
+  const proposal = (over = {}): Parameters<typeof applyProposal>[2] => ({
+    name: 'Nightly Cleanup',
+    brief: '# Brief\n\nTidy up.',
+    tasks: [{ title: 't', prompt: 'p', role: 'dev', selected: true }],
+    roles: [{ slug: 'dev', name: 'Hijacked', preamble: 'nope' }],
+    ...over
+  })
+
+  beforeEach(() => {
+    repo = mkdtempSync(join(tmpdir(), 'somni-apply-'))
+  })
+
+  it('creates a ticked workflow, the brief sidecar, new roles only, and renames the draft', () => {
+    saveRole(repo, { slug: 'dev', name: 'Dev', preamble: 'existing' })
+    const before = readFileSync(join(repo, '.somni', 'roles', 'dev.md'), 'utf8')
+    mkdirSync(join(repo, '.somni', 'chats'), { recursive: true })
+    writeFileSync(join(repo, '.somni', 'chats', DRAFT_KEY + '.jsonl'), '{"role":"user"}\n')
+
+    const res = applyProposal(
+      repo,
+      DRAFT_KEY,
+      proposal({
+        roles: [
+          { slug: 'dev', name: 'Hijacked', preamble: 'nope' },
+          { slug: 'qa', name: 'QA', preamble: 'test it' }
+        ]
+      })
+    )
+
+    expect(res.ok && res.workflow.slug).toBe('nightly-cleanup')
+    const { workflows, roles } = loadRepo(repo)
+    expect(workflows[0].selected).toBe(true) // auto-ticked (Decision 6)
+    expect(workflows[0].brief).toContain('Tidy up.')
+    // an existing role always wins — byte-identical (Decision 5)
+    expect(readFileSync(join(repo, '.somni', 'roles', 'dev.md'), 'utf8')).toBe(before)
+    expect(roles.map((r) => r.slug).sort()).toEqual(['dev', 'qa'])
+    // transcript renamed to the new slug
+    expect(existsSync(join(repo, '.somni', 'chats', DRAFT_KEY + '.jsonl'))).toBe(false)
+    expect(existsSync(join(repo, '.somni', 'chats', 'nightly-cleanup.jsonl'))).toBe(true)
+  })
+
+  it('deletes the transcript and brief sidecar with the workflow', () => {
+    applyProposal(repo, DRAFT_KEY, proposal({ roles: [] }))
+    const chat = join(repo, '.somni', 'chats', 'nightly-cleanup.jsonl')
+    writeFileSync(chat, '{"sessionId":"s"}\n')
+    deleteWorkflow(repo, 'nightly-cleanup')
+    expect(existsSync(chat)).toBe(false)
+    expect(existsSync(join(repo, '.somni', 'workflows', 'nightly-cleanup.brief.md'))).toBe(false)
+  })
+
+  it('preserves the tick and the slug when applied from the editor', () => {
+    saveWorkflow(repo, { slug: 'existing', name: 'Existing', selected: false, tasks: [] })
+    const res = applyProposal(repo, 'existing', proposal({ roles: [] }))
+    expect(res.ok && res.workflow.slug).toBe('existing')
+    expect(loadRepo(repo).workflows[0].selected).toBe(false)
+    expect(loadRepo(repo).workflows[0].name).toBe('Nightly Cleanup')
+  })
+
+  it('preserves an existing brief sidecar when the editor Apply proposal has no brief', () => {
+    saveWorkflow(repo, {
+      slug: 'existing',
+      name: 'Existing',
+      selected: true,
+      tasks: [],
+      brief: 'original brief'
+    })
+    applyProposal(repo, 'existing', proposal({ roles: [], brief: '' }))
+    expect(loadRepo(repo).workflows[0].brief).toBe('original brief\n')
+  })
+
+  it('writes a genuinely new role with the right frontmatter and preamble', () => {
+    applyProposal(
+      repo,
+      DRAFT_KEY,
+      proposal({
+        roles: [{ slug: 'writer', name: 'Writer', preamble: 'write things', model: 'opus' }]
+      })
+    )
+    const md = readFileSync(join(repo, '.somni', 'roles', 'writer.md'), 'utf8')
+    expect(md).toContain('model: opus')
+    expect(md).toContain('# Writer')
+    expect(md).toContain('write things')
+  })
+
+  it('uniquifies a colliding workflow slug instead of overwriting the existing one', () => {
+    const first = applyProposal(repo, DRAFT_KEY, proposal({ roles: [] }))
+    expect(first.ok && first.workflow.slug).toBe('nightly-cleanup')
+    writeFileSync(join(repo, '.somni', 'chats', DRAFT_KEY + '.jsonl'), '{"role":"user"}\n')
+    const second = applyProposal(repo, DRAFT_KEY, proposal({ roles: [] }))
+    expect(second.ok && second.workflow.slug).toBe('nightly-cleanup-2')
+    const slugs = loadRepo(repo)
+      .workflows.map((w) => w.slug)
+      .sort()
+    expect(slugs).toEqual(['nightly-cleanup', 'nightly-cleanup-2'])
   })
 })
 
@@ -239,6 +466,19 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     expect(calls3[2]).not.toContain('--resume')
   })
 
+  it('refuses Apply while that key has a turn in flight', async () => {
+    const slug = nextSlug()
+    const done = send(slug, 'hi')
+    const res = applyProposal(repo, slug, {
+      name: 'N',
+      brief: 'b',
+      tasks: [],
+      roles: []
+    })
+    expect(res).toEqual({ ok: false, error: 'a chat turn is already in flight' })
+    await done
+  })
+
   it('runs the turn with the repo as cwd, not a worktree', async () => {
     const slug = nextSlug()
     await send(slug, 'hi')
@@ -259,8 +499,26 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     const done = events.find((e) => e.kind === 'done') as Extract<ChatEvent, { kind: 'done' }>
     expect(done.proposal).toEqual({
       name: 'Plan',
+      brief: '',
+      roles: [],
       tasks: [{ title: 't', prompt: 'p', role: 'dev', selected: true }]
     })
+  })
+
+  it("carries the turn's parsed question on the done event", async () => {
+    fake({
+      FAKE_TEXT:
+        'One thing first.\n```somni-question\n' +
+        '{"question":"Tests?","options":["vitest","none"],"recommended":"vitest"}\n```'
+    })
+    const events = await send(nextSlug(), 'build a thing')
+    const done = events.find((e) => e.kind === 'done') as Extract<ChatEvent, { kind: 'done' }>
+    expect(done.question).toEqual({
+      question: 'Tests?',
+      options: ['vitest', 'none'],
+      recommended: 'vitest'
+    })
+    expect(done.proposal).toBeNull()
   })
 
   it('spawn failure emits an error event and does not append an assistant line', async () => {
@@ -270,6 +528,20 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     expect(events.some((e) => e.kind === 'error')).toBe(true)
     const loaded = loadChat(repo, slug)
     expect(loaded.messages.map((m) => m.role)).toEqual(['user']) // no assistant line appended
+  })
+
+  // §7 security invariant, specifically for the two surfaces the Decisions
+  // log calls out: the draft key and a Propose Now turn.
+  it('keeps chat spawns read-only for the _draft key and for a Propose Now turn', async () => {
+    await send(DRAFT_KEY, 'build me a thing')
+    const proposeSlug = nextSlug()
+    await send(proposeSlug, PROPOSE_NOW)
+    for (const call of callsLogged()) {
+      expect(call).not.toContain('--dangerously-skip-permissions')
+      const i = call.indexOf('--allowedTools')
+      expect(i).toBeGreaterThanOrEqual(0)
+      expect(call[i + 1]).toBe('Read,Glob,Grep')
+    }
   })
 
   it('in-flight guard refuses a second send for the same slug but allows a different slug', async () => {

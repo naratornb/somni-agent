@@ -335,3 +335,50 @@ button.chip.focused {
   overflow: auto;
   flex-shrink: 0;
 }
+
+/* M8 — interview question cards, Brief disclosure, Draft empty state */
+.question-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  align-self: flex-start;
+  max-width: 90%;
+  background: #202024;
+  border: 1px solid #2f2f36;
+  border-radius: 8px;
+}
+.chip.recommended {
+  border: 1px solid #6d5ae0;
+  background: #2c2650;
+  color: #cfc9f7;
+}
+.brief-box {
+  border: 1px solid #2f2f36;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #202024;
+}
+.brief-box summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #c9c9cf;
+}
+.brief-box[open] summary {
+  margin-bottom: 6px;
+}
+.brief-text {
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.draft-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #8a8a93;
+  max-width: 440px;
+  margin: 0 auto;
+  line-height: 1.6;
+}

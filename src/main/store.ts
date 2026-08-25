@@ -35,7 +35,14 @@ export const SETTINGS_DEFAULTS = {
 
 export type Role = { slug: string; name: string; preamble: string } & Profile
 export type Task = { title: string; prompt: string; role: string; selected: boolean }
-export type Workflow = { slug: string; name: string; selected: boolean; tasks: Task[] }
+export type Workflow = {
+  slug: string
+  name: string
+  selected: boolean
+  tasks: Task[]
+  // The Brief sidecar (workflows/<slug>.brief.md, M8 §4) — absent if never written.
+  brief?: string
+}
 export type RepoData = { roles: Role[]; workflows: Workflow[] }
 
 export function slugify(name: string): string {
@@ -135,7 +142,8 @@ export function loadRepo(repo: string): RepoData {
           slug: f.replace(/\.json$/, ''),
           name: String(w.name ?? f),
           selected: w.selected === true,
-          tasks: Array.isArray(w.tasks) ? w.tasks : []
+          tasks: Array.isArray(w.tasks) ? w.tasks : [],
+          brief: loadBrief(repo, f.replace(/\.json$/, ''))
         }
       ]
     } catch {
@@ -161,9 +169,19 @@ export function deleteRole(repo: string, slug: string): void {
   rmSync(dir(repo, 'roles', slug + '.md'), { force: true })
 }
 
+const briefPath = (repo: string, slug: string): string => dir(repo, 'workflows', slug + '.brief.md')
+
+export function loadBrief(repo: string, slug: string): string | undefined {
+  const path = briefPath(repo, slug)
+  return existsSync(path) ? readFileSync(path, 'utf8') : undefined
+}
+
 export function saveWorkflow(repo: string, wf: Workflow): Workflow {
   const slug = wf.slug || slugify(wf.name)
   const { name, selected, tasks } = wf
+  // ponytail: an absent brief leaves the sidecar alone (a save from the editor
+  // carries no brief); only a non-empty brief rewrites it.
+  if (wf.brief) atomicWrite(briefPath(repo, slug), wf.brief.trimEnd() + '\n')
   atomicWrite(
     dir(repo, 'workflows', slug + '.json'),
     JSON.stringify({ name, selected, tasks }, null, 2) + '\n'
@@ -173,4 +191,8 @@ export function saveWorkflow(repo: string, wf: Workflow): Workflow {
 
 export function deleteWorkflow(repo: string, slug: string): void {
   rmSync(dir(repo, 'workflows', slug + '.json'), { force: true })
+  rmSync(briefPath(repo, slug), { force: true })
+  // The transcript goes too: a later workflow reusing this slug must not
+  // inherit a dead one's history and session id.
+  rmSync(dir(repo, 'chats', slug + '.jsonl'), { force: true })
 }
