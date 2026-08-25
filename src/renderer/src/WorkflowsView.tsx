@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import type { Role, Task, Workflow } from '../../preload/index'
+import type { ChatProposal, Role, Task, Workflow } from '../../preload/index'
+import { DraftChatPanel } from './DraftChatPanel'
 
 type Props = {
   repo: string
@@ -21,6 +22,19 @@ export function WorkflowsView({
   running
 }: Props): React.JSX.Element {
   const [editing, setEditing] = useState<Workflow | null>(null)
+  const [chatOpen, setChatOpen] = useState(false)
+
+  // Apply is the one user-triggered write from the chat (architecture.md §7).
+  const applyProposal = async (proposal: ChatProposal): Promise<void> => {
+    if (!editing) return
+    const stored = workflows.find((w) => w.slug === editing.slug)
+    const dirty = stored && JSON.stringify(stored) !== JSON.stringify(editing)
+    if (dirty && !confirm('Discard your unsaved edits and apply the proposed workflow?')) return
+    const next = { ...editing, name: proposal.name, tasks: proposal.tasks }
+    await window.somni.saveWorkflow(repo, next)
+    setEditing(next)
+    refresh()
+  }
 
   const save = async (): Promise<void> => {
     if (!editing) return
@@ -52,73 +66,98 @@ export function WorkflowsView({
 
   if (editing) {
     return (
-      <div className="stack">
-        <input
-          placeholder="Workflow name (e.g. Add image upload feature)"
-          value={editing.name}
-          onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-        />
-        {editing.tasks.map((t, i) => (
-          <div className="task-card" key={i}>
-            <div className="row">
-              <span className="dim">{i + 1}.</span>
-              <input
-                placeholder="Task title (e.g. Design the feature)"
-                value={t.title}
-                onChange={(e) => patchTask(i, { title: e.target.value })}
+      <div className="split">
+        <div className="stack">
+          <input
+            placeholder="Workflow name (e.g. Add image upload feature)"
+            value={editing.name}
+            onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+          />
+          {editing.tasks.map((t, i) => (
+            <div className="task-card" key={i}>
+              <div className="row">
+                <span className="dim">{i + 1}.</span>
+                <input
+                  placeholder="Task title (e.g. Design the feature)"
+                  value={t.title}
+                  onChange={(e) => patchTask(i, { title: e.target.value })}
+                />
+                <select value={t.role} onChange={(e) => patchTask(i, { role: e.target.value })}>
+                  <option value="">(no role)</option>
+                  {roles.map((r) => (
+                    <option key={r.slug} value={r.slug}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+                <button className="ghost" onClick={() => moveTask(i, -1)} title="Move up">
+                  ↑
+                </button>
+                <button className="ghost" onClick={() => moveTask(i, 1)} title="Move down">
+                  ↓
+                </button>
+                <button
+                  className="ghost danger"
+                  onClick={() =>
+                    setEditing({ ...editing, tasks: editing.tasks.filter((_, j) => j !== i) })
+                  }
+                >
+                  ✕
+                </button>
+              </div>
+              <textarea
+                placeholder="Task prompt…"
+                rows={3}
+                value={t.prompt}
+                onChange={(e) => patchTask(i, { prompt: e.target.value })}
               />
-              <select value={t.role} onChange={(e) => patchTask(i, { role: e.target.value })}>
-                <option value="">(no role)</option>
-                {roles.map((r) => (
-                  <option key={r.slug} value={r.slug}>
-                    {r.name}
-                  </option>
-                ))}
-              </select>
-              <button className="ghost" onClick={() => moveTask(i, -1)} title="Move up">
-                ↑
-              </button>
-              <button className="ghost" onClick={() => moveTask(i, 1)} title="Move down">
-                ↓
-              </button>
-              <button
-                className="ghost danger"
-                onClick={() =>
-                  setEditing({ ...editing, tasks: editing.tasks.filter((_, j) => j !== i) })
-                }
-              >
-                ✕
-              </button>
             </div>
-            <textarea
-              placeholder="Task prompt…"
-              rows={3}
-              value={t.prompt}
-              onChange={(e) => patchTask(i, { prompt: e.target.value })}
-            />
-          </div>
-        ))}
-        <button
-          className="ghost"
-          onClick={() =>
-            setEditing({ ...editing, tasks: [...editing.tasks, emptyTask(roles[0]?.slug ?? '')] })
-          }
-        >
-          + Add task
-        </button>
-        <div className="row">
-          <button onClick={save} disabled={!editing.name.trim()}>
-            Save
+          ))}
+          <button
+            className="ghost"
+            onClick={() =>
+              setEditing({ ...editing, tasks: [...editing.tasks, emptyTask(roles[0]?.slug ?? '')] })
+            }
+          >
+            + Add task
           </button>
-          <button className="ghost" onClick={() => setEditing(null)}>
-            Cancel
-          </button>
-          {editing.slug && (
-            <button className="danger" onClick={() => remove(editing.slug)}>
-              Delete
+          <div className="row">
+            <button onClick={save} disabled={!editing.name.trim()}>
+              Save
             </button>
-          )}
+            <button className="ghost" onClick={() => setEditing(null)}>
+              Cancel
+            </button>
+            {editing.slug && (
+              <button className="danger" onClick={() => remove(editing.slug)}>
+                Delete
+              </button>
+            )}
+            <button
+              className="ghost"
+              disabled={!editing.slug || running}
+              title={
+                !editing.slug
+                  ? 'Save the workflow first'
+                  : running
+                    ? 'Workflow is running'
+                    : undefined
+              }
+              onClick={() => setChatOpen((o) => !o)}
+            >
+              Draft with AI
+            </button>
+          </div>
         </div>
+        {editing.slug && (
+          <DraftChatPanel
+            repo={repo}
+            slug={editing.slug}
+            open={chatOpen}
+            running={running}
+            onApply={(p) => void applyProposal(p)}
+          />
+        )}
       </div>
     )
   }

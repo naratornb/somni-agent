@@ -1,7 +1,8 @@
-import { app, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { lockedGit, RunState } from './executor'
+import { ChatEvent, loadChat, newChat, sendChat } from './chat'
+import { isRunning, lockedGit, RunState } from './executor'
 import * as store from './store'
 import { atomicWrite, Settings } from './store'
 
@@ -100,4 +101,18 @@ export function wireRepoIpc(): void {
   ipcMain.handle('workflow:delete', (_e, repo: string, slug: string) =>
     store.deleteWorkflow(repo, slug)
   )
+
+  // Draft with AI (§7). Read-only chat; Apply goes through workflow:save above.
+  ipcMain.handle('chat:load', (_e, repo: string, slug: string) => loadChat(repo, slug))
+  ipcMain.handle('chat:new', (_e, repo: string, slug: string) => newChat(repo, slug))
+  ipcMain.handle('chat:send', (_e, repo: string, slug: string, text: string) => {
+    // ponytail: pipeline-wide guard — per-workflow granularity once the
+    // executor tracks which slugs are live.
+    if (isRunning()) return { ok: false, error: 'a pipeline is running' }
+    const settings = repoSettings(repo)
+    const roleSlugs = store.loadRepo(repo).roles.map((r) => r.slug)
+    return sendChat(repo, slug, text, settings, roleSlugs, (ev: ChatEvent) =>
+      BrowserWindow.getAllWindows()[0]?.webContents.send('chat:event', ev)
+    )
+  })
 }
