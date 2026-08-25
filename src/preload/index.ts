@@ -1,7 +1,22 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 // Shared shapes (duplicated from src/main/store.ts types; keep in sync)
-export type Role = { slug: string; name: string; preamble: string }
+export type Effort = 'low' | 'medium' | 'high'
+export type ReportStyle = 'minimal' | 'compact' | 'full'
+export type Settings = {
+  concurrency: number
+  timeoutMinutes: number
+  reportStyle: ReportStyle
+  model?: string
+  effort?: Effort
+}
+export type Role = {
+  slug: string
+  name: string
+  preamble: string
+  model?: string
+  effort?: Effort
+}
 export type Task = { title: string; prompt: string; role: string; selected: boolean }
 export type Workflow = { slug: string; name: string; selected: boolean; tasks: Task[] }
 export type RepoData = { roles: Role[]; workflows: Workflow[] }
@@ -17,6 +32,8 @@ export type TaskRun = {
   costUsd?: number
   durationMs?: number
   error?: string
+  model?: string
+  effort?: string
   log: string
 }
 export type RunState = {
@@ -25,11 +42,14 @@ export type RunState = {
   name: string
   branch: string
   worktree: string
+  baseSha?: string
   status: TaskStatus
   startedAt: string
   finishedAt?: string
   tasks: TaskRun[]
 }
+
+export type RunRow = RunState & { worktreeExists: boolean }
 
 function on(channel: string, cb: (payload: unknown) => void): () => void {
   const listener = (_e: Electron.IpcRendererEvent, payload: unknown): void => cb(payload)
@@ -56,6 +76,13 @@ const somni = {
     on('run:state', (p) => cb(p as RunState)),
   onRunLog: (cb: (log: { runId: string; taskIndex: number; text: string }) => void): (() => void) =>
     on('run:log', (p) => cb(p as { runId: string; taskIndex: number; text: string })),
+  getSettings: (): Promise<Settings> => ipcRenderer.invoke('settings:get'),
+  setSettings: (s: Settings): Promise<void> => ipcRenderer.invoke('settings:set', s),
+  listRuns: (repo: string): Promise<RunRow[]> => ipcRenderer.invoke('runs:list', repo),
+  runReport: (repo: string, runId: string): Promise<string | null> =>
+    ipcRenderer.invoke('runs:report', repo, runId),
+  cleanupRun: (repo: string, runId: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('runs:cleanup', repo, runId),
   lastRepo: (): Promise<string | null> => ipcRenderer.invoke('repo:last'),
   chooseRepo: (): Promise<string | null> => ipcRenderer.invoke('repo:choose'),
   loadRepo: (repo: string): Promise<RepoData> => ipcRenderer.invoke('repo:load', repo),

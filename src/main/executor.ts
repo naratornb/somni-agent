@@ -7,13 +7,13 @@ import { execFile } from 'child_process'
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { promisify } from 'util'
+import { writeReport } from './report'
 import { spawnClaude, SpawnHandle } from './runner'
-import { atomicWrite, loadRepo, slugify } from './store'
+import { atomicWrite, loadRepo, resolveProfile, Settings, slugify } from './store'
 
 const git = promisify(execFile)
 
-// ponytail: fixed reliability defaults; per-repo config.json overrides land in M5.
-const TASK_TIMEOUT_MS = 30 * 60_000
+const TASK_TIMEOUT_MS = 30 * 60_000 // fallback; settings.timeoutMinutes wins
 const KILL_GRACE_MS = 5_000 // SIGTERM → SIGKILL grace
 const BACKOFF_START_MS = 60_000
 const BACKOFF_MAX_MS = 30 * 60_000
@@ -23,7 +23,7 @@ const RATE_LIMIT = /rate.?limit|usage limit|overloaded|429/i
 // ponytail: concurrent `git worktree add` on one repo can race on .git locks —
 // serialize the mutating git calls; the task processes themselves run in parallel.
 let gitLock: Promise<unknown> = Promise.resolve()
-function lockedGit(args: string[]): Promise<unknown> {
+export function lockedGit(args: string[]): Promise<unknown> {
   const p = gitLock.then(() => git('git', args))
   gitLock = p.catch(() => {})
   return p
@@ -42,6 +42,8 @@ export type TaskRun = {
   costUsd?: number
   durationMs?: number
   error?: string
+  model?: string
+  effort?: string
   log: string
 }
 
@@ -51,6 +53,7 @@ export type RunState = {
   name: string
   branch: string
   worktree: string
+  baseSha?: string // commit the branch was cut from — reports diff against it
   status: TaskStatus
   startedAt: string
   finishedAt?: string
@@ -80,6 +83,7 @@ export type RunOpts = {
   graceMs?: number
   backoffMs?: number
   maxBackoffMs?: number
+  settings?: Settings // resolved repo+global settings (profile, report style)
   ctrl?: Ctrl // internal: set by the pipeline
   gate?: Gate // internal: set by the pipeline
 }
@@ -297,7 +301,9 @@ async function execute(
   const now = opts.now ?? ((): Date => new Date())
   const ctrl = opts.ctrl ?? { cancelled: false, handle: null }
   const gate = opts.gate ?? makeGate(events, opts)
-  const timeoutMs = opts.timeoutMs ?? TASK_TIMEOUT_MS
+  const settings = opts.settings ?? {}
+  const timeoutMs =
+    opts.timeoutMs ?? (settings.timeoutMinutes ? settings.timeoutMinutes * 60_000 : TASK_TIMEOUT_MS)
   const graceMs = opts.graceMs ?? KILL_GRACE_MS
   const runDir = join(repo, '.somni', 'runs', state.runId)
   const writeState = (): void => {
@@ -326,6 +332,7 @@ async function execute(
       defs.some((d, i) => taskTitle(d, i) !== state.tasks[i].title)
     )
       throw new Error('workflow changed since it started')
+    state.baseSha ??= await headSha(repo)
     await ensureWorktree(repo, state.worktree, state.branch)
 
     for (let i = 0; i < state.tasks.length; i++) {
@@ -336,7 +343,11 @@ async function execute(
         continue
       }
       const def = defs[i]
-      const preamble = roles.find((r) => r.slug === def.role)?.preamble
+      const role = roles.find((r) => r.slug === def.role)
+      const profile = resolveProfile(role, settings)
+      task.model = profile.model
+      task.effort = profile.effort
+      const preamble = role?.preamble
       const prompt = preamble ? `${preamble}\n\n---\n\n${def.prompt}` : def.prompt
       const logPath = join(runDir, task.log)
       task.status = 'Running'
@@ -365,7 +376,9 @@ async function execute(
             '--output-format',
             'stream-json',
             '--verbose',
-            '--dangerously-skip-permissions'
+            '--dangerously-skip-permissions',
+            ...(profile.model ? ['--model', profile.model] : []),
+            ...(profile.effort ? ['--effort', profile.effort] : [])
           ],
           state.worktree,
           (ev) => {
@@ -445,6 +458,15 @@ async function execute(
     const failed = state.tasks.some((t) => t.status === 'Failed')
     const cancelled = state.tasks.some((t) => t.status === 'Cancelled')
     state.status = cancelled ? 'Cancelled' : failed ? 'Failed' : 'Completed'
+    // Land the final status on disk *before* generating the report: a full-style
+    // report task runs for minutes, and a crash during it must leave a finished
+    // run, not a Running orphan whose extra Report task fails the resume check.
+    writeState()
+    // A morning report is useful on failure too (§6); never let it fail the run.
+    if (state.status === 'Completed' || state.status === 'Failed')
+      await writeReport(repo, state, settings).catch((err) =>
+        events.onLog(state.runId, -1, `[somni] report failed: ${message(err)}`)
+      )
   } catch (err) {
     state.status = 'Failed'
     for (const t of state.tasks)
@@ -455,6 +477,11 @@ async function execute(
     writeState()
   }
   return state
+}
+
+async function headSha(repo: string): Promise<string | undefined> {
+  const { stdout } = (await lockedGit(['-C', repo, 'rev-parse', 'HEAD'])) as { stdout: string }
+  return stdout.trim() || undefined
 }
 
 // Fresh run: create worktree + branch. Resume: reuse whatever the dead run left

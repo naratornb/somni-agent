@@ -252,3 +252,21 @@ button.chip.focused {
     monospace;
   color: #9f97e8;
 }
+
+.field-label {
+  width: 160px;
+  color: #a1a1aa;
+}
+
+.runs-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  width: 100%;
+}
+
+.runs-table th,
+.runs-table td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid #2f2f36;
+}
