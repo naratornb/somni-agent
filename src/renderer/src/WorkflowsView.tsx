@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ChatProposal, Role, Task, Workflow } from '../../preload/index'
 import { DraftChatPanel } from './DraftChatPanel'
+import { ICON_BTN, INPUT as BASE_INPUT, INPUT_TITLE } from './ui'
 
 type Props = {
   repo: string
@@ -17,15 +18,11 @@ type Props = {
 
 const emptyTask = (role: string): Task => ({ title: '', prompt: '', role, selected: true })
 
-// Repeated mock class strings, named once (workflows_editor/code.html).
-const INPUT =
-  'rounded border border-border-subtle bg-surface-container px-3 py-1.5 font-mono-code text-sm text-on-surface focus:border-primary focus:outline-none'
-const INPUT_UNDERLINE =
-  'w-full border-b border-border-subtle bg-transparent pb-2 font-headline-lg text-headline-lg font-semibold text-on-surface transition-colors focus:border-primary focus:outline-none'
+// Mock-specific variants (workflows_editor/code.html sizes its utility buttons
+// tighter than the §0 page-level ghost); the rest come from ./ui.
+const INPUT = `${BASE_INPUT} font-mono-code`
 const BTN_GHOST =
   'rounded border border-border-subtle bg-surface-container px-3 py-1.5 text-sm text-on-surface transition-colors hover:bg-surface-bright disabled:opacity-50'
-const ICON_BTN =
-  'rounded p-1.5 text-on-surface-variant transition-colors hover:bg-surface-container hover:text-on-surface disabled:opacity-40'
 
 export function WorkflowsView({
   repo,
@@ -115,12 +112,13 @@ export function WorkflowsView({
 
   if (editing) {
     return (
-      <div className="split">
-        <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
+      // §7: the form compresses to make room for the fixed 340px chat panel.
+      <div className="flex min-h-0 flex-1 gap-gutter">
+        <div className="min-w-0 flex-1 overflow-y-auto">
           <div className="relative mx-auto max-w-4xl rounded-xl border border-border-subtle bg-surface-elevated p-6">
             <div className="mb-6">
               <input
-                className={INPUT_UNDERLINE}
+                className={INPUT_TITLE}
                 placeholder="Workflow name (e.g. Add image upload feature)"
                 value={editing.name}
                 onChange={(e) => setEditing({ ...editing, name: e.target.value })}

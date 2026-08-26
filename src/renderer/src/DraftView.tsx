@@ -10,6 +10,7 @@ import type {
   Workflow
 } from '../../preload/index'
 import { ProposalPreview, QuestionCard } from './chatShared'
+import { BTN_GHOST, BTN_PRIMARY, BUBBLE_AI, BUBBLE_USER, ERROR_BANNER } from './ui'
 
 type Props = {
   repo: string
@@ -19,12 +20,9 @@ type Props = {
 
 const EMPTY = "Describe what you want built — I'll ask a few questions, then propose a workflow."
 
-// Mock: drafting_interface/code.html. User bubbles right-aligned + ghost-bordered,
-// AI bubbles left-aligned on the lowest surface (DESIGN.md, unified chat).
-const BUBBLE_USER =
-  'max-w-[80%] rounded-xl border border-border-subtle bg-surface-elevated p-4 whitespace-pre-wrap text-on-surface'
-const BUBBLE_AI =
-  'w-full max-w-3xl rounded-xl border border-border-subtle bg-surface-container-lowest p-4 font-mono-code text-mono-code whitespace-pre-wrap text-on-surface-variant'
+// Width caps are the full-page chat's; the 340px panel drops them (§6/§7).
+const USER = `max-w-[80%] ${BUBBLE_USER}`
+const AI = `max-w-[80%] ${BUBBLE_AI}`
 
 export function DraftView({ repo, roles, onApplied }: Props): React.JSX.Element {
   const slug = window.somni.draftKey
@@ -117,18 +115,11 @@ export function DraftView({ repo, roles, onApplied }: Props): React.JSX.Element 
     <div className="flex min-h-0 flex-1 flex-col gap-stack-gap">
       <div className="flex shrink-0 items-center gap-4 border-b border-border-subtle pb-4">
         <h2 className="font-headline-md text-headline-md font-bold">Draft</h2>
-        <button
-          className="rounded-md border border-border-subtle bg-surface-container-high px-3 py-1 text-sm text-on-surface-variant transition-colors hover:bg-surface-variant disabled:opacity-50"
-          onClick={newDraft}
-          disabled={sending}
-        >
+        <button className={BTN_GHOST} onClick={newDraft} disabled={sending}>
           New draft
         </button>
       </div>
-      <div
-        className="custom-scrollbar flex min-h-0 flex-1 flex-col gap-stack-gap overflow-y-auto"
-        ref={listRef}
-      >
+      <div className="flex min-h-0 flex-1 flex-col gap-stack-gap overflow-y-auto" ref={listRef}>
         {messages.length === 0 && !streaming && (
           <p className="m-auto max-w-[440px] text-center leading-relaxed text-on-surface-variant">
             {EMPTY}
@@ -136,25 +127,21 @@ export function DraftView({ repo, roles, onApplied }: Props): React.JSX.Element 
         )}
         {messages.map((m, i) => (
           <div className={m.role === 'user' ? 'flex w-full justify-end' : 'flex w-full'} key={i}>
-            <div className={m.role === 'user' ? BUBBLE_USER : BUBBLE_AI}>{m.text}</div>
+            <div className={m.role === 'user' ? USER : AI}>{m.text}</div>
           </div>
         ))}
         {streaming !== null && (
           <div className="flex w-full">
-            <div className={BUBBLE_AI}>{streaming + '▌'}</div>
+            <div className={AI}>{streaming + '▌'}</div>
           </div>
         )}
         {question && !proposal && (
           <QuestionCard q={question} disabled={sending} onAnswer={(t) => void send(t)} />
         )}
         {error && (
-          <div className="flex items-center gap-2 rounded-lg border border-status-failed/20 bg-status-failed/10 px-3 py-2 font-mono-code text-mono-code text-status-failed">
+          <div className={ERROR_BANNER}>
             {error}
-            <button
-              className="rounded border border-border-subtle bg-surface-container px-2 py-1 text-xs text-on-surface disabled:opacity-50"
-              onClick={() => void send(lastUser)}
-              disabled={sending}
-            >
+            <button className={BTN_GHOST} onClick={() => void send(lastUser)} disabled={sending}>
               Retry
             </button>
           </div>
@@ -172,7 +159,7 @@ export function DraftView({ repo, roles, onApplied }: Props): React.JSX.Element 
       )}
       <div className="flex shrink-0 items-end gap-2 border-t border-border-subtle pt-3">
         <textarea
-          className="custom-scrollbar h-20 flex-1 resize-y rounded-lg border border-border-subtle bg-surface-container px-3 py-2 font-body-md text-body-md text-on-surface focus:border-primary focus:outline-none"
+          className="h-20 flex-1 resize-y rounded-lg border border-border-subtle bg-surface-container px-3 py-2 font-body-md text-body-md text-on-surface focus:border-primary focus:outline-none"
           placeholder="Describe what you want built…"
           value={input}
           disabled={sending}
@@ -185,16 +172,12 @@ export function DraftView({ repo, roles, onApplied }: Props): React.JSX.Element 
           }}
         />
         <div className="flex flex-col gap-2">
-          <button
-            className="rounded-full bg-primary-container px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-inverse-primary disabled:opacity-50"
-            disabled={sending || !input.trim()}
-            onClick={submit}
-          >
+          <button className={BTN_PRIMARY} disabled={sending || !input.trim()} onClick={submit}>
             Send
           </button>
           {/* _draft is never blocked by a running pipeline (Decision 9). */}
           <button
-            className="rounded-full border border-border-subtle bg-surface-container px-4 py-2 text-sm text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-primary disabled:opacity-50"
+            className={BTN_GHOST}
             onClick={() => void send(window.somni.proposeNow)}
             disabled={sending}
           >

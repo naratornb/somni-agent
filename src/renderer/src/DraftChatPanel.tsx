@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChatEvent, ChatMessage, ChatProposal, ChatQuestion, Role } from '../../preload/index'
 import { ProposalPreview, QuestionCard } from './chatShared'
+import { BTN_GHOST_SM, BTN_PRIMARY, BUBBLE_AI, BUBBLE_USER, ERROR_BANNER } from './ui'
 
 type Props = {
   repo: string
@@ -88,36 +89,53 @@ export function DraftChatPanel({
   }
 
   return (
-    <div className="chat-panel" style={open ? undefined : { display: 'none' }}>
-      <div className="row">
-        <b>Draft with AI</b>
-        <button className="ghost" onClick={newChat} disabled={running}>
-          New chat
-        </button>
-        <button
-          className="ghost"
-          onClick={() => void send(window.somni.proposeNow)}
-          disabled={sending || running}
-        >
-          Propose Now
-        </button>
+    <div
+      className="flex h-full w-editor-panel-width shrink-0 flex-col gap-3 rounded-xl border border-border-subtle bg-surface-elevated p-4"
+      style={open ? undefined : { display: 'none' }}
+    >
+      <div className="flex items-center justify-between">
+        <span className="font-headline-md text-sm font-semibold">Draft with AI</span>
+        <div className="flex gap-2">
+          <button className={BTN_GHOST_SM} onClick={newChat} disabled={running}>
+            New chat
+          </button>
+          <button
+            className={BTN_GHOST_SM}
+            onClick={() => void send(window.somni.proposeNow)}
+            disabled={sending || running}
+          >
+            Propose Now
+          </button>
+        </div>
       </div>
-      {running ? <p className="dim">Chat is disabled while this workflow is running.</p> : null}
-      <div className="chat-messages" ref={listRef}>
-        {messages.length === 0 && !streaming && <p className="dim">{EMPTY}</p>}
+      {running ? (
+        <p className="text-sm text-on-surface-variant">
+          Chat is disabled while this workflow is running.
+        </p>
+      ) : null}
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto" ref={listRef}>
+        {messages.length === 0 && !streaming && (
+          <p className="text-sm text-on-surface-variant">{EMPTY}</p>
+        )}
+        {/* No width caps in the 340px panel (§7) — otherwise identical to the
+            full-page Draft chat, which is what makes them read as one component. */}
         {messages.map((m, i) => (
-          <div className={`chat-msg ${m.role}`} key={i}>
-            {m.text}
+          <div className={m.role === 'user' ? 'flex w-full justify-end' : 'flex w-full'} key={i}>
+            <div className={m.role === 'user' ? BUBBLE_USER : BUBBLE_AI}>{m.text}</div>
           </div>
         ))}
-        {streaming !== null && <div className="chat-msg assistant">{streaming + '▌'}</div>}
+        {streaming !== null && (
+          <div className="flex w-full">
+            <div className={BUBBLE_AI}>{streaming + '▌'}</div>
+          </div>
+        )}
         {question && !proposal && (
           <QuestionCard q={question} disabled={sending || running} onAnswer={(t) => void send(t)} />
         )}
         {error && (
-          <div className="error-banner">
-            {error}{' '}
-            <button className="ghost" onClick={() => void send(lastUser)} disabled={running}>
+          <div className={ERROR_BANNER}>
+            {error}
+            <button className={BTN_GHOST_SM} onClick={() => void send(lastUser)} disabled={running}>
               Retry
             </button>
           </div>
@@ -133,7 +151,8 @@ export function DraftChatPanel({
         />
       )}
       <textarea
-        rows={3}
+        className="w-full resize-none rounded-lg border border-border-subtle bg-surface-container p-2.5 text-sm text-on-surface focus:border-primary focus:outline-none"
+        rows={2}
         placeholder="Describe the workflow…"
         value={input}
         disabled={sending || running}
@@ -148,6 +167,7 @@ export function DraftChatPanel({
         }}
       />
       <button
+        className={`self-end ${BTN_PRIMARY}`}
         disabled={sending || running || !input.trim()}
         onClick={() => {
           const text = input

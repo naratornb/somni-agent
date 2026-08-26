@@ -1,15 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { RunRow } from '../../preload/index'
-
-const CHIP: Record<string, string> = {
-  Queued: 'bg-status-queued/10 text-on-surface-variant border-status-queued/40',
-  Running: 'bg-status-running/10 text-primary border-status-running/40',
-  Completed: 'bg-status-completed/10 text-status-completed border-status-completed/20',
-  Failed: 'bg-status-failed/10 text-status-failed border-status-failed/20',
-  Skipped: 'bg-status-skipped/10 text-status-skipped border-status-skipped/20',
-  Cancelled: 'bg-status-cancelled/10 text-status-cancelled border-status-cancelled/20'
-}
-const CHIP_BASE = 'rounded-full border px-2.5 py-0.5 text-xs font-medium'
+import { statusChip } from './ui'
 
 const when = (iso?: string): string => (iso ? new Date(iso).toLocaleString() : '—')
 const secs = (ms?: number): string => (ms == null ? '—' : `${Math.round(ms / 1000)}s`)
@@ -68,7 +59,7 @@ export function RunsView({ repo }: { repo: string }): React.JSX.Element {
               </span>
             </div>
             <div className="flex items-center gap-4">
-              <span className={`${CHIP_BASE} ${CHIP[r.status]}`}>{r.status}</span>
+              <span className={statusChip(r.status)}>{r.status}</span>
               <span className="font-mono-code text-xs text-on-surface-variant">
                 {when(r.startedAt)} → {when(r.finishedAt)}
               </span>
@@ -104,7 +95,7 @@ export function RunsView({ repo }: { repo: string }): React.JSX.Element {
                       <tr key={i}>
                         <td className="px-3 py-2">{t.title}</td>
                         <td className="px-3 py-2">
-                          <span className={`${CHIP_BASE} ${CHIP[t.status]}`}>{t.status}</span>
+                          <span className={statusChip(t.status)}>{t.status}</span>
                         </td>
                         <td className="px-3 py-2 font-mono-code text-xs">{secs(t.durationMs)}</td>
                         <td className="px-3 py-2 font-mono-code text-xs">{usd(t.costUsd)}</td>
@@ -121,7 +112,7 @@ export function RunsView({ repo }: { repo: string }): React.JSX.Element {
                   </span>
                   Report
                 </h3>
-                <pre className="custom-scrollbar max-h-96 overflow-auto rounded border border-border-subtle bg-surface p-4 font-mono-code text-mono-code whitespace-pre-wrap text-on-surface-variant">
+                <pre className="max-h-96 overflow-auto rounded border border-border-subtle bg-surface p-4 font-mono-code text-mono-code whitespace-pre-wrap text-on-surface-variant">
                   {report ?? '(no report)'}
                 </pre>
               </div>

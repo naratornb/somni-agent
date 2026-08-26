@@ -174,7 +174,7 @@ function App(): React.JSX.Element {
             )}
           </div>
         </header>
-        <div className="custom-scrollbar flex min-h-0 flex-1 flex-col gap-stack-gap overflow-y-auto p-gutter">
+        <div className="flex min-h-0 flex-1 flex-col gap-stack-gap overflow-y-auto p-gutter">
           {orphans.map((r) => (
             <div
               className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface-elevated p-card-padding"

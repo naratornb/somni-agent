@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { BTN_PRIMARY, TEXTAREA } from './ui'
 
 type TaskEvent =
   | { kind: 'session'; sessionId: string }
@@ -48,15 +49,30 @@ export function Playground(): React.JSX.Element {
   }
 
   return (
-    <div className="stack">
-      <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} />
-      <button onClick={run} disabled={running || !prompt.trim()}>
+    <div className="flex h-full min-h-0 flex-col gap-stack-gap">
+      <textarea
+        className={`${TEXTAREA} rounded-lg`}
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        rows={3}
+      />
+      <button
+        className={`self-start ${BTN_PRIMARY}`}
+        onClick={run}
+        disabled={running || !prompt.trim()}
+      >
         {running ? 'Running…' : 'Run'}
       </button>
-      <pre className="output" ref={paneRef}>
+      {/* True black for live logs — DESIGN.md's terminal-emulation cue. */}
+      <pre
+        className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-border-subtle bg-black p-4 font-mono-code text-mono-code whitespace-pre-wrap text-on-surface-variant"
+        ref={paneRef}
+      >
         {lines.join('\n')}
       </pre>
-      {footer && <div className="footer">{footer}</div>}
+      {footer && (
+        <div className="font-mono-code text-mono-code text-on-surface-variant">{footer}</div>
+      )}
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { DrainState, RunState, Workflow } from '../../preload/index'
+import { STATUS_CHIP, statusChip as chipClass } from './ui'
 
 export type LogLine = { taskIndex: number; text: string }
 
@@ -24,20 +25,6 @@ const MODE_LABEL: Record<string, string> = {
 
 const clock = (iso: string): string =>
   new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-
-// Semantic status scale (DESIGN.md): text in the status hue, 10% fill of the
-// same hue, 20% border. Tailwind needs the full class name in the source, so
-// these are spelled out rather than built from a token string.
-const CHIP: Record<string, string> = {
-  Queued: 'bg-status-queued/10 text-on-surface-variant border-status-queued/40',
-  Running: 'bg-status-running/10 text-primary border-status-running/40',
-  Completed: 'bg-status-completed/10 text-status-completed border-status-completed/20',
-  Failed: 'bg-status-failed/10 text-status-failed border-status-failed/20',
-  Skipped: 'bg-status-skipped/10 text-status-skipped border-status-skipped/20',
-  Cancelled: 'bg-status-cancelled/10 text-status-cancelled border-status-cancelled/20'
-}
-const CHIP_BASE =
-  'inline-block rounded-full border px-2.5 py-0.5 font-mono-label text-mono-label uppercase'
 
 const DONE: string[] = ['Completed', 'Failed', 'Skipped', 'Cancelled']
 
@@ -89,14 +76,14 @@ export function PipelineView({
 
   const statusChip =
     drain?.status === 'Paused' ? (
-      <span className={`${CHIP_BASE} ${CHIP.Cancelled}`} title="Rate limit reached">
+      <span className={chipClass('Cancelled')} title="Rate limit reached">
         ⏸ Paused
         {drain.resumeAt && ` — resumes ${clock(drain.resumeAt)}`}
       </span>
     ) : drain?.status === 'Running' && drain.mode ? (
-      <span className={`${CHIP_BASE} ${CHIP.Running}`}>{MODE_LABEL[drain.mode]}</span>
+      <span className={chipClass('Running')}>{MODE_LABEL[drain.mode]}</span>
     ) : drain?.mode === 'keep' ? (
-      <span className={`${CHIP_BASE} ${CHIP.Queued}`}>Draining — waiting for work</span>
+      <span className={chipClass('Queued')}>Draining — waiting for work</span>
     ) : null
 
   if (cards.length === 0)
@@ -163,9 +150,7 @@ export function PipelineView({
           >
             <div className="mb-3 flex flex-wrap items-center gap-3">
               <h3 className="font-headline-md text-headline-md text-on-surface">{name}</h3>
-              <span className={`${CHIP_BASE} ${CHIP[run?.status ?? 'Queued']}`}>
-                {run?.status ?? 'Queued'}
-              </span>
+              <span className={chipClass(run?.status)}>{run?.status ?? 'Queued'}</span>
               {run && (
                 <span className="font-mono-code text-mono-code text-on-surface-variant">
                   {run.branch}
@@ -190,7 +175,7 @@ export function PipelineView({
                     key={i}
                     className={
                       'rounded-full border px-2 py-1 font-mono-code text-xs transition-colors disabled:cursor-default ' +
-                      CHIP[tr?.status ?? 'Queued'] +
+                      (STATUS_CHIP[tr?.status ?? 'Queued'] ?? STATUS_CHIP.Queued) +
                       focused
                     }
                     disabled={!run}
@@ -213,7 +198,7 @@ export function PipelineView({
       )}
       {focus && (
         <pre
-          className="custom-scrollbar min-h-40 flex-1 overflow-auto rounded-lg border border-border-subtle bg-black p-3 font-mono-code text-mono-code whitespace-pre-wrap text-on-surface-variant"
+          className="min-h-40 flex-1 overflow-auto rounded-lg border border-border-subtle bg-black p-3 font-mono-code text-mono-code whitespace-pre-wrap text-on-surface-variant"
           ref={paneRef}
         >
           {focusLog.map((l) => l.text).join('\n') || '(no output yet)'}
