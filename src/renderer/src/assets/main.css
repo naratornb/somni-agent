@@ -1,384 +1,480 @@
-* {
-  box-sizing: border-box;
-  margin: 0;
+@import 'tailwindcss';
+
+/* Design system: design/stitch_somni_ai_orchestrator/somni_nocturnal_mission_control/DESIGN.md
+   Token names mirror the mocks' inline tailwind.config so mock markup ports verbatim.
+   Dark-only — these are the only values, there are no `dark:` variants. */
+@theme {
+  --color-surface: #131315;
+  --color-surface-dim: #131315;
+  --color-surface-bright: #39393b;
+  --color-surface-container-lowest: #0e0e10;
+  --color-surface-container-low: #1b1b1d;
+  --color-surface-container: #201f21;
+  --color-surface-container-high: #2a2a2c;
+  --color-surface-container-highest: #353437;
+  --color-on-surface: #e5e1e4;
+  --color-on-surface-variant: #c9c4d6;
+  --color-inverse-surface: #e5e1e4;
+  --color-inverse-on-surface: #313032;
+  --color-outline: #928e9f;
+  --color-outline-variant: #474554;
+  --color-surface-tint: #c8bfff;
+  --color-primary: #c8bfff;
+  --color-on-primary: #2c009e;
+  --color-primary-container: #6d5ae0;
+  --color-on-primary-container: #f7f2ff;
+  --color-inverse-primary: #5c47ce;
+  --color-secondary: #c8c5cb;
+  --color-on-secondary: #303034;
+  --color-secondary-container: #47464b;
+  --color-on-secondary-container: #b6b4b9;
+  --color-tertiary: #ffb875;
+  --color-on-tertiary: #4b2800;
+  --color-tertiary-container: #a55e00;
+  --color-on-tertiary-container: #fff2e9;
+  --color-error: #ffb4ab;
+  --color-on-error: #690005;
+  --color-error-container: #93000a;
+  --color-on-error-container: #ffdad6;
+  --color-primary-fixed: #e5deff;
+  --color-primary-fixed-dim: #c8bfff;
+  --color-on-primary-fixed: #190064;
+  --color-on-primary-fixed-variant: #432bb5;
+  --color-secondary-fixed: #e4e1e7;
+  --color-secondary-fixed-dim: #c8c5cb;
+  --color-on-secondary-fixed: #1b1b1f;
+  --color-on-secondary-fixed-variant: #47464b;
+  --color-tertiary-fixed: #ffdcc0;
+  --color-tertiary-fixed-dim: #ffb875;
+  --color-on-tertiary-fixed: #2d1600;
+  --color-on-tertiary-fixed-variant: #6b3b00;
+  --color-background: #131315;
+  --color-on-background: #e5e1e4;
+  --color-surface-variant: #353437;
+  --color-border-subtle: #252529;
+  --color-surface-elevated: #161618;
+  --color-status-queued: #3f3f46;
+  --color-status-running: #6d5ae0;
+  --color-status-completed: #10b981;
+  --color-status-failed: #ef4444;
+  --color-status-skipped: #71717a;
+  --color-status-cancelled: #f59e0b;
+
+  --font-headline-lg: Inter, system-ui, sans-serif;
+  --font-headline-md: Inter, system-ui, sans-serif;
+  --font-body-md: Inter, system-ui, sans-serif;
+  --font-body-sm: Inter, system-ui, sans-serif;
+  --font-mono-label: 'JetBrains Mono', ui-monospace, monospace;
+  --font-mono-code: 'JetBrains Mono', ui-monospace, monospace;
+
+  --text-headline-lg: 24px;
+  --text-headline-lg--line-height: 32px;
+  --text-headline-lg--letter-spacing: -0.02em;
+  --text-headline-lg--font-weight: 600;
+  --text-headline-md: 18px;
+  --text-headline-md--line-height: 24px;
+  --text-headline-md--letter-spacing: -0.01em;
+  --text-headline-md--font-weight: 600;
+  --text-body-md: 14px;
+  --text-body-md--line-height: 20px;
+  --text-body-md--font-weight: 400;
+  --text-body-sm: 12px;
+  --text-body-sm--line-height: 16px;
+  --text-body-sm--font-weight: 400;
+  --text-mono-label: 11px;
+  --text-mono-label--line-height: 14px;
+  --text-mono-label--letter-spacing: 0.05em;
+  --text-mono-label--font-weight: 500;
+  --text-mono-code: 13px;
+  --text-mono-code--line-height: 18px;
+  --text-mono-code--font-weight: 400;
+
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+
+  --spacing-sidebar-width: 240px;
+  --spacing-editor-panel-width: 340px;
+  --spacing-gutter: 1rem;
+  --spacing-margin-page: 2rem;
+  --spacing-stack-gap: 0.75rem;
+  --spacing-card-padding: 1rem;
 }
 
-body {
-  font-family: -apple-system, system-ui, sans-serif;
-  background: #1b1b1f;
-  color: #e4e4e7;
-  font-size: 13px;
+/* Bundled locally — the packaged app never fetches a CDN (M10 decision). */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: url('./fonts/Inter.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: block;
+  src: url('./fonts/JetBrainsMono.woff2') format('woff2');
+}
+/* ponytail: subset to the icons the app uses today (fonts.googleapis.com
+   css2 `icon_names=`, 20KB vs 4MB). Adding a new glyph means re-fetching the
+   subset — swap in the full variable font if that ever gets annoying. */
+@font-face {
+  font-family: 'Material Symbols Outlined';
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: block;
+  src: url('./fonts/MaterialSymbolsOutlined.woff2') format('woff2');
 }
 
-.layout {
-  display: flex;
-  height: 100vh;
+@layer base {
+  body {
+    background: var(--color-background);
+    color: var(--color-on-surface);
+    font-family: var(--font-body-md);
+    font-size: var(--text-body-md);
+    line-height: var(--text-body-md--line-height);
+  }
+
+  .material-symbols-outlined {
+    font-family: 'Material Symbols Outlined';
+    font-weight: normal;
+    font-style: normal;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    display: inline-block;
+    white-space: nowrap;
+    word-wrap: normal;
+    direction: ltr;
+    font-variation-settings:
+      'FILL' 0,
+      'wght' 400,
+      'GRAD' 0,
+      'opsz' 24;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar,
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--color-surface-variant);
+    border-radius: 4px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--color-outline-variant);
+  }
 }
 
-.sidebar {
-  width: 150px;
-  padding: 16px 10px;
-  background: #141417;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
+/* ---------------------------------------------------------------------------
+   Legacy hand-written styles — still the only styling for the surfaces the
+   designer is speccing (Roles, Settings, Playground, chat panel/shared).
+   Kept in the `components` layer so Tailwind utilities always win over them.
+   M10 step 6 deletes what's left once those views are ported.
+   ------------------------------------------------------------------------ */
+@layer components {
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex: 1;
+    min-height: 0;
+  }
 
-.sidebar h1 {
-  font-size: 15px;
-  font-weight: 700;
-  padding: 0 8px 12px;
-  color: #9f97e8;
-}
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
 
-.nav {
-  text-align: left;
-  background: none;
-  border: none;
-  color: #a1a1aa;
-  padding: 6px 8px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-}
+  .row input {
+    flex: 1;
+  }
 
-.nav.active {
-  background: #26262b;
-  color: #e4e4e7;
-}
+  textarea,
+  input,
+  select {
+    font:
+      13px/1.4 ui-monospace,
+      monospace;
+    background: #26262b;
+    color: inherit;
+    border: 1px solid #3a3a40;
+    border-radius: 6px;
+    padding: 7px 8px;
+  }
 
-.content {
-  flex: 1;
-  padding: 16px;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
+  textarea {
+    width: 100%;
+    resize: vertical;
+  }
 
-.repo-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #2a2a30;
-}
+  button {
+    align-self: flex-start;
+    padding: 6px 16px;
+    font-size: 13px;
+    border: none;
+    border-radius: 6px;
+    background: #6d5ae0;
+    color: white;
+    cursor: pointer;
+  }
 
-.stack {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  flex: 1;
-  min-height: 0;
-}
+  button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
 
-.row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
+  button.ghost {
+    background: #26262b;
+    color: #c9c9cf;
+  }
 
-.row input {
-  flex: 1;
-}
+  button.danger {
+    background: #3d2222;
+    color: #f0a3a3;
+  }
 
-textarea,
-input,
-select {
-  font:
-    13px/1.4 ui-monospace,
-    monospace;
-  background: #26262b;
-  color: inherit;
-  border: 1px solid #3a3a40;
-  border-radius: 6px;
-  padding: 7px 8px;
-}
+  .list {
+    list-style: none;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
 
-textarea {
-  width: 100%;
-  resize: vertical;
-}
+  .list li {
+    padding: 10px 12px;
+    background: #222227;
+    border: 1px solid #2f2f36;
+    border-radius: 8px;
+    cursor: pointer;
+  }
 
-button {
-  align-self: flex-start;
-  padding: 6px 16px;
-  font-size: 13px;
-  border: none;
-  border-radius: 6px;
-  background: #6d5ae0;
-  color: white;
-  cursor: pointer;
-}
+  .list li:hover {
+    border-color: #4a4a55;
+  }
 
-button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
+  .footer {
+    font:
+      12px ui-monospace,
+      monospace;
+    color: #9f97e8;
+  }
 
-button.ghost {
-  background: #26262b;
-  color: #c9c9cf;
-}
+  .brief-box {
+    border: 1px solid #2f2f36;
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: #202024;
+  }
 
-button.danger {
-  background: #3d2222;
-  color: #f0a3a3;
-}
+  .brief-box summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: #c9c9cf;
+  }
 
-.list {
-  list-style: none;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
+  .brief-box[open] summary {
+    margin-bottom: 6px;
+  }
 
-.list li {
-  padding: 10px 12px;
-  background: #222227;
-  border: 1px solid #2f2f36;
-  border-radius: 8px;
-  cursor: pointer;
-}
+  .task-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px;
+    background: #202024;
+    border: 1px solid #2f2f36;
+    border-radius: 8px;
+  }
 
-.list li:hover {
-  border-color: #4a4a55;
-}
+  .dim {
+    color: #8a8a93;
+  }
 
-.task-card {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px;
-  background: #202024;
-  border: 1px solid #2f2f36;
-  border-radius: 8px;
-}
+  .chip {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    background: #2c2c33;
+    color: #a1a1aa;
+  }
 
-.dim {
-  color: #8a8a93;
-}
+  .chip.running {
+    background: #2a3550;
+    color: #8fb4f7;
+  }
 
-.list li.plain {
-  cursor: default;
-}
+  .chip.ok {
+    background: #1f3a29;
+    color: #7fd8a2;
+  }
 
-.list li .run-btn {
-  float: right;
-  padding: 3px 12px;
-  font-size: 12px;
-}
+  .chip.fail {
+    background: #3d2222;
+    color: #f0a3a3;
+  }
 
-.chip {
-  display: inline-block;
-  padding: 1px 8px;
-  border-radius: 10px;
-  font-size: 11px;
-  background: #2c2c33;
-  color: #a1a1aa;
-}
+  .chip.skip {
+    background: #33301f;
+    color: #d8c97f;
+  }
 
-.chip.running {
-  background: #2a3550;
-  color: #8fb4f7;
-}
+  .row.wrap {
+    flex-wrap: wrap;
+  }
 
-.chip.ok {
-  background: #1f3a29;
-  color: #7fd8a2;
-}
+  progress {
+    flex: 1;
+    accent-color: #6d5ae0;
+  }
 
-.chip.fail {
-  background: #3d2222;
-  color: #f0a3a3;
-}
+  button.chip {
+    align-self: auto;
+    border: 1px solid transparent;
+    cursor: pointer;
+  }
 
-.chip.skip {
-  background: #33301f;
-  color: #d8c97f;
-}
+  button.chip:disabled {
+    cursor: default;
+    opacity: 1;
+  }
 
-.row.wrap {
-  flex-wrap: wrap;
-}
+  button.chip.focused {
+    border-color: #9f97e8;
+  }
 
-progress {
-  flex: 1;
-  accent-color: #6d5ae0;
-}
+  .output {
+    flex: 1;
+    overflow: auto;
+    white-space: pre-wrap;
+    font:
+      12px/1.5 ui-monospace,
+      monospace;
+    background: #000;
+    border: 1px solid #252529;
+    border-radius: 8px;
+    padding: 10px;
+  }
 
-button.chip {
-  align-self: auto;
-  border: 1px solid transparent;
-  cursor: pointer;
-}
+  .error-banner {
+    padding: 8px 10px;
+    background: #3d2222;
+    color: #f0a3a3;
+    border-radius: 6px;
+    font:
+      12px/1.5 ui-monospace,
+      monospace;
+  }
 
-button.chip:disabled {
-  cursor: default;
-  opacity: 1;
-}
+  .field-label {
+    width: 160px;
+    color: #a1a1aa;
+  }
 
-button.chip.focused {
-  border-color: #9f97e8;
-}
+  .split {
+    display: flex;
+    gap: 12px;
+    flex: 1;
+    min-height: 0;
+  }
 
-.output {
-  flex: 1;
-  overflow: auto;
-  white-space: pre-wrap;
-  font:
-    12px/1.5 ui-monospace,
-    monospace;
-  background: #111114;
-  border: 1px solid #3a3a40;
-  border-radius: 6px;
-  padding: 10px;
-}
+  .split > .stack {
+    flex: 1;
+    min-width: 0;
+  }
 
-.error-banner {
-  padding: 8px 10px;
-  background: #3d2222;
-  color: #f0a3a3;
-  border-radius: 6px;
-  font:
-    12px/1.5 ui-monospace,
-    monospace;
-}
+  .chat-panel {
+    width: 340px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    border-left: 1px solid #2a2a30;
+    padding-left: 12px;
+  }
 
-.footer {
-  font:
-    12px ui-monospace,
-    monospace;
-  color: #9f97e8;
-}
+  .chat-messages {
+    flex: 1;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+  }
 
-.field-label {
-  width: 160px;
-  color: #a1a1aa;
-}
+  .chat-msg {
+    max-width: 90%;
+    padding: 8px 10px;
+    border-radius: 8px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+  }
 
-.runs-table {
-  border-collapse: collapse;
-  font-size: 12px;
-  width: 100%;
-}
+  .chat-msg.user {
+    align-self: flex-end;
+    background: #332b5c;
+    color: #e4e4e7;
+  }
 
-.runs-table th,
-.runs-table td {
-  text-align: left;
-  padding: 4px 8px;
-  border-bottom: 1px solid #2f2f36;
-}
+  .chat-msg.assistant {
+    align-self: flex-start;
+    background: #202024;
+    border: 1px solid #2f2f36;
+  }
 
-.split {
-  display: flex;
-  gap: 12px;
-  flex: 1;
-  min-height: 0;
-}
+  .task-card.proposed {
+    border-color: #6d5ae0;
+  }
 
-.split > .stack {
-  flex: 1;
-  min-width: 0;
-}
+  .proposal-pane {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 40vh;
+    overflow: auto;
+    flex-shrink: 0;
+  }
 
-.chat-panel {
-  width: 340px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-height: 0;
-  border-left: 1px solid #2a2a30;
-  padding-left: 12px;
-}
+  .question-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    align-self: flex-start;
+    max-width: 90%;
+    background: #202024;
+    border: 1px solid #2f2f36;
+    border-radius: 8px;
+  }
 
-.chat-messages {
-  flex: 1;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-height: 0;
-}
+  .chip.recommended {
+    border: 1px solid #6d5ae0;
+    background: #2c2650;
+    color: #cfc9f7;
+  }
 
-.chat-msg {
-  max-width: 90%;
-  padding: 8px 10px;
-  border-radius: 8px;
-  line-height: 1.4;
-  white-space: pre-wrap;
-}
+  .brief-text {
+    white-space: pre-wrap;
+    line-height: 1.5;
+  }
 
-.chat-msg.user {
-  align-self: flex-end;
-  background: #332b5c;
-  color: #e4e4e7;
-}
-
-.chat-msg.assistant {
-  align-self: flex-start;
-  background: #202024;
-  border: 1px solid #2f2f36;
-}
-
-.task-card.proposed {
-  border-color: #6d5ae0;
-}
-
-.proposal-pane {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 40vh;
-  overflow: auto;
-  flex-shrink: 0;
-}
-
-/* M8 — interview question cards, Brief disclosure, Draft empty state */
-.question-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
-  align-self: flex-start;
-  max-width: 90%;
-  background: #202024;
-  border: 1px solid #2f2f36;
-  border-radius: 8px;
-}
-.chip.recommended {
-  border: 1px solid #6d5ae0;
-  background: #2c2650;
-  color: #cfc9f7;
-}
-.brief-box {
-  border: 1px solid #2f2f36;
-  border-radius: 8px;
-  padding: 8px 10px;
-  background: #202024;
-}
-.brief-box summary {
-  cursor: pointer;
-  font-weight: 600;
-  color: #c9c9cf;
-}
-.brief-box[open] summary {
-  margin-bottom: 6px;
-}
-.brief-text {
-  white-space: pre-wrap;
-  line-height: 1.5;
-}
-.draft-empty {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  color: #8a8a93;
-  max-width: 440px;
-  margin: 0 auto;
-  line-height: 1.6;
+  .draft-empty {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: #8a8a93;
+    max-width: 440px;
+    margin: 0 auto;
+    line-height: 1.6;
+  }
 }

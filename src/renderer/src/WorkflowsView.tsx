@@ -17,6 +17,16 @@ type Props = {
 
 const emptyTask = (role: string): Task => ({ title: '', prompt: '', role, selected: true })
 
+// Repeated mock class strings, named once (workflows_editor/code.html).
+const INPUT =
+  'rounded border border-border-subtle bg-surface-container px-3 py-1.5 font-mono-code text-sm text-on-surface focus:border-primary focus:outline-none'
+const INPUT_UNDERLINE =
+  'w-full border-b border-border-subtle bg-transparent pb-2 font-headline-lg text-headline-lg font-semibold text-on-surface transition-colors focus:border-primary focus:outline-none'
+const BTN_GHOST =
+  'rounded border border-border-subtle bg-surface-container px-3 py-1.5 text-sm text-on-surface transition-colors hover:bg-surface-bright disabled:opacity-50'
+const ICON_BTN =
+  'rounded p-1.5 text-on-surface-variant transition-colors hover:bg-surface-container hover:text-on-surface disabled:opacity-40'
+
 export function WorkflowsView({
   repo,
   workflows,
@@ -106,93 +116,151 @@ export function WorkflowsView({
   if (editing) {
     return (
       <div className="split">
-        <div className="stack">
-          <input
-            placeholder="Workflow name (e.g. Add image upload feature)"
-            value={editing.name}
-            onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-          />
-          {/* Read-only, collapsed by default — no in-app Brief editing (Decision 8). */}
-          {editing.brief && (
-            <details className="brief-box">
-              <summary>Brief</summary>
-              <p className="dim brief-text">{editing.brief}</p>
-            </details>
-          )}
-          {editing.tasks.map((t, i) => (
-            <div className="task-card" key={i}>
-              <div className="row">
-                <span className="dim">{i + 1}.</span>
-                <input
-                  placeholder="Task title (e.g. Design the feature)"
-                  value={t.title}
-                  onChange={(e) => patchTask(i, { title: e.target.value })}
-                />
-                <select value={t.role} onChange={(e) => patchTask(i, { role: e.target.value })}>
-                  <option value="">(no role)</option>
-                  {roles.map((r) => (
-                    <option key={r.slug} value={r.slug}>
-                      {r.name}
-                    </option>
-                  ))}
-                </select>
-                <button className="ghost" onClick={() => moveTask(i, -1)} title="Move up">
-                  ↑
-                </button>
-                <button className="ghost" onClick={() => moveTask(i, 1)} title="Move down">
-                  ↓
-                </button>
-                <button
-                  className="ghost danger"
-                  onClick={() =>
-                    setEditing({ ...editing, tasks: editing.tasks.filter((_, j) => j !== i) })
-                  }
-                >
-                  ✕
-                </button>
-              </div>
-              <textarea
-                placeholder="Task prompt…"
-                rows={3}
-                value={t.prompt}
-                onChange={(e) => patchTask(i, { prompt: e.target.value })}
+        <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
+          <div className="relative mx-auto max-w-4xl rounded-xl border border-border-subtle bg-surface-elevated p-6">
+            <div className="mb-6">
+              <input
+                className={INPUT_UNDERLINE}
+                placeholder="Workflow name (e.g. Add image upload feature)"
+                value={editing.name}
+                onChange={(e) => setEditing({ ...editing, name: e.target.value })}
               />
             </div>
-          ))}
-          <button
-            className="ghost"
-            onClick={() =>
-              setEditing({ ...editing, tasks: [...editing.tasks, emptyTask(roles[0]?.slug ?? '')] })
-            }
-          >
-            + Add task
-          </button>
-          <div className="row">
-            <button onClick={save} disabled={!editing.name.trim()}>
-              Save
-            </button>
-            <button className="ghost" onClick={() => setEditing(null)}>
-              Cancel
-            </button>
-            {editing.slug && (
-              <button className="danger" onClick={() => remove(editing.slug)}>
-                Delete
-              </button>
+            {/* Read-only, collapsed by default — no in-app Brief editing (Decision 8). */}
+            {editing.brief && (
+              <details className="mb-6 overflow-hidden rounded-lg border border-border-subtle bg-surface">
+                <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-on-surface-variant transition-colors hover:bg-surface-container hover:text-on-surface">
+                  Brief
+                </summary>
+                <p className="border-t border-border-subtle p-4 text-sm leading-relaxed whitespace-pre-wrap text-on-surface-variant">
+                  {editing.brief}
+                </p>
+              </details>
             )}
-            <button
-              className="ghost"
-              disabled={!editing.slug || chatRunning}
-              title={
-                !editing.slug
-                  ? 'Save the workflow first'
-                  : chatRunning
-                    ? 'Workflow is running'
-                    : undefined
-              }
-              onClick={() => setChatOpen((o) => !o)}
-            >
-              Draft with AI
-            </button>
+            <div className="space-y-4">
+              {editing.tasks.map((t, i) => (
+                <div
+                  className="rounded-lg border border-border-subtle bg-surface p-card-padding"
+                  key={i}
+                >
+                  <div className="flex items-start gap-4">
+                    <span className="mt-2 font-mono-code text-mono-code text-on-surface-variant">
+                      {i + 1}.
+                    </span>
+                    <div className="flex-1 space-y-3">
+                      <div className="flex items-center gap-2">
+                        <input
+                          className={`flex-1 ${INPUT}`}
+                          placeholder="Task title (e.g. Design the feature)"
+                          value={t.title}
+                          onChange={(e) => patchTask(i, { title: e.target.value })}
+                        />
+                        <select
+                          className={INPUT}
+                          value={t.role}
+                          onChange={(e) => patchTask(i, { role: e.target.value })}
+                        >
+                          <option value="">(no role)</option>
+                          {roles.map((r) => (
+                            <option key={r.slug} value={r.slug}>
+                              {r.name}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="flex gap-1">
+                          <button
+                            className={ICON_BTN}
+                            onClick={() => moveTask(i, -1)}
+                            title="Move up"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">
+                              arrow_upward
+                            </span>
+                          </button>
+                          <button
+                            className={ICON_BTN}
+                            onClick={() => moveTask(i, 1)}
+                            title="Move down"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">
+                              arrow_downward
+                            </span>
+                          </button>
+                          <button
+                            className="ml-2 rounded p-1.5 text-error transition-colors hover:bg-error-container hover:text-on-error"
+                            title="Remove task"
+                            onClick={() =>
+                              setEditing({
+                                ...editing,
+                                tasks: editing.tasks.filter((_, j) => j !== i)
+                              })
+                            }
+                          >
+                            <span className="material-symbols-outlined text-[18px]">close</span>
+                          </button>
+                        </div>
+                      </div>
+                      <textarea
+                        className={`h-24 w-full resize-y ${INPUT}`}
+                        placeholder="Task prompt…"
+                        value={t.prompt}
+                        onChange={(e) => patchTask(i, { prompt: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4">
+              <button
+                className={`flex items-center gap-1 ${BTN_GHOST}`}
+                onClick={() =>
+                  setEditing({
+                    ...editing,
+                    tasks: [...editing.tasks, emptyTask(roles[0]?.slug ?? '')]
+                  })
+                }
+              >
+                <span className="material-symbols-outlined text-[16px]">add</span> Add task
+              </button>
+            </div>
+            <div className="mt-8 flex items-center justify-between border-t border-border-subtle pt-6">
+              <div className="flex items-center gap-3">
+                <button
+                  className="rounded bg-primary-container px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-inverse-primary disabled:opacity-50"
+                  onClick={save}
+                  disabled={!editing.name.trim()}
+                >
+                  Save
+                </button>
+                <button className={BTN_GHOST} onClick={() => setEditing(null)}>
+                  Cancel
+                </button>
+                {editing.slug && (
+                  <button
+                    className="rounded px-5 py-2 text-sm text-error transition-colors hover:bg-error-container hover:text-on-error"
+                    onClick={() => remove(editing.slug)}
+                  >
+                    Delete
+                  </button>
+                )}
+              </div>
+              <button
+                className={`flex items-center gap-2 ${BTN_GHOST}`}
+                disabled={!editing.slug || chatRunning}
+                title={
+                  !editing.slug
+                    ? 'Save the workflow first'
+                    : chatRunning
+                      ? 'Workflow is running'
+                      : undefined
+                }
+                onClick={() => setChatOpen((o) => !o)}
+              >
+                <span className="material-symbols-outlined text-[18px]">auto_awesome</span> Draft
+                with AI
+              </button>
+            </div>
           </div>
         </div>
         {editing.slug && (
@@ -210,92 +278,133 @@ export function WorkflowsView({
   }
 
   return (
-    <div className="stack">
-      <button onClick={() => setEditing({ slug: '', name: '', selected: false, tasks: [] })}>
-        New workflow
-      </button>
-      <ul className="list">
+    <div className="mx-auto w-full max-w-4xl space-y-12">
+      <div>
+        <button
+          className="rounded-full bg-primary-container px-4 py-2 text-sm font-medium text-white shadow-[0_0_12px_rgba(109,90,224,0.3)] transition-colors hover:bg-inverse-primary"
+          onClick={() => setEditing({ slug: '', name: '', selected: false, tasks: [] })}
+        >
+          New workflow
+        </button>
+      </div>
+      <section className="space-y-2">
         {queueWorkflows.map((w) => (
-          <li key={w.slug} onClick={() => setEditing(w)}>
-            <input
-              type="checkbox"
-              title="Include in pipeline"
-              checked={w.selected}
-              onClick={(e) => e.stopPropagation()}
-              onChange={() =>
-                void window.somni
-                  .saveWorkflow(repo, { ...w, selected: !w.selected })
-                  .then(() => refresh())
-              }
-            />{' '}
-            <b>{w.name}</b>
-            <span className="dim">
-              {' '}
-              · {w.tasks.length} task{w.tasks.length === 1 ? '' : 's'}
-            </span>
-            <button
-              className="run-btn"
-              disabled={runningSlugs.includes(w.slug) || w.tasks.length === 0}
-              onClick={(e) => {
-                e.stopPropagation()
-                onRun(w.slug)
-              }}
-            >
-              ▶ Run
-            </button>
-            <button
-              className="ghost"
-              disabled={runningSlugs.includes(w.slug)}
-              title="Park in the Backlog"
-              onClick={(e) => {
-                e.stopPropagation()
-                park(w.slug)
-              }}
-            >
-              To backlog
-            </button>
-          </li>
-        ))}
-      </ul>
-      {backlogWorkflows.length > 0 && (
-        <>
-          <div className="row">
-            <b>Backlog</b>
-            <span className="dim">— parked, promote to queue when ready</span>
-          </div>
-          <ul className="list">
-            {backlogWorkflows.map((w, i) => (
-              <li key={w.slug} className="plain" onClick={() => setEditing(w)}>
-                <span className="dim">{i + 1}.</span> <b>{w.name}</b>
-                <span className="dim">
-                  {' '}
+          <div
+            key={w.slug}
+            className="cursor-pointer rounded-lg border border-border-subtle bg-surface-elevated p-card-padding transition-colors hover:border-outline-variant"
+            onClick={() => setEditing(w)}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 cursor-pointer rounded border-outline accent-[#6d5ae0]"
+                  title="Include in pipeline"
+                  checked={w.selected}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={() =>
+                    void window.somni
+                      .saveWorkflow(repo, { ...w, selected: !w.selected })
+                      .then(() => refresh())
+                  }
+                />
+                <span className="font-semibold text-on-surface">{w.name}</span>
+                <span className="text-sm text-on-surface-variant">
                   · {w.tasks.length} task{w.tasks.length === 1 ? '' : 's'}
                 </span>
-                <div className="row" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    className="ghost"
-                    disabled={i === 0}
-                    onClick={() => reorder(i, -1)}
-                    title="Move up"
+                <button
+                  className={`ml-4 text-xs ${BTN_GHOST}`}
+                  disabled={runningSlugs.includes(w.slug)}
+                  title="Park in the Backlog"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    park(w.slug)
+                  }}
+                >
+                  To backlog
+                </button>
+              </div>
+              <button
+                className="flex items-center gap-1 rounded-full bg-primary-container px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-inverse-primary disabled:opacity-50"
+                disabled={runningSlugs.includes(w.slug) || w.tasks.length === 0}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onRun(w.slug)
+                }}
+              >
+                <span
+                  className="material-symbols-outlined text-[16px]"
+                  style={{ fontVariationSettings: "'FILL' 1" }}
+                >
+                  play_arrow
+                </span>
+                Run
+              </button>
+            </div>
+          </div>
+        ))}
+      </section>
+      {backlogWorkflows.length > 0 && (
+        <section>
+          <h2 className="mb-4 flex items-center gap-2 font-semibold text-on-surface">
+            Backlog{' '}
+            <span className="text-sm font-normal text-on-surface-variant">
+              — parked, promote to queue when ready
+            </span>
+          </h2>
+          <div className="space-y-2">
+            {backlogWorkflows.map((w, i) => (
+              <div
+                key={w.slug}
+                className="group cursor-pointer rounded-lg border border-border-subtle bg-surface p-card-padding transition-colors hover:border-outline-variant"
+                onClick={() => setEditing(w)}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="w-4 font-mono-code text-mono-code text-on-surface-variant">
+                      {i + 1}.
+                    </span>
+                    <span className="font-semibold text-on-surface">{w.name}</span>
+                    <span className="text-sm text-on-surface-variant">
+                      · {w.tasks.length} task{w.tasks.length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <div
+                    className="flex items-center gap-4 opacity-0 transition-opacity group-hover:opacity-100"
+                    onClick={(e) => e.stopPropagation()}
                   >
-                    ↑
-                  </button>
-                  <button
-                    className="ghost"
-                    disabled={i === backlogWorkflows.length - 1}
-                    onClick={() => reorder(i, 1)}
-                    title="Move down"
-                  >
-                    ↓
-                  </button>
-                  <button className="run-btn" onClick={() => promote(w.slug)}>
-                    Promote
-                  </button>
+                    <div className="flex gap-1">
+                      <button
+                        className={ICON_BTN}
+                        disabled={i === 0}
+                        onClick={() => reorder(i, -1)}
+                        title="Move up"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">arrow_upward</span>
+                      </button>
+                      <button
+                        className={ICON_BTN}
+                        disabled={i === backlogWorkflows.length - 1}
+                        onClick={() => reorder(i, 1)}
+                        title="Move down"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">
+                          arrow_downward
+                        </span>
+                      </button>
+                    </div>
+                    <button
+                      className="rounded border border-border-subtle bg-surface-container-high px-3 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-surface-bright"
+                      onClick={() => promote(w.slug)}
+                    >
+                      Promote
+                    </button>
+                  </div>
                 </div>
-              </li>
+              </div>
             ))}
-          </ul>
-        </>
+          </div>
+        </section>
       )}
     </div>
   )

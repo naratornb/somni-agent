@@ -19,6 +19,13 @@ type Props = {
 
 const EMPTY = "Describe what you want built — I'll ask a few questions, then propose a workflow."
 
+// Mock: drafting_interface/code.html. User bubbles right-aligned + ghost-bordered,
+// AI bubbles left-aligned on the lowest surface (DESIGN.md, unified chat).
+const BUBBLE_USER =
+  'max-w-[80%] rounded-xl border border-border-subtle bg-surface-elevated p-4 whitespace-pre-wrap text-on-surface'
+const BUBBLE_AI =
+  'w-full max-w-3xl rounded-xl border border-border-subtle bg-surface-container-lowest p-4 font-mono-code text-mono-code whitespace-pre-wrap text-on-surface-variant'
+
 export function DraftView({ repo, roles, onApplied }: Props): React.JSX.Element {
   const slug = window.somni.draftKey
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -107,30 +114,47 @@ export function DraftView({ repo, roles, onApplied }: Props): React.JSX.Element 
   }
 
   return (
-    // ponytail: `.stack` is already the full-height flex column the spec wants
-    // — no .draft-view class needed.
-    <div className="stack">
-      <div className="row">
-        <b>Draft</b>
-        <button className="ghost" onClick={newDraft} disabled={sending}>
+    <div className="flex min-h-0 flex-1 flex-col gap-stack-gap">
+      <div className="flex shrink-0 items-center gap-4 border-b border-border-subtle pb-4">
+        <h2 className="font-headline-md text-headline-md font-bold">Draft</h2>
+        <button
+          className="rounded-md border border-border-subtle bg-surface-container-high px-3 py-1 text-sm text-on-surface-variant transition-colors hover:bg-surface-variant disabled:opacity-50"
+          onClick={newDraft}
+          disabled={sending}
+        >
           New draft
         </button>
       </div>
-      <div className="chat-messages" ref={listRef}>
-        {messages.length === 0 && !streaming && <p className="draft-empty">{EMPTY}</p>}
+      <div
+        className="custom-scrollbar flex min-h-0 flex-1 flex-col gap-stack-gap overflow-y-auto"
+        ref={listRef}
+      >
+        {messages.length === 0 && !streaming && (
+          <p className="m-auto max-w-[440px] text-center leading-relaxed text-on-surface-variant">
+            {EMPTY}
+          </p>
+        )}
         {messages.map((m, i) => (
-          <div className={`chat-msg ${m.role}`} key={i}>
-            {m.text}
+          <div className={m.role === 'user' ? 'flex w-full justify-end' : 'flex w-full'} key={i}>
+            <div className={m.role === 'user' ? BUBBLE_USER : BUBBLE_AI}>{m.text}</div>
           </div>
         ))}
-        {streaming !== null && <div className="chat-msg assistant">{streaming + '▌'}</div>}
+        {streaming !== null && (
+          <div className="flex w-full">
+            <div className={BUBBLE_AI}>{streaming + '▌'}</div>
+          </div>
+        )}
         {question && !proposal && (
           <QuestionCard q={question} disabled={sending} onAnswer={(t) => void send(t)} />
         )}
         {error && (
-          <div className="error-banner">
-            {error}{' '}
-            <button className="ghost" onClick={() => void send(lastUser)} disabled={sending}>
+          <div className="flex items-center gap-2 rounded-lg border border-status-failed/20 bg-status-failed/10 px-3 py-2 font-mono-code text-mono-code text-status-failed">
+            {error}
+            <button
+              className="rounded border border-border-subtle bg-surface-container px-2 py-1 text-xs text-on-surface disabled:opacity-50"
+              onClick={() => void send(lastUser)}
+              disabled={sending}
+            >
               Retry
             </button>
           </div>
@@ -146,32 +170,38 @@ export function DraftView({ repo, roles, onApplied }: Props): React.JSX.Element 
           onDismiss={() => setProposal(null)}
         />
       )}
-      <div className="row">
-        {/* _draft is never blocked by a running pipeline (Decision 9). */}
-        <button
-          className="ghost"
-          onClick={() => void send(window.somni.proposeNow)}
+      <div className="flex shrink-0 items-end gap-2 border-t border-border-subtle pt-3">
+        <textarea
+          className="custom-scrollbar h-20 flex-1 resize-y rounded-lg border border-border-subtle bg-surface-container px-3 py-2 font-body-md text-body-md text-on-surface focus:border-primary focus:outline-none"
+          placeholder="Describe what you want built…"
+          value={input}
           disabled={sending}
-        >
-          Propose Now
-        </button>
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              submit()
+            }
+          }}
+        />
+        <div className="flex flex-col gap-2">
+          <button
+            className="rounded-full bg-primary-container px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-inverse-primary disabled:opacity-50"
+            disabled={sending || !input.trim()}
+            onClick={submit}
+          >
+            Send
+          </button>
+          {/* _draft is never blocked by a running pipeline (Decision 9). */}
+          <button
+            className="rounded-full border border-border-subtle bg-surface-container px-4 py-2 text-sm text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-primary disabled:opacity-50"
+            onClick={() => void send(window.somni.proposeNow)}
+            disabled={sending}
+          >
+            Propose Now
+          </button>
+        </div>
       </div>
-      <textarea
-        rows={3}
-        placeholder="Describe what you want built…"
-        value={input}
-        disabled={sending}
-        onChange={(e) => setInput(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault()
-            submit()
-          }
-        }}
-      />
-      <button disabled={sending || !input.trim()} onClick={submit}>
-        Send
-      </button>
     </div>
   )
 }
