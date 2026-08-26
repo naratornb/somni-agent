@@ -12,6 +12,7 @@ export type Settings = {
   runner: RunnerName
   claudeBinary?: string
   antigravityBinary?: string
+  whisperBinary?: string
   model?: string
   effort?: Effort
   nightlyTime?: string
@@ -82,6 +83,10 @@ export type RunStats = {
 
 export type RunRow = RunState & { worktreeExists: boolean }
 export type RunDetails = { stats: RunStats | null; branchExists: boolean }
+
+export type VoiceStatus = { binary: boolean; model: boolean }
+export type Transcription = { ok: boolean; text?: string; error?: string }
+export type ModelProgress = { received: number; total: number }
 
 export type ChatMessage = { role: 'user' | 'assistant'; text: string; ts: string }
 export type ChatProposal = { name: string; brief: string; tasks: Task[]; roles: Role[] }
@@ -157,6 +162,14 @@ const somni = {
     ipcRenderer.invoke('field:refine', repo, kind, text),
   // `runner` undefined = the role editor's inherit case; main resolves it.
   listModels: (runner?: RunnerName): Promise<string[]> => ipcRenderer.invoke('models:list', runner),
+  // Voice input (M12). Capture is renderer-side; everything else is main's.
+  voiceStatus: (): Promise<VoiceStatus> => ipcRenderer.invoke('voice:status'),
+  downloadModel: (): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('voice:downloadModel'),
+  transcribe: (samples: Float32Array): Promise<Transcription> =>
+    ipcRenderer.invoke('voice:transcribe', samples),
+  onVoiceProgress: (cb: (p: ModelProgress) => void): (() => void) =>
+    on('voice:modelProgress', (p) => cb(p as ModelProgress)),
   listRuns: (repo: string): Promise<RunRow[]> => ipcRenderer.invoke('runs:list', repo),
   runReport: (repo: string, runId: string): Promise<string | null> =>
     ipcRenderer.invoke('runs:report', repo, runId),

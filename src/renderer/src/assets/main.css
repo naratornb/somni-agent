@@ -117,7 +117,14 @@
 }
 /* ponytail: subset to the icons the app uses today (fonts.googleapis.com
    css2 `icon_names=`, 20KB vs 4MB). Adding a new glyph means re-fetching the
-   subset — swap in the full variable font if that ever gets annoying. */
+   subset — swap in the full variable font if that ever gets annoying.
+   Collect the icon_names list from BOTH sources, or the missing ones render as
+   raw text (this trap has fired once):
+     1. literal ligature text inside `.material-symbols-outlined` spans, and
+     2. the VIEWS map in App.tsx — sidebar glyphs come from a `{icon}` variable.
+   Verify a regenerated file by reconstructing its GSUB ligatures from the cmap
+   (LookupType 4 incl. type-7 extensions) — glyph *names* are renamed by the
+   subsetter and prove nothing. */
 @font-face {
   font-family: 'Material Symbols Outlined';
   font-style: normal;

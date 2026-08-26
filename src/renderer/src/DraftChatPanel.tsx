@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChatEvent, ChatMessage, ChatProposal, ChatQuestion, Role } from '../../preload/index'
-import { ProposalPreview, QuestionCard } from './chatShared'
-import { BTN_GHOST_SM, BTN_PRIMARY, BUBBLE_AI, BUBBLE_USER, ERROR_BANNER } from './ui'
+import { MicButton, ProposalPreview, QuestionCard } from './chatShared'
+import { appendText, BTN_GHOST_SM, BTN_PRIMARY, BUBBLE_AI, BUBBLE_USER, ERROR_BANNER } from './ui'
 
 type Props = {
   repo: string
@@ -173,17 +173,23 @@ export function DraftChatPanel({
           }
         }}
       />
-      <button
-        className={`self-end ${BTN_PRIMARY}`}
-        disabled={sending || running || !input.trim()}
-        onClick={() => {
-          const text = input
-          setInput('')
-          void send(text)
-        }}
-      >
-        Send
-      </button>
+      <div className="flex items-start justify-between gap-2">
+        <MicButton
+          disabled={sending || running}
+          onText={(text) => setInput((cur) => appendText(cur, text))}
+        />
+        <button
+          className={BTN_PRIMARY}
+          disabled={sending || running || !input.trim()}
+          onClick={() => {
+            const text = input
+            setInput('')
+            void send(text)
+          }}
+        >
+          Send
+        </button>
+      </div>
     </div>
   )
 }
