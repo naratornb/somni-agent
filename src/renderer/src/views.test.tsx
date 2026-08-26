@@ -16,7 +16,7 @@ import { RolesView } from './RolesView'
 import { RunDetailsPanel, RunsView } from './RunsView'
 import { SettingsView } from './SettingsView'
 import { WorkflowsView } from './WorkflowsView'
-import { ProposalPreview, QuestionCard, RefineControl } from './chatShared'
+import { MicButton, ProposalPreview, QuestionCard, RefineControl } from './chatShared'
 
 // Every somni.* call is a noop; draftKey/proposeNow/refineStructure are read
 // during render.
@@ -153,11 +153,22 @@ const views: [string, React.JSX.Element][] = [
   [
     'RefineControl',
     <RefineControl key="rc" repo="/repo" kind="task" text="Add hello" onApply={() => {}} />
-  ]
+  ],
+  ['MicButton', <MicButton key="mb" onText={() => {}} />]
 ]
 
 test.each(views)('%s renders', (_name, el) => {
   expect(renderToStaticMarkup(el).length).toBeGreaterThan(0)
+})
+
+// M12 decisions log: first-paint disabled "…" until voice:status resolves is
+// the accepted state — SSR never runs effects, so this is the only state the
+// static-markup harness can ever observe for MicButton. Assert it for real
+// (disabled + the "…" label), not just "rendered something".
+test('MicButton renders disabled with the checking placeholder before voice:status resolves', () => {
+  const html = renderToStaticMarkup(<MicButton onText={() => {}} />)
+  expect(html).toContain('disabled=""')
+  expect(html).toContain('…')
 })
 
 // M11 Decision 8/9: mode gates the sidebar nav. SSR skips effects, so `mode`

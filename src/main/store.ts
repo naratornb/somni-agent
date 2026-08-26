@@ -25,6 +25,8 @@ export type Settings = Profile & {
   // Empty = look the binary up on PATH (§8).
   claudeBinary?: string
   antigravityBinary?: string
+  // Voice input (M12 Decision 1) — empty = look up `whisper-cli` on PATH.
+  whisperBinary?: string
   // Nightly Window (M9 Decision 5): the time survives a disarm; armed persists
   // across restarts and is re-armed on app ready.
   nightlyTime?: string // "HH:MM"

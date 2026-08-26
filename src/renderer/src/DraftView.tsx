@@ -9,8 +9,8 @@ import type {
   Role,
   Workflow
 } from '../../preload/index'
-import { ProposalPreview, QuestionCard } from './chatShared'
-import { BTN_GHOST, BTN_PRIMARY, BUBBLE_AI, BUBBLE_USER, ERROR_BANNER } from './ui'
+import { MicButton, ProposalPreview, QuestionCard } from './chatShared'
+import { appendText, BTN_GHOST, BTN_PRIMARY, BUBBLE_AI, BUBBLE_USER, ERROR_BANNER } from './ui'
 
 type Props = {
   repo: string
@@ -183,6 +183,10 @@ export function DraftView({ repo, roles, onApplied }: Props): React.JSX.Element 
           >
             Propose Now
           </button>
+          <MicButton
+            disabled={sending}
+            onText={(text) => setInput((cur) => appendText(cur, text))}
+          />
         </div>
       </div>
     </div>

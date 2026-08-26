@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { ChatProposal, Role, Task, Workflow } from '../../preload/index'
-import { RefineControl } from './chatShared'
+import { MicButton, RefineControl } from './chatShared'
 import { DraftChatPanel } from './DraftChatPanel'
-import { ICON_BTN, INPUT as BASE_INPUT, INPUT_TITLE } from './ui'
+import { appendText, ICON_BTN, INPUT as BASE_INPUT, INPUT_TITLE } from './ui'
 
 type Props = {
   repo: string
@@ -205,12 +205,17 @@ export function WorkflowsView({
                         value={t.prompt}
                         onChange={(e) => patchTask(i, { prompt: e.target.value })}
                       />
-                      <RefineControl
-                        repo={repo}
-                        kind="task"
-                        text={t.prompt}
-                        onApply={(text) => patchTask(i, { prompt: text })}
-                      />
+                      <div className="flex flex-wrap items-start gap-3">
+                        <RefineControl
+                          repo={repo}
+                          kind="task"
+                          text={t.prompt}
+                          onApply={(text) => patchTask(i, { prompt: text })}
+                        />
+                        <MicButton
+                          onText={(text) => patchTask(i, { prompt: appendText(t.prompt, text) })}
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>

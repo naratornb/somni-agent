@@ -125,6 +125,14 @@ export function SettingsView(): React.JSX.Element {
             onChange={(e) => patch({ antigravityBinary: e.target.value })}
           />
         </FieldRow>
+        <FieldRow label="whisper binary">
+          <input
+            className={`${INPUT} flex-1 font-mono-code`}
+            placeholder="whisper-cli (found on PATH)"
+            value={s.whisperBinary ?? ''}
+            onChange={(e) => patch({ whisperBinary: e.target.value })}
+          />
+        </FieldRow>
         {/* ponytail: datalist suggestions are live-queried per runner (models:list),
             not a shipped table — the field stays free text either way, nothing ships stale. */}
         <FieldRow label="Model">

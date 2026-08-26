@@ -6,6 +6,7 @@ import icon from '../../resources/icon.png?asset'
 import { wireTaskIpc, killTask } from './runner'
 import { killChats } from './chat'
 import { patchSettings, readSettings, repoSettings, wireRepoIpc } from './repoIpc'
+import { wireVoiceIpc } from './voice'
 import { setSelected } from './store'
 import {
   abandonRun,
@@ -71,6 +72,7 @@ app.whenReady().then(() => {
 
   wireTaskIpc(ipcMain, () => BrowserWindow.getAllWindows()[0]?.webContents ?? null)
   wireRepoIpc(() => armNightly())
+  wireVoiceIpc()
 
   const wc = (): Electron.WebContents | undefined => BrowserWindow.getAllWindows()[0]?.webContents
 

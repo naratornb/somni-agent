@@ -1,7 +1,17 @@
 import { useEffect, useState } from 'react'
 import type { Effort, Role, RunnerName } from '../../preload/index'
-import { RefineControl } from './chatShared'
-import { BTN_DANGER, BTN_GHOST, BTN_PRIMARY, CHIP, INPUT, INPUT_TITLE, LABEL, TEXTAREA } from './ui'
+import { MicButton, RefineControl } from './chatShared'
+import {
+  appendText,
+  BTN_DANGER,
+  BTN_GHOST,
+  BTN_PRIMARY,
+  CHIP,
+  INPUT,
+  INPUT_TITLE,
+  LABEL,
+  TEXTAREA
+} from './ui'
 
 type Props = { repo: string; roles: Role[]; refresh: () => void }
 
@@ -43,12 +53,19 @@ export function RolesView({ repo, roles, refresh }: Props): React.JSX.Element {
           value={editing.preamble}
           onChange={(e) => setEditing({ ...editing, preamble: e.target.value })}
         />
-        <RefineControl
-          repo={repo}
-          kind="role"
-          text={editing.preamble}
-          onApply={(text) => setEditing({ ...editing, preamble: text })}
-        />
+        <div className="flex flex-wrap items-start gap-3">
+          <RefineControl
+            repo={repo}
+            kind="role"
+            text={editing.preamble}
+            onApply={(text) => setEditing({ ...editing, preamble: text })}
+          />
+          <MicButton
+            onText={(text) =>
+              setEditing({ ...editing, preamble: appendText(editing.preamble, text) })
+            }
+          />
+        </div>
         <div className="flex items-center gap-3">
           <span className={LABEL}>Overrides</span>
           <select

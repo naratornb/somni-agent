@@ -1,6 +1,6 @@
 // Pieces shared by the two drafting surfaces (§7): the Draft view and the
 // workflow editor's chat panel. Rendering only — every decision is main's.
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ChatProposal, ChatQuestion, Role } from '../../preload/index'
 import {
   BTN_GHOST,
@@ -193,6 +193,136 @@ export function RefineControl({
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// Voice input (M12). Capture lives here — the only renderer-side voice logic —
+// and it stays deliberately small: mic → 16 kHz AudioContext → one Float32Array
+// over invoke. Everything else (WAV encoding, whisper.cpp, the model) is main's.
+// ponytail: ScriptProcessorNode is deprecated but works and needs no worklet
+// asset in the electron-vite build — move to AudioWorklet if it ever misbehaves.
+type Capture = { stop: () => Float32Array }
+
+async function startCapture(): Promise<Capture> {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+  const ctx = new AudioContext({ sampleRate: 16000 })
+  const node = ctx.createScriptProcessor(4096, 1, 1)
+  const chunks: Float32Array[] = []
+  node.onaudioprocess = (e) => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)))
+  ctx.createMediaStreamSource(stream).connect(node)
+  node.connect(ctx.destination)
+  return {
+    stop: () => {
+      node.disconnect()
+      void ctx.close()
+      stream.getTracks().forEach((t) => t.stop())
+      const out = new Float32Array(chunks.reduce((n, c) => n + c.length, 0))
+      let at = 0
+      for (const c of chunks) {
+        out.set(c, at)
+        at += c.length
+      }
+      return out
+    }
+  }
+}
+
+type MicState =
+  'checking' | 'no-binary' | 'no-model' | 'downloading' | 'idle' | 'recording' | 'busy'
+
+const NO_BINARY_HINT = 'Install whisper.cpp (brew install whisper-cpp) or set the path in Settings'
+
+/** Mic button beside an AI-adjacent text field. `onText` appends to the field. */
+export function MicButton({
+  onText,
+  disabled
+}: {
+  onText: (text: string) => void
+  disabled?: boolean
+}): React.JSX.Element {
+  const [state, setState] = useState<MicState>('checking')
+  const [pct, setPct] = useState(0)
+  const [error, setError] = useState<string | null>(null)
+  const capture = useRef<Capture | null>(null)
+
+  useEffect(() => {
+    void window.somni
+      .voiceStatus()
+      .then(({ binary, model }) => setState(!binary ? 'no-binary' : !model ? 'no-model' : 'idle'))
+    const off = window.somni.onVoiceProgress(({ received, total }) =>
+      setPct(total ? Math.round((received / total) * 100) : 0)
+    )
+    return () => {
+      off()
+      // Unmounting mid-recording (a view switch) must release the mic, or the
+      // OS indicator stays on forever. The samples go nowhere — no field left.
+      capture.current?.stop()
+      capture.current = null
+    }
+  }, [])
+
+  const click = async (): Promise<void> => {
+    setError(null)
+    // Download before recording: the reverse would waste the user's speech.
+    if (state === 'no-model') {
+      setState('downloading')
+      const res = await window.somni.downloadModel()
+      if (!res.ok) {
+        setState('no-model')
+        return setError(res.error ?? 'model download failed')
+      }
+      return setState('idle')
+    }
+    if (state === 'idle') {
+      try {
+        capture.current = await startCapture()
+        return setState('recording')
+      } catch {
+        return setError('mic access denied — System Settings')
+      }
+    }
+    if (state === 'recording') {
+      const samples = capture.current?.stop() ?? new Float32Array(0)
+      capture.current = null
+      setState('busy')
+      const res = await window.somni.transcribe(samples)
+      setState('idle')
+      if (!res.ok) return setError(res.error ?? 'transcription failed')
+      if (res.text) onText(res.text)
+    }
+  }
+
+  const label: Record<MicState, string> = {
+    checking: '…',
+    'no-binary': 'Voice',
+    'no-model': 'Enable voice',
+    downloading: `Downloading ${pct}%`,
+    idle: 'Speak',
+    recording: 'Stop',
+    busy: 'Transcribing…'
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <button
+        className={`flex items-center gap-1 self-start ${BTN_GHOST_SM} ${
+          state === 'recording' ? `${STATUS_CHIP_BASE} ${STATUS_CHIP.Running}` : ''
+        }`}
+        title={state === 'no-binary' ? NO_BINARY_HINT : 'Voice input'}
+        disabled={
+          disabled ||
+          state === 'checking' ||
+          state === 'no-binary' ||
+          state === 'downloading' ||
+          state === 'busy'
+        }
+        onClick={() => void click()}
+      >
+        <span className="material-symbols-outlined text-[16px]">mic</span>
+        {label[state]}
+      </button>
+      {error && <div className={ERROR_BANNER}>{error}</div>}
     </div>
   )
 }

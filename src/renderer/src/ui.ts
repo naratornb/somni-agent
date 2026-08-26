@@ -46,3 +46,7 @@ export const BUBBLE_AI =
   'bg-surface-container-lowest border border-border-subtle rounded-xl p-4 text-on-surface-variant text-sm whitespace-pre-wrap'
 export const ERROR_BANNER =
   'bg-error-container/20 border border-error text-error rounded-xl p-3 flex items-center justify-between gap-2 text-sm'
+
+/** Voice transcripts append to the end — macOS dictation covers cursor insertion. */
+export const appendText = (current: string, text: string): string =>
+  current.trim() ? `${current.trimEnd()} ${text}` : text
