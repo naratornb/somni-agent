@@ -10,6 +10,7 @@ import type {
   Workflow
 } from '../../preload/index'
 import { ProposalPreview, QuestionCard } from './chatShared'
+import { BTN_GHOST, BTN_PRIMARY, BUBBLE_AI, BUBBLE_USER, ERROR_BANNER } from './ui'
 
 type Props = {
   repo: string
@@ -18,6 +19,10 @@ type Props = {
 }
 
 const EMPTY = "Describe what you want built — I'll ask a few questions, then propose a workflow."
+
+// Width caps are the full-page chat's; the 340px panel drops them (§6/§7).
+const USER = `max-w-[80%] ${BUBBLE_USER}`
+const AI = `max-w-[80%] ${BUBBLE_AI}`
 
 export function DraftView({ repo, roles, onApplied }: Props): React.JSX.Element {
   const slug = window.somni.draftKey
@@ -107,30 +112,36 @@ export function DraftView({ repo, roles, onApplied }: Props): React.JSX.Element 
   }
 
   return (
-    // ponytail: `.stack` is already the full-height flex column the spec wants
-    // — no .draft-view class needed.
-    <div className="stack">
-      <div className="row">
-        <b>Draft</b>
-        <button className="ghost" onClick={newDraft} disabled={sending}>
+    <div className="flex min-h-0 flex-1 flex-col gap-stack-gap">
+      <div className="flex shrink-0 items-center gap-4 border-b border-border-subtle pb-4">
+        <h2 className="font-headline-md text-headline-md font-bold">Draft</h2>
+        <button className={BTN_GHOST} onClick={newDraft} disabled={sending}>
           New draft
         </button>
       </div>
-      <div className="chat-messages" ref={listRef}>
-        {messages.length === 0 && !streaming && <p className="draft-empty">{EMPTY}</p>}
+      <div className="flex min-h-0 flex-1 flex-col gap-stack-gap overflow-y-auto" ref={listRef}>
+        {messages.length === 0 && !streaming && (
+          <p className="m-auto max-w-[440px] text-center leading-relaxed text-on-surface-variant">
+            {EMPTY}
+          </p>
+        )}
         {messages.map((m, i) => (
-          <div className={`chat-msg ${m.role}`} key={i}>
-            {m.text}
+          <div className={m.role === 'user' ? 'flex w-full justify-end' : 'flex w-full'} key={i}>
+            <div className={m.role === 'user' ? USER : AI}>{m.text}</div>
           </div>
         ))}
-        {streaming !== null && <div className="chat-msg assistant">{streaming + '▌'}</div>}
+        {streaming !== null && (
+          <div className="flex w-full">
+            <div className={AI}>{streaming + '▌'}</div>
+          </div>
+        )}
         {question && !proposal && (
           <QuestionCard q={question} disabled={sending} onAnswer={(t) => void send(t)} />
         )}
         {error && (
-          <div className="error-banner">
-            {error}{' '}
-            <button className="ghost" onClick={() => void send(lastUser)} disabled={sending}>
+          <div className={ERROR_BANNER}>
+            {error}
+            <button className={BTN_GHOST} onClick={() => void send(lastUser)} disabled={sending}>
               Retry
             </button>
           </div>
@@ -146,32 +157,34 @@ export function DraftView({ repo, roles, onApplied }: Props): React.JSX.Element 
           onDismiss={() => setProposal(null)}
         />
       )}
-      <div className="row">
-        {/* _draft is never blocked by a running pipeline (Decision 9). */}
-        <button
-          className="ghost"
-          onClick={() => void send(window.somni.proposeNow)}
+      <div className="flex shrink-0 items-end gap-2 border-t border-border-subtle pt-3">
+        <textarea
+          className="h-20 flex-1 resize-y rounded-lg border border-border-subtle bg-surface-container px-3 py-2 font-body-md text-body-md text-on-surface focus:border-primary focus:outline-none"
+          placeholder="Describe what you want built…"
+          value={input}
           disabled={sending}
-        >
-          Propose Now
-        </button>
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              submit()
+            }
+          }}
+        />
+        <div className="flex flex-col gap-2">
+          <button className={BTN_PRIMARY} disabled={sending || !input.trim()} onClick={submit}>
+            Send
+          </button>
+          {/* _draft is never blocked by a running pipeline (Decision 9). */}
+          <button
+            className={BTN_GHOST}
+            onClick={() => void send(window.somni.proposeNow)}
+            disabled={sending}
+          >
+            Propose Now
+          </button>
+        </div>
       </div>
-      <textarea
-        rows={3}
-        placeholder="Describe what you want built…"
-        value={input}
-        disabled={sending}
-        onChange={(e) => setInput(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault()
-            submit()
-          }
-        }}
-      />
-      <button disabled={sending || !input.trim()} onClick={submit}>
-        Send
-      </button>
     </div>
   )
 }

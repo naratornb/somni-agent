@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>somni - Workflows</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "status-queued": "#3F3F46",
+                      "status-skipped": "#71717A",
+                      "on-secondary-fixed": "#1b1b1f",
+                      "on-tertiary-fixed-variant": "#6b3b00",
+                      "status-cancelled": "#F59E0B",
+                      "on-tertiary": "#4b2800",
+                      "on-error": "#690005",
+                      "inverse-surface": "#e5e1e4",
+                      "surface": "#131315",
+                      "on-secondary": "#303034",
+                      "tertiary": "#ffb875",
+                      "on-surface": "#e5e1e4",
+                      "primary-fixed": "#e5deff",
+                      "status-completed": "#10B981",
+                      "on-secondary-container": "#b6b4b9",
+                      "surface-elevated": "#161618",
+                      "surface-tint": "#c8bfff",
+                      "primary-fixed-dim": "#c8bfff",
+                      "secondary-container": "#47464b",
+                      "inverse-primary": "#5c47ce",
+                      "surface-container": "#201f21",
+                      "surface-bright": "#39393b",
+                      "tertiary-container": "#a55e00",
+                      "on-primary": "#2c009e",
+                      "tertiary-fixed": "#ffdcc0",
+                      "on-background": "#e5e1e4",
+                      "on-tertiary-fixed": "#2d1600",
+                      "surface-container-highest": "#353437",
+                      "error-container": "#93000a",
+                      "outline-variant": "#474554",
+                      "surface-container-high": "#2a2a2c",
+                      "outline": "#928e9f",
+                      "on-surface-variant": "#c9c4d6",
+                      "border-subtle": "#252529",
+                      "background": "#131315",
+                      "surface-container-low": "#1b1b1d",
+                      "on-primary-fixed-variant": "#432bb5",
+                      "inverse-on-surface": "#313032",
+                      "status-failed": "#EF4444",
+                      "primary": "#c8bfff",
+                      "surface-dim": "#131315",
+                      "status-running": "#6d5ae0",
+                      "on-error-container": "#ffdad6",
+                      "on-tertiary-container": "#fff2e9",
+                      "on-primary-container": "#f7f2ff",
+                      "secondary-fixed-dim": "#c8c5cb",
+                      "surface-container-lowest": "#0e0e10",
+                      "primary-container": "#6d5ae0",
+                      "secondary-fixed": "#e4e1e7",
+                      "on-primary-fixed": "#190064",
+                      "secondary": "#c8c5cb",
+                      "on-secondary-fixed-variant": "#47464b",
+                      "tertiary-fixed-dim": "#ffb875",
+                      "error": "#ffb4ab",
+                      "surface-variant": "#353437"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "margin-page": "2rem",
+                      "stack-gap": "0.75rem",
+                      "editor-panel-width": "340px",
+                      "sidebar-width": "240px",
+                      "gutter": "1rem",
+                      "card-padding": "1rem"
+              },
+              "fontFamily": {
+                      "headline-md": [
+                              "Inter"
+                      ],
+                      "mono-label": [
+                              "JetBrains Mono"
+                      ],
+                      "body-md": [
+                              "Inter"
+                      ],
+                      "mono-code": [
+                              "JetBrains Mono"
+                      ],
+                      "headline-lg": [
+                              "Inter"
+                      ],
+                      "body-sm": [
+                              "Inter"
+                      ]
+              },
+              "fontSize": {
+                      "headline-md": [
+                              "18px",
+                              {
+                                      "lineHeight": "24px",
+                                      "letterSpacing": "-0.01em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "mono-label": [
+                              "11px",
+                              {
+                                      "lineHeight": "14px",
+                                      "letterSpacing": "0.05em",
+                                      "fontWeight": "500"
+                              }
+                      ],
+                      "body-md": [
+                              "14px",
+                              {
+                                      "lineHeight": "20px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "mono-code": [
+                              "13px",
+                              {
+                                      "lineHeight": "18px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "headline-lg": [
+                              "24px",
+                              {
+                                      "lineHeight": "32px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "body-sm": [
+                              "12px",
+                              {
+                                      "lineHeight": "16px",
+                                      "fontWeight": "400"
+                              }
+                      ]
+              }
+            },
+          }
+        }
+    </script>
+<style>
+        /* Custom scrollbar for dark theme */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #131315; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #353437; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #47464b; 
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body-md h-screen overflow-hidden flex">
+<!-- SideNavBar (Shared Component) -->
+<nav class="bg-background border-r border-border-subtle h-screen w-sidebar-width fixed left-0 top-0 flex flex-col py-6 px-4 z-20">
+<div class="mb-8 px-3">
+<h1 class="text-headline-md font-headline-md font-bold text-primary">somni</h1>
+</div>
+<div class="flex-1 flex flex-col gap-1">
+<a class="bg-surface-container-high text-on-surface rounded-lg font-semibold px-3 py-2 flex items-center gap-3 transition-colors" href="#">
+                Workflows
+            </a>
+<a class="text-on-surface-variant hover:text-on-surface hover:bg-surface-container px-3 py-2 rounded-lg flex items-center gap-3 transition-colors" href="#">
+                Draft
+            </a>
+<a class="text-on-surface-variant hover:text-on-surface hover:bg-surface-container px-3 py-2 rounded-lg flex items-center gap-3 transition-colors" href="#">
+                Pipeline
+            </a>
+<a class="text-on-surface-variant hover:text-on-surface hover:bg-surface-container px-3 py-2 rounded-lg flex items-center gap-3 transition-colors" href="#">
+                Runs
+            </a>
+<a class="text-on-surface-variant hover:text-on-surface hover:bg-surface-container px-3 py-2 rounded-lg flex items-center gap-3 transition-colors" href="#">
+                Roles
+            </a>
+<a class="text-on-surface-variant hover:text-on-surface hover:bg-surface-container px-3 py-2 rounded-lg flex items-center gap-3 transition-colors" href="#">
+                Settings
+            </a>
+<a class="text-on-surface-variant hover:text-on-surface hover:bg-surface-container px-3 py-2 rounded-lg flex items-center gap-3 transition-colors" href="#">
+                Playground
+            </a>
+</div>
+</nav>
+<!-- Main Content Area -->
+<main class="ml-sidebar-width flex-1 flex flex-col h-screen overflow-hidden relative">
+<!-- TopAppBar (Shared Component) -->
+<header class="bg-background border-b border-border-subtle flex justify-between items-center px-gutter py-3 h-14 shrink-0 z-10 w-full">
+<div class="text-on-surface-variant font-mono-code text-mono-code truncate max-w-xl">
+                /Users/flook/.claude/jobs/3d1b4151/tmp/e2e/repo
+            </div>
+<div class="flex items-center gap-2">
+<button class="bg-surface-container hover:bg-surface-bright text-on-surface px-3 py-1.5 rounded text-sm transition-colors border border-border-subtle">Choose repo...</button>
+<button class="bg-surface-container hover:bg-surface-bright text-on-surface px-3 py-1.5 rounded text-sm transition-colors border border-border-subtle">Refresh</button>
+</div>
+</header>
+<!-- Scrollable Canvas -->
+<div class="flex-1 overflow-y-auto p-margin-page pb-24" id="main-canvas">
+<div class="max-w-4xl mx-auto space-y-12">
+<!-- Action Bar -->
+<div>
+<button class="bg-primary-container text-white px-4 py-2 rounded-full font-medium hover:bg-inverse-primary transition-colors text-sm shadow-[0_0_12px_rgba(109,90,224,0.3)]">
+                        New workflow
+                    </button>
+</div>
+<!-- Active Workflows -->
+<section>
+<div class="bg-surface-elevated border border-border-subtle rounded-lg overflow-hidden group cursor-pointer hover:border-outline-variant transition-colors" onclick="document.getElementById('workflow-editor').classList.toggle('hidden'); document.getElementById('main-list').classList.toggle('hidden');">
+<div class="p-4 flex items-center justify-between">
+<div class="flex items-center gap-3">
+<input checked="" class="w-4 h-4 rounded border-outline bg-transparent text-primary-container focus:ring-primary-container focus:ring-offset-background cursor-pointer" type="checkbox"/>
+<span class="font-semibold text-on-surface">Hello World Feature</span>
+<span class="text-on-surface-variant text-sm">· 2 tasks</span>
+<button class="ml-4 text-xs text-on-surface-variant bg-surface-container hover:bg-surface-bright px-2 py-1 rounded transition-colors border border-border-subtle">To backlog</button>
+</div>
+<button class="bg-primary-container text-white px-4 py-1.5 rounded-full text-sm font-medium flex items-center gap-1 hover:bg-inverse-primary transition-colors">
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">play_arrow</span> Run
+                            </button>
+</div>
+</div>
+</section>
+<!-- Backlog Section -->
+<section>
+<h2 class="text-on-surface font-semibold flex items-center gap-2 mb-4">
+                        Backlog <span class="text-on-surface-variant font-normal text-sm">— parked, promote to queue when ready</span>
+</h2>
+<div class="space-y-2" id="main-list">
+<!-- Backlog Item 1 -->
+<div class="bg-surface border border-border-subtle rounded-lg p-4 hover:border-outline-variant transition-colors group">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-3">
+<span class="text-on-surface-variant font-mono-code text-mono-code w-4">1.</span>
+<span class="font-semibold text-on-surface">Database Migration V2</span>
+<span class="text-on-surface-variant text-sm">· 5 tasks</span>
+</div>
+<div class="flex items-center gap-4 opacity-0 group-hover:opacity-100 transition-opacity">
+<div class="flex gap-1">
+<button class="text-on-surface-variant hover:text-on-surface p-1 rounded hover:bg-surface-container transition-colors"><span class="material-symbols-outlined text-[16px]">arrow_upward</span></button>
+<button class="text-on-surface-variant hover:text-on-surface p-1 rounded hover:bg-surface-container transition-colors"><span class="material-symbols-outlined text-[16px]">arrow_downward</span></button>
+</div>
+<button class="bg-surface-container-high text-primary px-3 py-1.5 rounded text-sm font-medium hover:bg-surface-bright transition-colors border border-border-subtle">Promote</button>
+</div>
+</div>
+</div>
+<!-- Backlog Item 2 -->
+<div class="bg-surface border border-border-subtle rounded-lg p-4 hover:border-outline-variant transition-colors group">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-3">
+<span class="text-on-surface-variant font-mono-code text-mono-code w-4">2.</span>
+<span class="font-semibold text-on-surface">Update Auth Flow</span>
+<span class="text-on-surface-variant text-sm">· 3 tasks</span>
+</div>
+<div class="flex items-center gap-4 opacity-0 group-hover:opacity-100 transition-opacity">
+<div class="flex gap-1">
+<button class="text-on-surface-variant hover:text-on-surface p-1 rounded hover:bg-surface-container transition-colors"><span class="material-symbols-outlined text-[16px]">arrow_upward</span></button>
+<button class="text-on-surface-variant hover:text-on-surface p-1 rounded hover:bg-surface-container transition-colors"><span class="material-symbols-outlined text-[16px]">arrow_downward</span></button>
+</div>
+<button class="bg-surface-container-high text-primary px-3 py-1.5 rounded text-sm font-medium hover:bg-surface-bright transition-colors border border-border-subtle">Promote</button>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Embedded Workflow Editor (Initially Hidden, toggled for demo) -->
+<section class="hidden mt-8 animate-[fadeIn_0.2s_ease-out]" id="workflow-editor">
+<div class="bg-surface-elevated border border-border-subtle rounded-xl p-6 shadow-2xl relative">
+<button class="absolute top-4 right-4 text-on-surface-variant hover:text-on-surface p-1 rounded hover:bg-surface-container transition-colors" onclick="document.getElementById('workflow-editor').classList.add('hidden'); document.getElementById('main-list').classList.remove('hidden');">
+<span class="material-symbols-outlined">close</span>
+</button>
+<div class="mb-6">
+<input class="w-full bg-transparent text-headline-lg font-headline-lg font-semibold text-on-surface border-b border-border-subtle pb-2 focus:outline-none focus:border-primary transition-colors" type="text" value="Hello World Feature"/>
+</div>
+<!-- Brief -->
+<div class="bg-surface rounded-lg border border-border-subtle mb-6 overflow-hidden">
+<button class="w-full px-4 py-3 flex items-center gap-2 text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors text-sm font-medium">
+<span class="material-symbols-outlined text-[18px]">arrow_drop_down</span> Brief
+                            </button>
+<div class="p-4 pt-0 text-sm text-on-surface-variant border-t border-border-subtle">
+<p class="mb-2"># Hello world</p>
+<p class="mb-2">Ship a greeting on CLI stdout.</p>
+<p>Assumption: English only.</p>
+</div>
+</div>
+<!-- Tasks -->
+<div class="space-y-4">
+<!-- Task 1 -->
+<div class="bg-surface border border-border-subtle rounded-lg p-4 group">
+<div class="flex items-start gap-4">
+<span class="text-on-surface-variant font-mono-code text-mono-code mt-2">1.</span>
+<div class="flex-1 space-y-3">
+<div class="flex items-center gap-2">
+<input class="flex-1 bg-surface-container text-on-surface px-3 py-1.5 rounded border border-border-subtle focus:outline-none focus:border-primary font-mono-code text-sm" type="text" value="Implement greeting"/>
+<select class="bg-surface-container text-on-surface px-3 py-1.5 rounded border border-border-subtle focus:outline-none text-sm appearance-none pr-8 relative">
+<option>Developer</option>
+<option>Reviewer</option>
+</select>
+<div class="flex gap-1">
+<button class="text-on-surface-variant hover:text-on-surface p-1.5 rounded hover:bg-surface-container transition-colors"><span class="material-symbols-outlined text-[18px]">arrow_upward</span></button>
+<button class="text-on-surface-variant hover:text-on-surface p-1.5 rounded hover:bg-surface-container transition-colors"><span class="material-symbols-outlined text-[18px]">arrow_downward</span></button>
+<button class="text-error hover:text-on-error hover:bg-error-container p-1.5 rounded transition-colors ml-2"><span class="material-symbols-outlined text-[18px]">close</span></button>
+</div>
+</div>
+<textarea class="w-full bg-surface-container text-on-surface p-3 rounded border border-border-subtle focus:outline-none focus:border-primary font-mono-code text-sm h-24 resize-y" placeholder="Prompt...">Add hello world to CLI stdout</textarea>
+</div>
+</div>
+</div>
+<!-- Task 2 -->
+<div class="bg-surface border border-border-subtle rounded-lg p-4 group">
+<div class="flex items-start gap-4">
+<span class="text-on-surface-variant font-mono-code text-mono-code mt-2">2.</span>
+<div class="flex-1 space-y-3">
+<div class="flex items-center gap-2">
+<input class="flex-1 bg-surface-container text-on-surface px-3 py-1.5 rounded border border-border-subtle focus:outline-none focus:border-primary font-mono-code text-sm" type="text" value="Verify greeting"/>
+<select class="bg-surface-container text-on-surface px-3 py-1.5 rounded border border-border-subtle focus:outline-none text-sm appearance-none pr-8 relative">
+<option>QA Engineer</option>
+<option>Developer</option>
+</select>
+<div class="flex gap-1">
+<button class="text-on-surface-variant hover:text-on-surface p-1.5 rounded hover:bg-surface-container transition-colors"><span class="material-symbols-outlined text-[18px]">arrow_upward</span></button>
+<button class="text-on-surface-variant hover:text-on-surface p-1.5 rounded hover:bg-surface-container transition-colors"><span class="material-symbols-outlined text-[18px]">arrow_downward</span></button>
+<button class="text-error hover:text-on-error hover:bg-error-container p-1.5 rounded transition-colors ml-2"><span class="material-symbols-outlined text-[18px]">close</span></button>
+</div>
+</div>
+<textarea class="w-full bg-surface-container text-on-surface p-3 rounded border border-border-subtle focus:outline-none focus:border-primary font-mono-code text-sm h-24 resize-y" placeholder="Prompt...">Run the CLI and assert the greeting</textarea>
+</div>
+</div>
+</div>
+</div>
+<div class="mt-4">
+<button class="text-on-surface-variant hover:text-on-surface bg-surface-container hover:bg-surface-bright px-3 py-1.5 rounded text-sm transition-colors border border-border-subtle flex items-center gap-1">
+<span class="material-symbols-outlined text-[16px]">add</span> Add task
+                            </button>
+</div>
+<!-- Editor Actions -->
+<div class="mt-8 flex items-center justify-between border-t border-border-subtle pt-6">
+<div class="flex items-center gap-3">
+<button class="bg-primary-container text-white px-5 py-2 rounded font-medium hover:bg-inverse-primary transition-colors text-sm">Save</button>
+<button class="bg-surface-container hover:bg-surface-bright text-on-surface px-5 py-2 rounded text-sm transition-colors border border-border-subtle" onclick="document.getElementById('workflow-editor').classList.add('hidden'); document.getElementById('main-list').classList.remove('hidden');">Cancel</button>
+<button class="text-error hover:bg-error-container hover:text-on-error px-5 py-2 rounded text-sm transition-colors">Delete</button>
+</div>
+<button class="bg-surface-container hover:bg-surface-bright text-on-surface px-5 py-2 rounded text-sm transition-colors border border-border-subtle flex items-center gap-2">
+<span class="material-symbols-outlined text-[18px]">auto_awesome</span> Draft with AI
+                            </button>
+</div>
+</div>
+</section>
+</div>
+</div>
+</main>
+</body></html>
