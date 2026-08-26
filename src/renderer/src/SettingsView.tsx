@@ -21,10 +21,16 @@ export function FieldRow({
 export function SettingsView(): React.JSX.Element {
   const [s, setS] = useState<Settings | null>(null)
   const [saved, setSaved] = useState(false)
+  const [models, setModels] = useState<string[]>([])
 
   useEffect(() => {
     void window.somni.getSettings().then(setS)
   }, [])
+
+  // Keyed on the unsaved form value: switching runner re-suggests immediately.
+  useEffect(() => {
+    void window.somni.listModels(s?.runner).then(setModels)
+  }, [s?.runner])
 
   if (!s) return <p className="text-on-surface-variant">Loading…</p>
 
@@ -119,15 +125,21 @@ export function SettingsView(): React.JSX.Element {
             onChange={(e) => patch({ antigravityBinary: e.target.value })}
           />
         </FieldRow>
-        {/* ponytail: one free-text model field for both runners — a per-runner
-            dropdown means shipping model lists that go stale. */}
+        {/* ponytail: datalist suggestions are live-queried per runner (models:list),
+            not a shipped table — the field stays free text either way, nothing ships stale. */}
         <FieldRow label="Model">
           <input
             className={`${INPUT} flex-1 font-mono-code`}
+            list="settings-model-list"
             placeholder="CLI default"
             value={s.model ?? ''}
             onChange={(e) => patch({ model: e.target.value })}
           />
+          <datalist id="settings-model-list">
+            {models.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
         </FieldRow>
         <FieldRow label="Effort">
           <select

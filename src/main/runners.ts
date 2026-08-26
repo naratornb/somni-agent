@@ -2,6 +2,8 @@
 // and `agy` CLIs — argv, stdout shape, rate-limit wording — lives in this file.
 // Nothing outside it may branch on runner type.
 
+import { execFile } from 'child_process'
+import { promisify } from 'util'
 import type { StreamEvent } from './stream'
 import type { Effort, RunnerName, Settings } from './store'
 
@@ -20,6 +22,9 @@ export type Runner = {
   buildArgs: (prompt: string, opts: RunnerOpts) => string[]
   parseLine: (line: string) => StreamEvent | null
   isRateLimit: (text: string) => boolean
+  // Model ids to suggest for this runner. `binary` is a param (not `this.binary`)
+  // so callers can point it at an overridden path — or a test fixture.
+  listModels: (binary: string) => Promise<string[]>
 }
 
 // Non-JSON noise on stdout is ignored rather than treated as an error.
@@ -78,8 +83,13 @@ export const claudeRunner: Runner = {
     }
     return null
   },
-  isRateLimit: (text) => /rate.?limit|usage limit|overloaded|429/i.test(text)
+  isRateLimit: (text) => /rate.?limit|usage limit|overloaded|429/i.test(text),
+  // The claude CLI has no `models` subcommand; these are exactly the aliases
+  // `claude --help` names for `--model`, so no spawn is needed.
+  listModels: () => Promise.resolve(['fable', 'opus', 'sonnet'])
 }
+
+const execFileAsync = promisify(execFile)
 
 // Antigravity (`agy`). Flags and stdout shapes below were pinned against the
 // installed CLI (`agy --help` plus a live `agy -p … --output-format stream-json`
@@ -143,8 +153,35 @@ export const antigravityRunner: Runner = {
     return null
   },
   // Google's shapes differ from Anthropic's: quota/RESOURCE_EXHAUSTED, not "usage limit".
-  isRateLimit: (text) => /rate.?limit|quota|resource.?exhausted|too many requests|429/i.test(text)
+  isRateLimit: (text) => /rate.?limit|quota|resource.?exhausted|too many requests|429/i.test(text),
+  // `agy models` prints `id\tLabel` lines on stdout, with progress noise
+  // ("Fetching available models...") that carries no tab. Pinned against the
+  // installed CLI.
+  listModels: async (binary) => {
+    try {
+      const { stdout } = await execFileAsync(binary, ['models'], { timeout: 10_000 })
+      const ids = stdout
+        .split('\n')
+        .filter((l) => l.includes('\t'))
+        .map((l) => l.slice(0, l.indexOf('\t')).trim())
+        .filter(Boolean)
+      return ids.length ? ids : AGY_FALLBACK_MODELS
+    } catch {
+      return AGY_FALLBACK_MODELS
+    }
+  }
 }
+
+// ponytail: a short pinned list, used only when the CLI can't be queried (not
+// installed, offline, changed output). The live query is the source of truth —
+// let this drift rather than growing a sync mechanism for it.
+const AGY_FALLBACK_MODELS = [
+  'gemini-3.1-pro-high',
+  'gemini-3.1-pro-low',
+  'gemini-3.7-flash-high',
+  'claude-opus-4-6-thinking',
+  'claude-sonnet-4-6'
+]
 
 const RUNNERS: Record<RunnerName, Runner> = {
   claude: claudeRunner,

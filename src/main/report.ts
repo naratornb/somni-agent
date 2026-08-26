@@ -149,8 +149,8 @@ async function collectStats(state: RunState): Promise<Stats> {
 
 // One runner call, final text out (every adapter puts the full reply on the
 // result event). Resolves to null on any failure — a report must never be the
-// thing that fails a run.
-function runnerText(
+// thing that fails a run. Second consumer: `field:refine` in repoIpc.ts (M11).
+export function runnerText(
   settings: Settings,
   prompt: string,
   opts: RunnerOpts,

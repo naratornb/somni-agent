@@ -16,11 +16,16 @@ import { RolesView } from './RolesView'
 import { RunDetailsPanel, RunsView } from './RunsView'
 import { SettingsView } from './SettingsView'
 import { WorkflowsView } from './WorkflowsView'
-import { ProposalPreview, QuestionCard } from './chatShared'
+import { ProposalPreview, QuestionCard, RefineControl } from './chatShared'
 
-// Every somni.* call is a noop; draftKey/proposeNow are read during render.
+// Every somni.* call is a noop; draftKey/proposeNow/refineStructure are read
+// during render.
 const somni = new Proxy(
-  { draftKey: '_draft', proposeNow: 'PROPOSE_NOW' } as Record<string, unknown>,
+  {
+    draftKey: '_draft',
+    proposeNow: 'PROPOSE_NOW',
+    refineStructure: 'REFINE_STRUCTURE'
+  } as Record<string, unknown>,
   { get: (t, k) => (k in t ? t[k as string] : () => Promise.resolve(undefined)) }
 )
 Object.assign(globalThis, { window: { somni } })
@@ -144,11 +149,29 @@ const views: [string, React.JSX.Element][] = [
       onApply={() => {}}
       onDismiss={() => {}}
     />
+  ],
+  [
+    'RefineControl',
+    <RefineControl key="rc" repo="/repo" kind="task" text="Add hello" onApply={() => {}} />
   ]
 ]
 
 test.each(views)('%s renders', (_name, el) => {
   expect(renderToStaticMarkup(el).length).toBeGreaterThan(0)
+})
+
+// M11 Decision 8/9: mode gates the sidebar nav. SSR skips effects, so `mode`
+// never leaves its useState seed ('engineer') — the App case above only ever
+// exercises the engineer branch of the nav filter. Assert that branch
+// explicitly (all seven views, PO-only views included) so the filter logic is
+// actually checked, not just "renders without throwing"; PO's *filtered* nav
+// needs a DOM/effects environment this SSR harness doesn't have — flagged as
+// a gap for the TD, exercise by hand in the live-app pass.
+test('App default (engineer) mode nav lists all seven views', () => {
+  const html = renderToStaticMarkup(<App />)
+  for (const v of ['Workflows', 'Draft', 'Pipeline', 'Runs', 'Roles', 'Settings', 'Playground']) {
+    expect(html).toContain(`>${v}</button>`)
+  }
 })
 
 // The expanded card is the runs_reports mock: tiles, summary, per-file list.

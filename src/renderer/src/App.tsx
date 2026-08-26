@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { DrainState, RepoData, RunState } from '../../preload/index'
+import type { DrainState, RepoData, RunState, ViewMode } from '../../preload/index'
 import { Playground } from './Playground'
 import { LogLine, PipelineView } from './PipelineView'
 import { RolesView } from './RolesView'
@@ -7,6 +7,7 @@ import { RunsView } from './RunsView'
 import { SettingsView } from './SettingsView'
 import { WorkflowsView } from './WorkflowsView'
 import { DraftView } from './DraftView'
+import { LABEL } from './ui'
 
 // Nav order + Material Symbols glyph per view (mock: any code.html sidebar).
 const VIEWS = {
@@ -19,6 +20,10 @@ const VIEWS = {
   Playground: 'terminal'
 } as const
 type View = keyof typeof VIEWS
+
+// PO hat = brief, queue, review outcomes (CONTEXT.md) — ticks and the Backlog
+// live in WorkflowsView, so queueing keeps it. Presentation only (Decision 9).
+const PO_VIEWS: View[] = ['Draft', 'Workflows', 'Pipeline', 'Runs']
 
 const timeAgo = (iso: string): string => {
   const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60_000)
@@ -39,6 +44,9 @@ function App(): React.JSX.Element {
   // Post-Apply handoff: the Draft view names a slug, WorkflowsView opens it
   // once and clears it (consume-once, no lifted editor state).
   const [openSlug, setOpenSlug] = useState<string | null>(null)
+  // Which views the sidebar offers. Seeded from settings on mount, persisted
+  // straight back through settings:set — no separate IPC, no localStorage.
+  const [mode, setMode] = useState<ViewMode>('engineer')
 
   const refresh = useCallback(
     (path = repo): void => {
@@ -51,6 +59,7 @@ function App(): React.JSX.Element {
   )
 
   useEffect(() => {
+    void window.somni.getSettings().then((s) => setMode(s.viewMode))
     void window.somni.lastRepo().then((path) => {
       if (path) {
         setRepo(path)
@@ -118,6 +127,16 @@ function App(): React.JSX.Element {
     .filter((r) => r.finishedAt == null)
     .map((r) => r.workflow)
   const selected = data.workflows.filter((w) => w.selected)
+  const navViews = Object.entries(VIEWS).filter(
+    ([v]) => mode === 'engineer' || PO_VIEWS.includes(v as View)
+  )
+
+  const switchMode = (m: ViewMode): void => {
+    setMode(m)
+    // Falling back keeps the shell coherent when the current view disappears.
+    if (m === 'po' && !PO_VIEWS.includes(view)) setView('Workflows')
+    void window.somni.setSettings({ viewMode: m })
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-background text-on-surface font-body-md text-body-md">
@@ -128,7 +147,7 @@ function App(): React.JSX.Element {
           </h1>
         </div>
         <div className="flex flex-1 flex-col gap-1">
-          {Object.entries(VIEWS).map(([v, icon]) => (
+          {navViews.map(([v, icon]) => (
             <button
               key={v}
               className={
@@ -148,6 +167,25 @@ function App(): React.JSX.Element {
               {v}
             </button>
           ))}
+        </div>
+        <div className="mt-auto flex flex-col gap-2 border-t border-border-subtle pt-4">
+          <span className={`px-3 ${LABEL}`}>View</span>
+          <div className="flex items-center gap-1 rounded-lg border border-border-subtle bg-surface-container p-1">
+            {(['po', 'engineer'] as const).map((m) => (
+              <button
+                key={m}
+                className={
+                  'flex-1 rounded px-3 py-1.5 text-sm transition-colors ' +
+                  (mode === m
+                    ? 'bg-surface-container-high font-semibold text-on-surface'
+                    : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface')
+                }
+                onClick={() => switchMode(m)}
+              >
+                {m === 'po' ? 'PO' : 'Engineer'}
+              </button>
+            ))}
+          </div>
         </div>
       </nav>
       <main className="relative ml-sidebar-width flex h-screen flex-1 flex-col overflow-hidden bg-background">

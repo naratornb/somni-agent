@@ -11,9 +11,10 @@ import {
   sendChat
 } from './chat'
 import { isRunning, lockedGit, RunState, wakeDrain } from './executor'
-import { diffFiles, RunStats, runStats } from './report'
+import { diffFiles, runnerText, RunStats, runStats } from './report'
+import { getRunner } from './runners'
 import * as store from './store'
-import { atomicWrite, Settings } from './store'
+import { atomicWrite, RunnerName, Settings } from './store'
 
 // Machine-level settings (architecture.md §4): last-opened repo + global defaults.
 const settingsPath = (): string => join(app.getPath('userData'), 'settings.json')
@@ -58,6 +59,24 @@ function listRuns(repo: string): RunRow[] {
     })
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
 }
+
+// Refine with AI (M11 Decision 1): one read-only runner call, no interview, no
+// disk write — the renderer holds the result inert until the user Applies it.
+const REFINE_PROMPTS = {
+  task:
+    'Rewrite the following somni Task prompt into a sharper, self-contained brief ' +
+    'for an unattended coding agent working in this repo. Reply with ONLY the ' +
+    'rewritten prompt — no commentary, no code fences.',
+  role:
+    'Rewrite the following somni Role preamble into a sharper, self-contained ' +
+    'persona instruction for an unattended coding agent working in this repo. ' +
+    'Reply with ONLY the rewritten preamble — no commentary, no code fences.'
+}
+
+// ponytail: memoized for the app session, keyed by runner+binary. Repo-level
+// config.json binary overrides aren't consulted — add a repo param if they ever
+// need to be.
+const modelCache = new Map<string, Promise<string[]>>()
 
 const gitError = (err: unknown): string =>
   String((err as { stderr?: string })?.stderr || (err as Error)?.message || err).trim()
@@ -194,6 +213,32 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
       BrowserWindow.getAllWindows()[0]?.webContents.send('chat:event', ev)
     )
   })
+  // Stateless one-shot — the renderer disables its own button while pending.
+  // Uses the global-settings profile, as `chat:send` does: role overrides are
+  // not consulted (Decision 1).
+  ipcMain.handle('field:refine', async (_e, repo: string, kind: 'task' | 'role', text: string) => {
+    if (!text.trim()) return { ok: false, error: 'nothing to refine' }
+    const settings = readSettings()
+    const out = await runnerText(
+      settings,
+      `${REFINE_PROMPTS[kind]}\n\n---\n${text}`,
+      { readOnly: true },
+      repo
+    )
+    return out ? { ok: true, text: out } : { ok: false, error: 'refine failed — no reply' }
+  })
+
+  // Model suggestions for the combo boxes. The inherit case (role editor sends
+  // undefined) resolves to the settings runner here, never renderer-side.
+  ipcMain.handle('models:list', (_e, runnerName?: RunnerName) => {
+    const settings = readSettings()
+    const runner = getRunner(runnerName ?? settings.runner ?? 'claude', settings)
+    const key = `${runner.name}:${runner.binary}`
+    const cached = modelCache.get(key) ?? runner.listModels(runner.binary)
+    modelCache.set(key, cached)
+    return cached
+  })
+
   ipcMain.handle('proposal:apply', (_e, repo: string, slug: string, proposal: ChatProposal) =>
     applyProposal(repo, slug, proposal)
   )

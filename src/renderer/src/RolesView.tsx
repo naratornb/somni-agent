@@ -1,11 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Effort, Role, RunnerName } from '../../preload/index'
+import { RefineControl } from './chatShared'
 import { BTN_DANGER, BTN_GHOST, BTN_PRIMARY, CHIP, INPUT, INPUT_TITLE, LABEL, TEXTAREA } from './ui'
 
 type Props = { repo: string; roles: Role[]; refresh: () => void }
 
 export function RolesView({ repo, roles, refresh }: Props): React.JSX.Element {
   const [editing, setEditing] = useState<Role | null>(null)
+  // Suggestions only — main resolves the inherit case (undefined runner).
+  const [models, setModels] = useState<string[]>([])
+
+  useEffect(() => {
+    void window.somni.listModels(editing?.runner).then(setModels)
+  }, [editing?.runner])
 
   const save = async (): Promise<void> => {
     if (!editing) return
@@ -36,6 +43,12 @@ export function RolesView({ repo, roles, refresh }: Props): React.JSX.Element {
           value={editing.preamble}
           onChange={(e) => setEditing({ ...editing, preamble: e.target.value })}
         />
+        <RefineControl
+          repo={repo}
+          kind="role"
+          text={editing.preamble}
+          onApply={(text) => setEditing({ ...editing, preamble: text })}
+        />
         <div className="flex items-center gap-3">
           <span className={LABEL}>Overrides</span>
           <select
@@ -51,10 +64,16 @@ export function RolesView({ repo, roles, refresh }: Props): React.JSX.Element {
           </select>
           <input
             className={`${INPUT} flex-1 font-mono-code`}
+            list="role-model-list"
             placeholder="Model (inherit)"
             value={editing.model ?? ''}
             onChange={(e) => setEditing({ ...editing, model: e.target.value })}
           />
+          <datalist id="role-model-list">
+            {models.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
           <select
             className={INPUT}
             value={editing.effort ?? ''}

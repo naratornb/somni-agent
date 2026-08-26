@@ -1,5 +1,26 @@
-import { describe, it, expect } from 'vitest'
+import { execFile } from 'child_process'
+import { mkdtempSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { promisify } from 'util'
+import { describe, it, expect, vi } from 'vitest'
 import { antigravityRunner, claudeRunner, getRunner } from './runners'
+
+// Wrap the real execFile so listModels tests can assert *how* it was called
+// (the timeout ceiling) without losing the real spawn the fixture tests need.
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>()
+  const { promisify } = await import('util')
+  // runners.ts calls `promisify(execFile)` once at import time, which then
+  // always dispatches through execFile's `promisify.custom` implementation
+  // (resolves {stdout, stderr} — a bare `vi.fn(actual.execFile)` wrapper would
+  // silently drop that symbol and break the real shape). Spy on the custom
+  // impl itself so calls are observable without changing behavior.
+  const execFile = Object.assign(actual.execFile.bind(actual), {
+    [promisify.custom]: vi.fn(actual.execFile[promisify.custom])
+  })
+  return { ...actual, execFile }
+})
 
 // The two adapters are the only place runner differences live (§5), so the same
 // four questions are asked of both: read-only argv, autonomous argv, resume
@@ -174,5 +195,48 @@ describe('token usage on the result event', () => {
   it('leaves both counts unset when the CLI reports no usage', () => {
     const ev = claudeRunner.parseLine(JSON.stringify({ type: 'result', subtype: 'success' }))
     expect(ev).toMatchObject({ promptTokens: undefined, completionTokens: undefined })
+  })
+})
+
+// listModels is deliberately asymmetric: claude has no `models` subcommand, agy
+// does. Fixture scripts stand in for the real CLI.
+describe('listModels', () => {
+  const fixture = (body: string): string => {
+    const path = join(mkdtempSync(join(tmpdir(), 'somni-agy-')), 'agy')
+    writeFileSync(path, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+    return path
+  }
+
+  it('returns the curated claude aliases without spawning anything', async () => {
+    await expect(claudeRunner.listModels('claude')).resolves.toEqual(['fable', 'opus', 'sonnet'])
+  })
+
+  it('parses ids before the first tab and ignores untabbed stderr noise', async () => {
+    const bin = fixture(
+      'echo "Fetching available models..." >&2\n' +
+        'printf "gemini-3.1-pro-high\\tGemini 3.1 Pro (High)\\nclaude-sonnet-4-6\\tClaude Sonnet 4.6\\n"'
+    )
+    await expect(antigravityRunner.listModels(bin)).resolves.toEqual([
+      'gemini-3.1-pro-high',
+      'claude-sonnet-4-6'
+    ])
+  })
+
+  it('falls back to the pinned list when the CLI fails or is missing', async () => {
+    const failing = await antigravityRunner.listModels(fixture('exit 1'))
+    expect(failing).toContain('gemini-3.1-pro-high')
+    await expect(antigravityRunner.listModels('/nope/agy')).resolves.toEqual(failing)
+    // Untabbed-only output is a parse miss, not a success.
+    await expect(antigravityRunner.listModels(fixture('echo hello'))).resolves.toEqual(failing)
+  })
+
+  // A hung `agy models` must not hang the app forever — confirm the 10s ceiling
+  // is actually passed to execFile rather than relying on a real 10s wait.
+  it('honors a 10s timeout on the agy models spawn', async () => {
+    const bin = fixture('printf "gemini-3.1-pro-high\\tGemini\\n"')
+    await antigravityRunner.listModels(bin)
+    const spy = vi.mocked(execFile[promisify.custom])
+    const call = spy.mock.calls.find((c) => c[0] === bin)
+    expect(call?.[2]).toMatchObject({ timeout: 10_000 })
   })
 })
