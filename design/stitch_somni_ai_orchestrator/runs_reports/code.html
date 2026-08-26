@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>somni - Runs</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&amp;family=JetBrains+Mono:wght@400;500&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "status-queued": "#3F3F46",
+                      "status-skipped": "#71717A",
+                      "on-secondary-fixed": "#1b1b1f",
+                      "on-tertiary-fixed-variant": "#6b3b00",
+                      "status-cancelled": "#F59E0B",
+                      "on-tertiary": "#4b2800",
+                      "on-error": "#690005",
+                      "inverse-surface": "#e5e1e4",
+                      "surface": "#131315",
+                      "on-secondary": "#303034",
+                      "tertiary": "#ffb875",
+                      "on-surface": "#e5e1e4",
+                      "primary-fixed": "#e5deff",
+                      "status-completed": "#10B981",
+                      "on-secondary-container": "#b6b4b9",
+                      "surface-elevated": "#161618",
+                      "surface-tint": "#c8bfff",
+                      "primary-fixed-dim": "#c8bfff",
+                      "secondary-container": "#47464b",
+                      "inverse-primary": "#5c47ce",
+                      "surface-container": "#201f21",
+                      "surface-bright": "#39393b",
+                      "tertiary-container": "#a55e00",
+                      "on-primary": "#2c009e",
+                      "tertiary-fixed": "#ffdcc0",
+                      "on-background": "#e5e1e4",
+                      "on-tertiary-fixed": "#2d1600",
+                      "surface-container-highest": "#353437",
+                      "error-container": "#93000a",
+                      "outline-variant": "#474554",
+                      "surface-container-high": "#2a2a2c",
+                      "outline": "#928e9f",
+                      "on-surface-variant": "#c9c4d6",
+                      "border-subtle": "#252529",
+                      "background": "#131315",
+                      "surface-container-low": "#1b1b1d",
+                      "on-primary-fixed-variant": "#432bb5",
+                      "inverse-on-surface": "#313032",
+                      "status-failed": "#EF4444",
+                      "primary": "#c8bfff",
+                      "surface-dim": "#131315",
+                      "status-running": "#6d5ae0",
+                      "on-error-container": "#ffdad6",
+                      "on-tertiary-container": "#fff2e9",
+                      "on-primary-container": "#f7f2ff",
+                      "secondary-fixed-dim": "#c8c5cb",
+                      "surface-container-lowest": "#0e0e10",
+                      "primary-container": "#6d5ae0",
+                      "secondary-fixed": "#e4e1e7",
+                      "on-primary-fixed": "#190064",
+                      "secondary": "#c8c5cb",
+                      "on-secondary-fixed-variant": "#47464b",
+                      "tertiary-fixed-dim": "#ffb875",
+                      "error": "#ffb4ab",
+                      "surface-variant": "#353437"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "margin-page": "2rem",
+                      "stack-gap": "0.75rem",
+                      "editor-panel-width": "340px",
+                      "sidebar-width": "240px",
+                      "gutter": "1rem",
+                      "card-padding": "1rem"
+              },
+              "fontFamily": {
+                      "headline-md": [
+                              "Inter"
+                      ],
+                      "mono-label": [
+                              "JetBrains Mono"
+                      ],
+                      "body-md": [
+                              "Inter"
+                      ],
+                      "mono-code": [
+                              "JetBrains Mono"
+                      ],
+                      "headline-lg": [
+                              "Inter"
+                      ],
+                      "body-sm": [
+                              "Inter"
+                      ]
+              },
+              "fontSize": {
+                      "headline-md": [
+                              "18px",
+                              {
+                                      "lineHeight": "24px",
+                                      "letterSpacing": "-0.01em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "mono-label": [
+                              "11px",
+                              {
+                                      "lineHeight": "14px",
+                                      "letterSpacing": "0.05em",
+                                      "fontWeight": "500"
+                              }
+                      ],
+                      "body-md": [
+                              "14px",
+                              {
+                                      "lineHeight": "20px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "mono-code": [
+                              "13px",
+                              {
+                                      "lineHeight": "18px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "headline-lg": [
+                              "24px",
+                              {
+                                      "lineHeight": "32px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "body-sm": [
+                              "12px",
+                              {
+                                      "lineHeight": "16px",
+                                      "fontWeight": "400"
+                              }
+                      ]
+              }
+            },
+          }
+        }
+      </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body-md h-screen flex overflow-hidden">
+<!-- SideNavBar -->
+<nav class="bg-background dark:bg-background h-screen w-sidebar-width fixed left-0 top-0 border-r border-border-subtle flex flex-col h-full py-6 px-4 z-50">
+<div class="mb-8 px-3">
+<h1 class="text-headline-md font-headline-md font-bold text-primary dark:text-primary tracking-tight">somni</h1>
+</div>
+<div class="flex-1 flex flex-col gap-1">
+<a class="text-on-surface-variant dark:text-on-surface-variant hover:text-on-surface px-3 py-2 hover:bg-surface-container dark:hover:bg-surface-container transition-colors rounded-lg flex items-center gap-3" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="account_tree">account_tree</span>
+                Workflows
+            </a>
+<a class="text-on-surface-variant dark:text-on-surface-variant hover:text-on-surface px-3 py-2 hover:bg-surface-container dark:hover:bg-surface-container transition-colors rounded-lg flex items-center gap-3" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="chat_bubble">chat_bubble</span>
+                Draft
+            </a>
+<a class="text-on-surface-variant dark:text-on-surface-variant hover:text-on-surface px-3 py-2 hover:bg-surface-container dark:hover:bg-surface-container transition-colors rounded-lg flex items-center gap-3" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="speed">speed</span>
+                Pipeline
+            </a>
+<a class="bg-surface-container-high dark:bg-surface-container-high text-on-surface rounded-lg font-semibold px-3 py-2 flex items-center gap-3 shadow-sm border border-border-subtle" href="#">
+<span class="material-symbols-outlined text-[20px] text-primary" data-icon="history">history</span>
+                Runs
+            </a>
+<a class="text-on-surface-variant dark:text-on-surface-variant hover:text-on-surface px-3 py-2 hover:bg-surface-container dark:hover:bg-surface-container transition-colors rounded-lg flex items-center gap-3" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="groups">groups</span>
+                Roles
+            </a>
+<a class="text-on-surface-variant dark:text-on-surface-variant hover:text-on-surface px-3 py-2 hover:bg-surface-container dark:hover:bg-surface-container transition-colors rounded-lg flex items-center gap-3" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="settings">settings</span>
+                Settings
+            </a>
+<a class="text-on-surface-variant dark:text-on-surface-variant hover:text-on-surface px-3 py-2 hover:bg-surface-container dark:hover:bg-surface-container transition-colors rounded-lg flex items-center gap-3" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="terminal">terminal</span>
+                Playground
+            </a>
+</div>
+</nav>
+<!-- Main Content Area -->
+<main class="ml-sidebar-width flex-1 flex flex-col h-full bg-background relative overflow-hidden">
+<!-- TopAppBar -->
+<header class="bg-background dark:bg-background border-b border-border-subtle flex justify-between items-center px-gutter py-3 h-14 shrink-0 z-40 relative">
+<div class="flex items-center gap-2">
+<span class="font-mono-code text-mono-code text-on-surface-variant truncate max-w-lg" title="/Users/flook/.claude/jobs/3d1b4151/tmp/e2e/repo">/Users/flook/.claude/jobs/3d1b4151/tmp/e2e/repo</span>
+</div>
+<div class="flex items-center gap-2">
+<button class="bg-surface-container hover:bg-surface-container-high border border-border-subtle text-on-surface px-3 py-1.5 rounded text-sm transition-colors flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px]" data-icon="folder">folder</span>
+                    Choose repo...
+                </button>
+<button class="bg-surface-container hover:bg-surface-container-high border border-border-subtle text-on-surface px-3 py-1.5 rounded text-sm transition-colors flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px]" data-icon="refresh">refresh</span>
+                    Refresh
+                </button>
+</div>
+</header>
+<!-- Runs Content -->
+<div class="flex-1 overflow-y-auto p-gutter scrollbar-hide">
+<div class="max-w-5xl mx-auto flex flex-col gap-stack-gap pb-20">
+<!-- Expanded Run Card (Morning Report) -->
+<div class="bg-surface-elevated border border-border-subtle rounded-lg overflow-hidden flex flex-col shadow-sm transition-all duration-200">
+<!-- Header (Collapsed state equivalent) -->
+<div class="p-4 flex items-center justify-between border-b border-border-subtle cursor-pointer hover:bg-surface-container transition-colors">
+<div class="flex items-center gap-4">
+<div class="flex flex-col">
+<span class="font-headline-md text-headline-md text-on-surface">Hello World Feature</span>
+<span class="font-mono-code text-mono-code text-on-surface-variant mt-1 text-xs">somni/hello-world-feature-20260825233036</span>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<span class="bg-status-completed/10 text-status-completed px-2.5 py-0.5 rounded-full text-xs font-medium border border-status-completed/20">Completed</span>
+<span class="font-mono-code text-mono-code text-on-surface-variant text-xs">8/26/2026, 9:30:36 AM → 9:32:15 AM</span>
+<span class="material-symbols-outlined text-on-surface-variant transform rotate-180 transition-transform" data-icon="expand_more">expand_more</span>
+</div>
+</div>
+<!-- Expanded Content (Morning Report Details) -->
+<div class="p-6 bg-surface-dim flex flex-col gap-6">
+<!-- Summary Stats -->
+<div class="grid grid-cols-4 gap-4">
+<div class="bg-surface p-4 rounded border border-border-subtle flex flex-col gap-1">
+<span class="font-mono-label text-mono-label text-on-surface-variant uppercase tracking-wider">Duration</span>
+<span class="font-headline-lg text-headline-lg text-on-surface">1m 39s</span>
+</div>
+<div class="bg-surface p-4 rounded border border-border-subtle flex flex-col gap-1">
+<span class="font-mono-label text-mono-label text-on-surface-variant uppercase tracking-wider">Cost</span>
+<span class="font-headline-lg text-headline-lg text-on-surface">$0.04</span>
+</div>
+<div class="bg-surface p-4 rounded border border-border-subtle flex flex-col gap-1">
+<span class="font-mono-label text-mono-label text-on-surface-variant uppercase tracking-wider">Tokens Prompt</span>
+<span class="font-headline-lg text-headline-lg text-on-surface">12.4k</span>
+</div>
+<div class="bg-surface p-4 rounded border border-border-subtle flex flex-col gap-1">
+<span class="font-mono-label text-mono-label text-on-surface-variant uppercase tracking-wider">Tokens Comp.</span>
+<span class="font-headline-lg text-headline-lg text-on-surface">1.2k</span>
+</div>
+</div>
+<!-- Diff Summary & Files -->
+<div class="grid grid-cols-3 gap-6">
+<!-- Main Diff Content -->
+<div class="col-span-2 flex flex-col gap-4">
+<h3 class="font-headline-md text-headline-md text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-[18px] text-primary" data-icon="description">description</span>
+                                    Implementation Summary
+                                </h3>
+<div class="bg-surface border border-border-subtle rounded p-4 text-on-surface-variant font-body-sm leading-relaxed whitespace-pre-wrap">Implemented a basic Hello World feature following standard conventions. 
+- Created `src/hello.js` with a function to return the greeting.
+- Added corresponding unit tests in `tests/hello.test.js`.
+- Updated `package.json` to include new test scripts if needed.
+All tests passed successfully during the validation phase.</div>
+</div>
+<!-- File Changes & Actions -->
+<div class="flex flex-col gap-4">
+<h3 class="font-headline-md text-headline-md text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-[18px] text-primary" data-icon="folder_open">folder_open</span>
+                                    Files Changed (3)
+                                </h3>
+<div class="bg-surface border border-border-subtle rounded flex flex-col text-xs font-mono-code divide-y divide-border-subtle">
+<div class="p-2 flex items-center justify-between hover:bg-surface-container transition-colors">
+<span class="text-status-completed">+ src/hello.js</span>
+<span class="text-on-surface-variant">4 lines</span>
+</div>
+<div class="p-2 flex items-center justify-between hover:bg-surface-container transition-colors">
+<span class="text-status-completed">+ tests/hello.test.js</span>
+<span class="text-on-surface-variant">12 lines</span>
+</div>
+<div class="p-2 flex items-center justify-between hover:bg-surface-container transition-colors">
+<span class="text-tertiary">~ package.json</span>
+<span class="text-on-surface-variant">2 lines</span>
+</div>
+</div>
+<div class="mt-2 flex flex-col gap-2">
+<button class="bg-primary-container text-white rounded px-4 py-2 text-sm font-semibold hover:bg-primary-container/90 transition-colors flex justify-center items-center gap-2 w-full">
+<span class="material-symbols-outlined text-[18px]" data-icon="account_tree">account_tree</span>
+                                        Switch to Branch
+                                    </button>
+<div class="grid grid-cols-2 gap-2">
+<button class="bg-surface border border-border-subtle text-on-surface rounded px-3 py-1.5 text-xs hover:bg-surface-container transition-colors flex justify-center items-center gap-1">
+<span class="material-symbols-outlined text-[16px]" data-icon="open_in_new">open_in_new</span>
+                                            Worktree
+                                        </button>
+<button class="bg-surface border border-border-subtle text-error rounded px-3 py-1.5 text-xs hover:bg-error-container/20 transition-colors flex justify-center items-center gap-1">
+<span class="material-symbols-outlined text-[16px]" data-icon="delete_outline">delete_outline</span>
+                                            Clean up
+                                        </button>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Collapsed Run Card -->
+<div class="bg-surface-elevated border border-border-subtle rounded-lg p-4 flex items-center justify-between hover:border-surface-tint/50 transition-colors cursor-pointer group">
+<div class="flex items-center gap-4">
+<div class="flex flex-col">
+<span class="font-headline-md text-headline-md text-on-surface group-hover:text-primary transition-colors">Auth Refactor</span>
+<span class="font-mono-code text-mono-code text-on-surface-variant mt-1 text-xs">somni/auth-refactor-20260824101522</span>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<span class="bg-status-failed/10 text-status-failed px-2.5 py-0.5 rounded-full text-xs font-medium border border-status-failed/20">Failed</span>
+<span class="font-mono-code text-mono-code text-on-surface-variant text-xs">8/24/2026, 10:15:22 AM → 10:28:45 AM</span>
+<span class="material-symbols-outlined text-on-surface-variant" data-icon="expand_more">expand_more</span>
+</div>
+</div>
+<!-- Collapsed Run Card -->
+<div class="bg-surface-elevated border border-border-subtle rounded-lg p-4 flex items-center justify-between hover:border-surface-tint/50 transition-colors cursor-pointer group opacity-75">
+<div class="flex items-center gap-4">
+<div class="flex flex-col">
+<span class="font-headline-md text-headline-md text-on-surface group-hover:text-primary transition-colors">Update Dependencies</span>
+<span class="font-mono-code text-mono-code text-on-surface-variant mt-1 text-xs">somni/deps-update-20260822080000</span>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<span class="bg-status-completed/10 text-status-completed px-2.5 py-0.5 rounded-full text-xs font-medium border border-status-completed/20">Completed</span>
+<span class="font-mono-code text-mono-code text-on-surface-variant text-xs">8/22/2026, 8:00:00 AM → 8:05:12 AM</span>
+<span class="material-symbols-outlined text-on-surface-variant" data-icon="expand_more">expand_more</span>
+</div>
+</div>
+</div>
+</div>
+</main>
+</body></html>
