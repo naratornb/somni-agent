@@ -2,7 +2,7 @@
 // (ipcMain.handle captures the handlers, app.getPath points at a temp userData);
 // everything below it — git, .somni/ files — is real, run against scratch repos.
 import { execFileSync } from 'child_process'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -173,5 +173,117 @@ describe('runs:details', () => {
       stats: null,
       branchExists: false
     })
+  })
+})
+
+// M11 Decision 1: one read-only runner call, result inert in the renderer.
+// A fake `claude` on the settings path stands in for the CLI.
+describe('field:refine', () => {
+  const fakeClaude = (): string => {
+    const path = join(mkdtempSync(join(tmpdir(), 'somni-bin-')), 'claude')
+    writeFileSync(
+      path,
+      '#!/bin/sh\necho \'{"type":"result","subtype":"success","is_error":false,"result":"REFINED"}\'\n',
+      { mode: 0o755 }
+    )
+    writeFileSync(
+      join(userData, 'settings.json'),
+      JSON.stringify({ runner: 'claude', claudeBinary: path })
+    )
+    return path
+  }
+
+  it('returns the rewritten text and writes nothing to the repo', async () => {
+    fakeClaude()
+    expect(await invoke('field:refine', repo, 'task', 'do stuff')).toEqual({
+      ok: true,
+      text: 'REFINED'
+    })
+    expect(git(repo, 'status', '--porcelain')).toBe('')
+  })
+
+  it('refuses empty text without spawning', async () => {
+    expect(await invoke('field:refine', repo, 'role', '   ')).toEqual({
+      ok: false,
+      error: 'nothing to refine'
+    })
+  })
+
+  // §7 read-only invariant: the refine turn must carry the read-only allowlist
+  // and never the autonomy bypass, regardless of kind.
+  it('runs the read-only argv shape — allowedTools present, autonomy bypass absent', async () => {
+    const argvLog = join(mkdtempSync(join(tmpdir(), 'somni-argvlog-')), 'argv.log')
+    const path = join(mkdtempSync(join(tmpdir(), 'somni-bin-')), 'claude')
+    writeFileSync(
+      path,
+      `#!/bin/sh\necho "$@" >> '${argvLog}'\n` +
+        'echo \'{"type":"result","subtype":"success","is_error":false,"result":"ok"}\'\n',
+      { mode: 0o755 }
+    )
+    writeFileSync(
+      join(userData, 'settings.json'),
+      JSON.stringify({ runner: 'claude', claudeBinary: path })
+    )
+    expect(await invoke('field:refine', repo, 'task', 'do stuff')).toEqual({
+      ok: true,
+      text: 'ok'
+    })
+    const argv = readFileSync(argvLog, 'utf8')
+    expect(argv).toContain('--allowedTools Read,Glob,Grep')
+    expect(argv).not.toContain('--dangerously-skip-permissions')
+  })
+
+  it('surfaces a failure from the runner as {ok:false, error}', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'somni-bin-')), 'claude')
+    writeFileSync(
+      path,
+      '#!/bin/sh\necho \'{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom"}\'\nexit 1\n',
+      { mode: 0o755 }
+    )
+    writeFileSync(
+      join(userData, 'settings.json'),
+      JSON.stringify({ runner: 'claude', claudeBinary: path })
+    )
+    const res = await invoke<{ ok: boolean; error?: string }>(
+      'field:refine',
+      repo,
+      'role',
+      'do stuff'
+    )
+    expect(res).toEqual({ ok: false, error: 'refine failed — no reply' })
+  })
+})
+
+// M11 Decision 6: runner resolved in main, memoized per session so a deleted
+// fixture doesn't break a second call.
+describe('models:list', () => {
+  const fixtureAgy = (): string => {
+    const path = join(mkdtempSync(join(tmpdir(), 'somni-agy-')), 'agy')
+    writeFileSync(path, '#!/bin/sh\nprintf "model-a\\tA\\nmodel-b\\tB\\n"\n', { mode: 0o755 })
+    return path
+  }
+
+  it('returns parsed ids from a fake agy binary named explicitly', async () => {
+    const bin = fixtureAgy()
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ antigravityBinary: bin }))
+    expect(await invoke('models:list', 'antigravity')).toEqual(['model-a', 'model-b'])
+  })
+
+  it('resolves an undefined runner to the settings default, in main', async () => {
+    const bin = fixtureAgy()
+    writeFileSync(
+      join(userData, 'settings.json'),
+      JSON.stringify({ runner: 'antigravity', antigravityBinary: bin })
+    )
+    expect(await invoke('models:list', undefined)).toEqual(['model-a', 'model-b'])
+  })
+
+  it('serves the second call from the memo — deleting the fixture still answers', async () => {
+    const bin = fixtureAgy()
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ antigravityBinary: bin }))
+    const first = await invoke('models:list', 'antigravity')
+    rmSync(bin)
+    const second = await invoke('models:list', 'antigravity')
+    expect(second).toEqual(first)
   })
 })

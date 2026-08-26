@@ -16,6 +16,7 @@ export type Effort = 'low' | 'medium' | 'high'
 export type ReportStyle = 'minimal' | 'compact' | 'full'
 export type RunnerName = 'claude' | 'antigravity'
 export const RUNNER_NAMES: RunnerName[] = ['claude', 'antigravity']
+export type ViewMode = 'po' | 'engineer'
 export type Profile = { runner?: RunnerName; model?: string; effort?: Effort }
 export type Settings = Profile & {
   concurrency?: number
@@ -28,13 +29,16 @@ export type Settings = Profile & {
   // across restarts and is re-armed on app ready.
   nightlyTime?: string // "HH:MM"
   nightlyArmed?: boolean
+  // Which sidebar views are shown (M11 Decision 8) — presentation only.
+  viewMode?: ViewMode
 }
 
 export const SETTINGS_DEFAULTS = {
   concurrency: 2,
   timeoutMinutes: 30,
   reportStyle: 'minimal' as ReportStyle,
-  runner: 'claude' as RunnerName
+  runner: 'claude' as RunnerName,
+  viewMode: 'engineer' as ViewMode
 }
 
 export type Role = { slug: string; name: string; preamble: string } & Profile

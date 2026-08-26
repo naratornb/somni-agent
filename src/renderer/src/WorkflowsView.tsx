@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ChatProposal, Role, Task, Workflow } from '../../preload/index'
+import { RefineControl } from './chatShared'
 import { DraftChatPanel } from './DraftChatPanel'
 import { ICON_BTN, INPUT as BASE_INPUT, INPUT_TITLE } from './ui'
 
@@ -203,6 +204,12 @@ export function WorkflowsView({
                         placeholder="Task prompt…"
                         value={t.prompt}
                         onChange={(e) => patchTask(i, { prompt: e.target.value })}
+                      />
+                      <RefineControl
+                        repo={repo}
+                        kind="task"
+                        text={t.prompt}
+                        onApply={(text) => patchTask(i, { prompt: text })}
                       />
                     </div>
                   </div>

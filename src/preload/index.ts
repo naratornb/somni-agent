@@ -4,6 +4,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 export type Effort = 'low' | 'medium' | 'high'
 export type ReportStyle = 'minimal' | 'compact' | 'full'
 export type RunnerName = 'claude' | 'antigravity'
+export type ViewMode = 'po' | 'engineer'
 export type Settings = {
   concurrency: number
   timeoutMinutes: number
@@ -15,6 +16,7 @@ export type Settings = {
   effort?: Effort
   nightlyTime?: string
   nightlyArmed?: boolean
+  viewMode: ViewMode
 }
 export type Role = {
   slug: string
@@ -108,10 +110,16 @@ export const DRAFT_KEY = '_draft'
 export const PROPOSE_NOW =
   'Stop interviewing and propose the workflow now, from my answers so far plus ' +
   'your own stated assumptions for anything still open.'
+// The fixed Refine structure message (keep in sync with REFINE_STRUCTURE in chat.ts).
+export const REFINE_STRUCTURE =
+  "Reread this workflow's current definition and propose a refined version now: " +
+  'tighter task boundaries, better ordering, sharper prompts, the right role for ' +
+  'each task. Keep the intent — refine how it gets there.'
 
 const somni = {
   draftKey: DRAFT_KEY,
   proposeNow: PROPOSE_NOW,
+  refineStructure: REFINE_STRUCTURE,
   runTask: (prompt: string): Promise<void> => ipcRenderer.invoke('task:run', prompt),
   onTaskEvent: (cb: (ev: unknown) => void): (() => void) => on('task:event', cb),
   startPipeline: (repo: string, slugs: string[]): Promise<void> =>
@@ -138,7 +146,17 @@ const somni = {
   onRunLog: (cb: (log: { runId: string; taskIndex: number; text: string }) => void): (() => void) =>
     on('run:log', (p) => cb(p as { runId: string; taskIndex: number; text: string })),
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('settings:get'),
-  setSettings: (s: Settings): Promise<void> => ipcRenderer.invoke('settings:set', s),
+  setSettings: (s: Partial<Settings>): Promise<void> => ipcRenderer.invoke('settings:set', s),
+  // One-shot Refine (M11). The result is inert — the renderer applies it into
+  // its editing buffer only; nothing reaches disk until the editor's Save.
+  refineField: (
+    repo: string,
+    kind: 'task' | 'role',
+    text: string
+  ): Promise<{ ok: boolean; text?: string; error?: string }> =>
+    ipcRenderer.invoke('field:refine', repo, kind, text),
+  // `runner` undefined = the role editor's inherit case; main resolves it.
+  listModels: (runner?: RunnerName): Promise<string[]> => ipcRenderer.invoke('models:list', runner),
   listRuns: (repo: string): Promise<RunRow[]> => ipcRenderer.invoke('runs:list', repo),
   runReport: (repo: string, runId: string): Promise<string | null> =>
     ipcRenderer.invoke('runs:report', repo, runId),

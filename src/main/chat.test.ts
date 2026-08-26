@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   applyProposal,
+  draftPreamble,
   DRAFT_KEY,
   killChats,
   loadChat,
@@ -578,5 +579,18 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     await Promise.all([firstDone, otherDone])
     expect(loadChat(repo, slug).busy).toBe(false)
     expect(otherEvents.some((e) => e.kind === 'done')).toBe(true)
+  })
+})
+
+// M11 Decision 4: an editor chat must know which file holds the structure.
+describe('draftPreamble workflow file line', () => {
+  it('names the workflow json for an editor slug and omits it for a draft', () => {
+    expect(draftPreamble(['dev'], undefined, 'nightly-cleanup')).toContain(
+      '.somni/workflows/nightly-cleanup.json'
+    )
+    expect(draftPreamble(['dev'])).not.toContain('.somni/workflows/')
+    expect(turnArgs('hi', null, {}, ['dev'], {}, undefined, 'nightly-cleanup')[1]).toContain(
+      '.somni/workflows/nightly-cleanup.json'
+    )
   })
 })

@@ -1,7 +1,16 @@
 // Pieces shared by the two drafting surfaces (§7): the Draft view and the
 // workflow editor's chat panel. Rendering only — every decision is main's.
+import { useState } from 'react'
 import type { ChatProposal, ChatQuestion, Role } from '../../preload/index'
-import { BTN_GHOST, BTN_PRIMARY, CHIP, STATUS_CHIP, STATUS_CHIP_BASE } from './ui'
+import {
+  BTN_GHOST,
+  BTN_GHOST_SM,
+  BTN_PRIMARY,
+  CHIP,
+  ERROR_BANNER,
+  STATUS_CHIP,
+  STATUS_CHIP_BASE
+} from './ui'
 
 // The question/proposal cards reuse the AI bubble treatment so they read as
 // "the AI's turn", not a widget bolted onto the chat (M10-ui.md §4).
@@ -113,6 +122,77 @@ export function ProposalPreview({
           Dismiss
         </button>
       </div>
+    </div>
+  )
+}
+
+// One-shot Refine (M11 Decision 2). The result is inert: Apply hands it to the
+// caller's editing buffer only — disk is written by the editor's own Save.
+export function RefineControl({
+  repo,
+  kind,
+  text,
+  onApply
+}: {
+  repo: string
+  kind: 'task' | 'role'
+  text: string
+  onApply: (text: string) => void
+}): React.JSX.Element {
+  const [pending, setPending] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const refine = async (): Promise<void> => {
+    setPending(true)
+    setError(null)
+    setResult(null)
+    const res = await window.somni.refineField(repo, kind, text)
+    setPending(false)
+    if (!res.ok) return setError(res.error ?? 'refine failed')
+    setResult(res.text ?? '')
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <button
+        className={`flex items-center gap-1 self-start ${BTN_GHOST_SM}`}
+        disabled={!text.trim() || pending}
+        onClick={() => void refine()}
+      >
+        <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
+        {pending ? 'Refining…' : 'Refine'}
+      </button>
+      {error && (
+        <div className={ERROR_BANNER}>
+          {error}
+          <button className={BTN_GHOST_SM} onClick={() => void refine()}>
+            Retry
+          </button>
+        </div>
+      )}
+      {result !== null && (
+        <div className={CARD}>
+          <span className="text-sm text-on-surface-variant">
+            Refined {kind === 'task' ? 'task prompt' : 'role preamble'}
+          </span>
+          <p className="text-sm whitespace-pre-wrap text-on-surface">{result}</p>
+          <div className="flex items-center gap-3 pt-1">
+            <button
+              className={BTN_PRIMARY}
+              onClick={() => {
+                onApply(result)
+                setResult(null)
+              }}
+            >
+              Apply
+            </button>
+            <button className={BTN_GHOST} onClick={() => setResult(null)}>
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

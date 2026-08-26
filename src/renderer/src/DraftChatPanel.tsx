@@ -101,6 +101,13 @@ export function DraftChatPanel({
           </button>
           <button
             className={BTN_GHOST_SM}
+            onClick={() => void send(window.somni.refineStructure)}
+            disabled={sending || running}
+          >
+            Refine structure
+          </button>
+          <button
+            className={BTN_GHOST_SM}
             onClick={() => void send(window.somni.proposeNow)}
             disabled={sending || running}
           >

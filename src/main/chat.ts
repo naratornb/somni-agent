@@ -34,7 +34,15 @@ export const PROPOSE_NOW =
   'Stop interviewing and propose the workflow now, from my answers so far plus ' +
   'your own stated assumptions for anything still open.'
 
-export function draftPreamble(roleSlugs: string[], brief?: string): string {
+// The fixed Refine structure message (M11 Decision 3). Deliberately silent on
+// the proposal format — the preamble's somni-workflow instruction covers it, so
+// the reply lands as an ordinary Proposal.
+export const REFINE_STRUCTURE =
+  "Reread this workflow's current definition and propose a refined version now: " +
+  'tighter task boundaries, better ordering, sharper prompts, the right role for ' +
+  'each task. Keep the intent — refine how it gets there.'
+
+export function draftPreamble(roleSlugs: string[], brief?: string, slug?: string): string {
   return [
     'You are helping draft a somni workflow: an ordered list of tasks, each run',
     'unattended by a coding agent in an isolated git worktree of this repo.',
@@ -59,6 +67,13 @@ export function draftPreamble(roleSlugs: string[], brief?: string): string {
     'Prefer existing roles; list any genuinely new role you need under "roles"',
     '(an existing slug is never overwritten).',
     'Do not create or modify any files.',
+    // Editor chats only: without this a structure refine is structure-blind.
+    ...(slug
+      ? [
+          `This chat edits the existing workflow stored at \`.somni/workflows/${slug}.json\`;`,
+          'read it for the current structure.'
+        ]
+      : []),
     ...(brief ? ['', "This workflow's current brief:", brief] : []),
     '',
     'My request:'
@@ -78,10 +93,11 @@ export function turnArgs(
   profile: Profile,
   roleSlugs: string[],
   settings: Settings = {},
-  brief?: string
+  brief?: string,
+  slug?: string
 ): string[] {
   return chatRunner(profile, settings).buildArgs(
-    sessionId ? message : `${draftPreamble(roleSlugs, brief)}\n${message}`,
+    sessionId ? message : `${draftPreamble(roleSlugs, brief, slug)}\n${message}`,
     { ...profile, resumeSessionId: sessionId ?? undefined, readOnly: true }
   )
 }
@@ -221,13 +237,15 @@ export function sendChat(
   const lines = readLines(repo, slug)
   let sessionId = sessionOf(lines)
   appendLine(repo, slug, { role: 'user', text, ts: new Date().toISOString() })
-  // Editor chats carry the workflow's stored Brief into turn-1 context (§7).
-  const brief = slug === DRAFT_KEY ? undefined : store.loadBrief(repo, slug)
+  // Editor chats carry the workflow's stored Brief and file path into turn-1
+  // context (§7, M11 Decision 4); a _draft has neither.
+  const draft = slug === DRAFT_KEY
+  const brief = draft ? undefined : store.loadBrief(repo, slug)
 
   let reply = ''
   const handle = spawnRunner(
     chatRunner(profile, settings),
-    turnArgs(text, sessionId, profile, roleSlugs, settings, brief),
+    turnArgs(text, sessionId, profile, roleSlugs, settings, brief, draft ? undefined : slug),
     repo,
     (ev) => {
       if (ev.kind === 'session' && ev.sessionId !== sessionId) {
