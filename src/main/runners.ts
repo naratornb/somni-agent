@@ -62,11 +62,17 @@ export const claudeRunner: Runner = {
       return text ? { kind: 'text', text } : null
     }
     if (msg.type === 'result') {
+      const u = (msg.usage ?? {}) as Record<string, unknown>
+      const n = (k: string): number => (typeof u[k] === 'number' ? (u[k] as number) : 0)
+      const prompt =
+        n('input_tokens') + n('cache_creation_input_tokens') + n('cache_read_input_tokens')
       return {
         kind: 'result',
         ok: msg.is_error !== true && msg.subtype === 'success',
         costUsd: typeof msg.total_cost_usd === 'number' ? msg.total_cost_usd : undefined,
         durationMs: typeof msg.duration_ms === 'number' ? msg.duration_ms : undefined,
+        promptTokens: prompt || undefined,
+        completionTokens: n('output_tokens') || undefined,
         detail: typeof msg.result === 'string' ? msg.result : undefined
       }
     }
@@ -114,11 +120,19 @@ export const antigravityRunner: Runner = {
         status?: string
         response?: string
         duration_seconds?: number
+        // Pinned against a live `agy -p … --output-format stream-json` result event:
+        // usage = {input_tokens, output_tokens, thinking_tokens, cache_read_tokens,
+        // total_tokens}; thinking is already inside output (in + out === total).
+        usage?: Record<string, number>
       }
+      const n = (k: string): number => (typeof r.usage?.[k] === 'number' ? r.usage[k] : 0)
+      const prompt = n('input_tokens') + n('cache_read_tokens')
       return {
         kind: 'result',
         ok: r.status === 'SUCCESS',
         // agy reports token usage but no dollar cost — the subscription isn't metered.
+        promptTokens: prompt || undefined,
+        completionTokens: n('output_tokens') || undefined,
         durationMs:
           typeof r.duration_seconds === 'number'
             ? Math.round(r.duration_seconds * 1000)

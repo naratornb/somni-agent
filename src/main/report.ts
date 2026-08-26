@@ -20,7 +20,76 @@ export type Stats = {
   testFiles: string[]
 }
 
+// Structured per-run stats persisted into run.json alongside report.md, so the
+// Runs view can show the morning report without re-running git.
+export type FileChange = { path: string; kind: 'A' | 'M' | 'D'; lines: number }
+export type RunStats = {
+  files: FileChange[]
+  created: number
+  modified: number
+  totalCostUsd?: number
+  promptTokens?: number
+  completionTokens?: number
+}
+
 const isTest = (path: string): boolean => /test|spec/i.test(path)
+
+const lastField = (cols: string[]): string => cols[cols.length - 1]
+
+// `--numstat` gives added/deleted per file but not the change kind; `--name-status`
+// gives the kind. Join them on the (post-rename) path.
+export function fileChanges(nameStatus: string, numstat: string): FileChange[] {
+  const kinds = new Map(
+    nameStatus
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => {
+        const cols = l.split('\t')
+        return [lastField(cols), cols[0][0]] as const
+      })
+  )
+  return numstat
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => {
+      const [added, deleted, ...rest] = l.split('\t')
+      const path = lastField(rest)
+      const kind = kinds.get(path)
+      return {
+        path,
+        kind: kind === 'A' || kind === 'D' ? kind : ('M' as const),
+        // Binary files report "-" for both counts.
+        lines: (Number(added) || 0) + (Number(deleted) || 0)
+      }
+    })
+}
+
+const gitOut = async (worktree: string, args: string[]): Promise<string> =>
+  (await git('git', ['-C', worktree, ...args])).stdout
+
+export async function diffFiles(worktree: string, base = 'HEAD'): Promise<FileChange[]> {
+  return fileChanges(
+    await gitOut(worktree, ['diff', '--name-status', base]),
+    await gitOut(worktree, ['diff', '--numstat', base])
+  )
+}
+
+// Totals come from the task runs; a field stays undefined when no task reported it
+// (agy has no cost, an interrupted run may have no usage at all).
+export function runStats(state: RunState, files: FileChange[]): RunStats {
+  const sum = (pick: (t: TaskRun) => number | undefined): number | undefined => {
+    const vals = state.tasks.map(pick).filter((v): v is number => typeof v === 'number')
+    return vals.length ? vals.reduce((a, b) => a + b, 0) : undefined
+  }
+  return {
+    files,
+    created: files.filter((f) => f.kind === 'A').length,
+    modified: files.filter((f) => f.kind !== 'A').length,
+    totalCostUsd: sum((t) => t.costUsd),
+    promptTokens: sum((t) => t.promptTokens),
+    completionTokens: sum((t) => t.completionTokens)
+  }
+}
 
 export function summarize(nameStatus: string, diffStat: string): Stats {
   const rows = nameStatus
@@ -163,6 +232,11 @@ export async function writeReport(
     if (!text) task.error = 'report task produced no output'
     body += text ? `\n## Summary\n\n${text}\n` : '\n_(report task failed — minimal report only)_\n'
   }
+
+  // Persisted on the state; the executor's final writeState() lands it in run.json.
+  // Computed last so a full-style Report task's cost is inside the totals.
+  const files = await diffFiles(state.worktree, state.baseSha ?? 'HEAD').catch(() => [])
+  state.stats = runStats(state, files)
 
   atomicWrite(join(runDir, 'report.md'), body)
 }

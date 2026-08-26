@@ -9,6 +9,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from
 import { join } from 'path'
 import { promisify } from 'util'
 import { writeReport } from './report'
+import type { RunStats } from './report'
 import { spawnRunner, SpawnHandle } from './runner'
 import { getRunner } from './runners'
 import {
@@ -50,6 +51,8 @@ export type TaskRun = {
   exitCode?: number | null
   costUsd?: number
   durationMs?: number
+  promptTokens?: number
+  completionTokens?: number
   error?: string
   runner?: RunnerName
   model?: string
@@ -68,6 +71,7 @@ export type RunState = {
   startedAt: string
   finishedAt?: string
   tasks: TaskRun[]
+  stats?: RunStats // written at report time; see report.ts (architecture.md §4)
 }
 
 export type RunEvents = {
@@ -543,6 +547,8 @@ async function execute(
             }
             if (ev.kind === 'result') {
               task.costUsd = ev.costUsd
+              task.promptTokens = ev.promptTokens
+              task.completionTokens = ev.completionTokens
               resultMs = ev.durationMs
               detail = ev.detail
             }

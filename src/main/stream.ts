@@ -4,7 +4,15 @@
 export type StreamEvent =
   | { kind: 'session'; sessionId: string }
   | { kind: 'text'; text: string }
-  | { kind: 'result'; ok: boolean; costUsd?: number; durationMs?: number; detail?: string }
+  | {
+      kind: 'result'
+      ok: boolean
+      costUsd?: number
+      durationMs?: number
+      promptTokens?: number
+      completionTokens?: number
+      detail?: string
+    }
 
 export type ParseLine = (line: string) => StreamEvent | null
 
