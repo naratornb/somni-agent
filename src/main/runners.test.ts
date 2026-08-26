@@ -130,3 +130,49 @@ describe('getRunner', () => {
     expect(getRunner('antigravity', settings).binary).toBe('agy')
   })
 })
+
+// Token usage: field names pinned against each CLI's real result event.
+describe('token usage on the result event', () => {
+  it('sums claude cache tokens into the prompt count', () => {
+    const line = JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      usage: {
+        input_tokens: 100,
+        cache_creation_input_tokens: 300,
+        cache_read_input_tokens: 12000,
+        output_tokens: 1200
+      }
+    })
+    expect(claudeRunner.parseLine(line)).toMatchObject({
+      promptTokens: 12400,
+      completionTokens: 1200
+    })
+  })
+
+  it('reads agy usage (cache reads add to prompt, thinking is inside output)', () => {
+    const line = JSON.stringify({
+      event: 'result',
+      result: {
+        status: 'SUCCESS',
+        usage: {
+          input_tokens: 16100,
+          output_tokens: 163,
+          thinking_tokens: 153,
+          cache_read_tokens: 300,
+          total_tokens: 16263
+        }
+      }
+    })
+    expect(antigravityRunner.parseLine(line)).toMatchObject({
+      promptTokens: 16400,
+      completionTokens: 163
+    })
+  })
+
+  it('leaves both counts unset when the CLI reports no usage', () => {
+    const ev = claudeRunner.parseLine(JSON.stringify({ type: 'result', subtype: 'success' }))
+    expect(ev).toMatchObject({ promptTokens: undefined, completionTokens: undefined })
+  })
+})

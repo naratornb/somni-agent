@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { minimalReport, summarize } from './report'
+import { fileChanges, minimalReport, runStats, summarize } from './report'
 import type { RunState } from './executor'
 
 describe('minimal report stats', () => {
@@ -42,5 +42,39 @@ describe('minimal report stats', () => {
     expect(md).toContain('boom')
     expect(md).toContain('| **Total** | | 3s | $0.5000 | |')
     expect(md).toContain('1 file changed')
+  })
+})
+
+describe('structured run stats', () => {
+  it('joins numstat line counts with name-status kinds', () => {
+    const files = fileChanges(
+      'A\tsrc/hello.js\nM\tpackage.json\nD\told.js\nR100\ta.ts\tb.ts',
+      '4\t0\tsrc/hello.js\n1\t1\tpackage.json\n0\t9\told.js\n2\t0\ta.ts\tb.ts\n-\t-\timg.png'
+    )
+    expect(files).toEqual([
+      { path: 'src/hello.js', kind: 'A', lines: 4 },
+      { path: 'package.json', kind: 'M', lines: 2 },
+      { path: 'old.js', kind: 'D', lines: 9 },
+      { path: 'b.ts', kind: 'M', lines: 2 },
+      { path: 'img.png', kind: 'M', lines: 0 }
+    ])
+  })
+
+  it('totals cost and tokens across tasks, leaving unreported fields unset', () => {
+    const state = {
+      tasks: [
+        { costUsd: 0.03, promptTokens: 12000, completionTokens: 1000 },
+        { promptTokens: 400, completionTokens: 200 }
+      ]
+    } as RunState
+    expect(runStats(state, [{ path: 'a.ts', kind: 'A', lines: 1 }])).toEqual({
+      files: [{ path: 'a.ts', kind: 'A', lines: 1 }],
+      created: 1,
+      modified: 0,
+      totalCostUsd: 0.03,
+      promptTokens: 12400,
+      completionTokens: 1200
+    })
+    expect(runStats({ tasks: [{}] } as RunState, []).totalCostUsd).toBeUndefined()
   })
 })

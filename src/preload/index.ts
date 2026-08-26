@@ -47,6 +47,8 @@ export type TaskRun = {
   exitCode?: number | null
   costUsd?: number
   durationMs?: number
+  promptTokens?: number
+  completionTokens?: number
   error?: string
   runner?: RunnerName
   model?: string
@@ -64,9 +66,20 @@ export type RunState = {
   startedAt: string
   finishedAt?: string
   tasks: TaskRun[]
+  stats?: RunStats
+}
+export type FileChange = { path: string; kind: 'A' | 'M' | 'D'; lines: number }
+export type RunStats = {
+  files: FileChange[]
+  created: number
+  modified: number
+  totalCostUsd?: number
+  promptTokens?: number
+  completionTokens?: number
 }
 
 export type RunRow = RunState & { worktreeExists: boolean }
+export type RunDetails = { stats: RunStats | null; branchExists: boolean }
 
 export type ChatMessage = { role: 'user' | 'assistant'; text: string; ts: string }
 export type ChatProposal = { name: string; brief: string; tasks: Task[]; roles: Role[] }
@@ -129,6 +142,11 @@ const somni = {
   listRuns: (repo: string): Promise<RunRow[]> => ipcRenderer.invoke('runs:list', repo),
   runReport: (repo: string, runId: string): Promise<string | null> =>
     ipcRenderer.invoke('runs:report', repo, runId),
+  runDetails: (repo: string, runId: string): Promise<RunDetails> =>
+    ipcRenderer.invoke('runs:details', repo, runId),
+  switchBranch: (repo: string, branch: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('runs:switchBranch', repo, branch),
+  revealWorktree: (path: string): Promise<void> => ipcRenderer.invoke('runs:revealWorktree', path),
   cleanupRun: (repo: string, runId: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('runs:cleanup', repo, runId),
   lastRepo: (): Promise<string | null> => ipcRenderer.invoke('repo:last'),

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import {
@@ -11,6 +11,7 @@ import {
   sendChat
 } from './chat'
 import { isRunning, lockedGit, RunState, wakeDrain } from './executor'
+import { diffFiles, RunStats, runStats } from './report'
 import * as store from './store'
 import { atomicWrite, Settings } from './store'
 
@@ -35,6 +36,13 @@ export function repoSettings(repo: string): Settings & typeof store.SETTINGS_DEF
 }
 
 export type RunRow = RunState & { worktreeExists: boolean }
+export type RunDetails = { stats: RunStats | null; branchExists: boolean }
+
+const branchExists = (repo: string, branch: string): Promise<boolean> =>
+  lockedGit(['-C', repo, 'show-ref', '--verify', '--quiet', `refs/heads/${branch}`]).then(
+    () => true,
+    () => false
+  )
 
 function listRuns(repo: string): RunRow[] {
   const dir = join(repo, '.somni', 'runs')
@@ -100,6 +108,44 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
   })
 
   ipcMain.handle('runs:list', (_e, repo: string) => listRuns(repo))
+  // Everything the expanded run card needs beyond run.json: stats (persisted at
+  // report time, or live-computed for runs written before they were persisted,
+  // as long as the worktree survives) and whether Switch to Branch has a target.
+  ipcMain.handle('runs:details', async (_e, repo: string, runId: string): Promise<RunDetails> => {
+    const run = listRuns(repo).find((r) => r.runId === runId)
+    if (!run) return { stats: null, branchExists: false }
+    const stats =
+      run.stats ??
+      (run.worktreeExists
+        ? await diffFiles(run.worktree, run.baseSha ?? 'HEAD')
+            .then((files) => runStats(run, files))
+            .catch(() => null)
+        : null)
+    return { stats, branchExists: await branchExists(repo, run.branch) }
+  })
+
+  // Switch the *target repo* onto the run's branch. Refused on a dirty tree —
+  // a checkout there would surprise whatever the user has in progress.
+  ipcMain.handle('runs:switchBranch', async (_e, repo: string, branch: string) => {
+    try {
+      const { stdout } = (await lockedGit(['-C', repo, 'status', '--porcelain'])) as {
+        stdout: string
+      }
+      if (stdout.trim())
+        return { ok: false, error: 'repo has uncommitted changes — commit or stash first' }
+      if (!(await branchExists(repo, branch)))
+        return { ok: false, error: `branch ${branch} no longer exists` }
+      await lockedGit(['-C', repo, 'switch', branch])
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: gitError(err) }
+    }
+  })
+
+  ipcMain.handle('runs:revealWorktree', (_e, path: string) => {
+    if (existsSync(path)) shell.showItemInFolder(path)
+  })
+
   ipcMain.handle('runs:report', (_e, repo: string, runId: string) => {
     const path = join(repo, '.somni', 'runs', runId, 'report.md')
     return existsSync(path) ? readFileSync(path, 'utf8') : null
