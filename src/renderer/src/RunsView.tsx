@@ -35,6 +35,10 @@ function summarySection(report: string | null): string | null {
   return body ? body.split(/^## /m)[0].trim() || null : null
 }
 
+// git refuses to check out a branch a linked worktree already holds, so the
+// action waits for Clean up rather than doing the destructive step for the user.
+const HELD_BY_WORKTREE = "Branch is checked out in the run's worktree — Clean up first"
+
 const MINIMAL_HINT =
   'No summary — report style is Minimal; change it in Settings to have somni write one.'
 
@@ -72,6 +76,8 @@ export function RunDetailsPanel({
 }): React.JSX.Element {
   const stats = details?.stats
   const summary = summarySection(report)
+  // Only when that's the actual reason: a missing branch is its own disable.
+  const heldByWorktree = run.worktreeExists && details?.branchExists === true
   return (
     <div className="flex flex-col gap-6 bg-surface-dim p-6">
       <div className="grid grid-cols-4 gap-4">
@@ -128,12 +134,16 @@ export function RunDetailsPanel({
           <div className="mt-2 flex flex-col gap-2">
             <button
               className="flex w-full items-center justify-center gap-2 rounded bg-primary-container px-4 py-2 text-sm font-semibold text-on-primary-container transition-colors hover:bg-primary-container/90 disabled:opacity-40"
-              disabled={details ? !details.branchExists : true}
+              disabled={heldByWorktree || (details ? !details.branchExists : true)}
+              title={heldByWorktree ? HELD_BY_WORKTREE : undefined}
               onClick={() => onSwitchBranch()}
             >
               <span className="material-symbols-outlined text-[18px]">account_tree</span>
               Switch to Branch
             </button>
+            {heldByWorktree && (
+              <p className="text-xs text-on-surface-variant">{HELD_BY_WORKTREE}</p>
+            )}
             <div className="grid grid-cols-2 gap-2">
               <button
                 className="flex items-center justify-center gap-1 rounded border border-border-subtle bg-surface px-3 py-1.5 text-xs text-on-surface transition-colors hover:bg-surface-container disabled:opacity-40"

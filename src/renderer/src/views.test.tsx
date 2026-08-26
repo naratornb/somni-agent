@@ -173,6 +173,42 @@ test('RunDetailsPanel shows tiles, summary and files', () => {
   expect(html).toContain('src/hello.js')
 })
 
+// `disabled` also appears in the disabled:opacity-40 class, so match the tag itself.
+const switchButton = (html: string): string =>
+  html.match(/<button[^>]*>(?:(?!<button)[\s\S])*?Switch to Branch/)![0]
+
+// git can't check out a branch a live worktree holds, so the action waits for
+// Clean up — and says so in text, not only in the tooltip.
+test('Switch to Branch is disabled with a reason while the worktree holds the branch', () => {
+  const html = renderToStaticMarkup(
+    <RunDetailsPanel
+      run={run}
+      details={runDetails}
+      report={null}
+      onSwitchBranch={() => {}}
+      onReveal={() => {}}
+      onCleanup={() => {}}
+    />
+  )
+  expect(html).toContain('Branch is checked out in the run&#x27;s worktree — Clean up first')
+  expect(switchButton(html)).toContain('disabled=""')
+})
+
+test('Switch to Branch enables once the worktree is cleaned up', () => {
+  const html = renderToStaticMarkup(
+    <RunDetailsPanel
+      run={{ ...run, worktreeExists: false }}
+      details={{ stats: null, branchExists: true }}
+      report={null}
+      onSwitchBranch={() => {}}
+      onReveal={() => {}}
+      onCleanup={() => {}}
+    />
+  )
+  expect(html).not.toContain('Clean up first')
+  expect(switchButton(html)).not.toContain('disabled=""')
+})
+
 test('RunDetailsPanel falls back to em-dashes and the minimal-style hint', () => {
   const html = renderToStaticMarkup(
     <RunDetailsPanel
