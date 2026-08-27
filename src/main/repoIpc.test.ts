@@ -21,6 +21,14 @@ vi.mock('electron', () => ({
   shell: { showItemInFolder: () => {} } // revealWorktree is a one-line passthrough, untested
 }))
 
+// The grooming guard asks the executor which story is live; everything else in
+// executor (lockedGit, wakeDrain) stays real for the run handlers below.
+let runningId: string | null = null
+vi.mock('./executor', async (orig) => ({
+  ...(await orig<typeof import('./executor')>()),
+  isRunning: (id?: string) => id != null && id === runningId
+}))
+
 const { wireRepoIpc } = await import('./repoIpc')
 
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> =>
@@ -384,5 +392,20 @@ describe('item CRUD + the Ready gate', () => {
       ok: false,
       error: 'item not found: SOM-99'
     })
+  })
+})
+
+// §7: grooming is refused for a story the pipeline is executing — re-grooming
+// under a running agent would rewrite the spec out from under it.
+describe('chat:send guard', () => {
+  // ponytail: only the refusal path is exercised — the allowed path spawns a
+  // real runner, which chat.test.ts already covers against a fake claude.
+  it('refuses a story currently running', async () => {
+    runningId = 'SOM-1'
+    expect(await invoke('chat:send', repo, 'SOM-1', 'hi')).toEqual({
+      ok: false,
+      error: 'this story is currently running'
+    })
+    runningId = null
   })
 })

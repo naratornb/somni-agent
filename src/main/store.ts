@@ -45,14 +45,6 @@ export const SETTINGS_DEFAULTS = {
 
 export type Role = { slug: string; name: string; preamble: string } & Profile
 export type Task = { title: string; prompt: string; role: string; selected: boolean }
-export type Workflow = {
-  slug: string
-  name: string
-  selected: boolean
-  tasks: Task[]
-  // The Brief sidecar (workflows/<slug>.brief.md, M8 §4) — absent if never written.
-  brief?: string
-}
 
 // Work-item store v2 (architecture.md §4.1). One flat store; `kind` is a field,
 // so grooming converts an Idea in place.
@@ -193,29 +185,6 @@ export function loadRepo(repo: string): RepoData {
   )
   // v1 `workflows/` are ignored without error (§4.1) — no migration.
   return { roles, items: loadItems(repo), backlog: loadBacklog(repo) }
-}
-
-// ponytail: the v1 workflow reader, kept only for `applyProposal` (chat.ts) —
-// the Draft view is hidden in M13 and returns re-aimed at items as Grooming in
-// M14, which retires this along with saveWorkflow/deleteWorkflow.
-export function loadWorkflows(repo: string): Workflow[] {
-  return listFiles(dir(repo, 'workflows'), '.json').flatMap((f) => {
-    try {
-      const w = JSON.parse(readFileSync(dir(repo, 'workflows', f), 'utf8'))
-      const slug = f.replace(/\.json$/, '')
-      return [
-        {
-          slug,
-          name: String(w.name ?? f),
-          selected: w.selected === true,
-          tasks: Array.isArray(w.tasks) ? w.tasks : [],
-          brief: loadBrief(repo, slug)
-        }
-      ]
-    } catch {
-      return [] // a malformed file shouldn't take the whole repo down
-    }
-  })
 }
 
 // ---- items (architecture.md §4.1) -------------------------------------------
@@ -391,32 +360,4 @@ export function saveRole(repo: string, role: Role): Role {
 
 export function deleteRole(repo: string, slug: string): void {
   rmSync(dir(repo, 'roles', slug + '.md'), { force: true })
-}
-
-const briefPath = (repo: string, slug: string): string => dir(repo, 'workflows', slug + '.brief.md')
-
-export function loadBrief(repo: string, slug: string): string | undefined {
-  const path = briefPath(repo, slug)
-  return existsSync(path) ? readFileSync(path, 'utf8') : undefined
-}
-
-export function saveWorkflow(repo: string, wf: Workflow): Workflow {
-  const slug = wf.slug || slugify(wf.name)
-  const { name, selected, tasks } = wf
-  // ponytail: an absent brief leaves the sidecar alone (a save from the editor
-  // carries no brief); only a non-empty brief rewrites it.
-  if (wf.brief) atomicWrite(briefPath(repo, slug), wf.brief.trimEnd() + '\n')
-  atomicWrite(
-    dir(repo, 'workflows', slug + '.json'),
-    JSON.stringify({ name, selected, tasks }, null, 2) + '\n'
-  )
-  return { ...wf, slug }
-}
-
-export function deleteWorkflow(repo: string, slug: string): void {
-  rmSync(dir(repo, 'workflows', slug + '.json'), { force: true })
-  rmSync(briefPath(repo, slug), { force: true })
-  // The transcript goes too: a later workflow reusing this slug must not
-  // inherit a dead one's history and session id.
-  rmSync(dir(repo, 'chats', slug + '.jsonl'), { force: true })
 }

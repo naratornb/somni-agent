@@ -6,11 +6,13 @@ import { RolesView } from './RolesView'
 import { RunsView } from './RunsView'
 import { SettingsView } from './SettingsView'
 import { BoardView } from './BoardView'
+import { GroomView } from './GroomView'
 import { LABEL } from './ui'
 
 // Nav order + Material Symbols glyph per view (mock: any code.html sidebar).
 const VIEWS = {
   Board: 'account_tree',
+  Groom: 'chat_bubble',
   Pipeline: 'speed',
   Runs: 'history',
   Roles: 'groups',
@@ -19,10 +21,8 @@ const VIEWS = {
 } as const
 type View = keyof typeof VIEWS
 
-// PO hat = capture, groom, accept (CONTEXT.md) — all of which live on the
-// Board. Presentation only (Decision 9). The Draft view is hidden in M13; it
-// returns re-aimed as Grooming in M14, so its machinery stays put.
-const PO_VIEWS: View[] = ['Board', 'Pipeline', 'Runs']
+// PO hat = capture, groom, accept (CONTEXT.md). Presentation only (Decision 9).
+const PO_VIEWS: View[] = ['Board', 'Groom', 'Pipeline', 'Runs']
 
 const timeAgo = (iso: string): string => {
   const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60_000)
@@ -33,6 +33,8 @@ function App(): React.JSX.Element {
   const [repo, setRepo] = useState<string | null>(null)
   const [data, setData] = useState<RepoData>({ roles: [], items: [], backlog: [] })
   const [view, setView] = useState<View>('Board')
+  // Which item the Groom view is grooming; null = from scratch (_draft).
+  const [groomId, setGroomId] = useState<string | null>(null)
   const [runs, setRuns] = useState<Record<string, RunState>>({})
   const [logs, setLogs] = useState<Record<string, LogLine[]>>({})
   // Drain state is owned by main (Decision 8): seeded from pipeline:state on
@@ -146,7 +148,10 @@ function App(): React.JSX.Element {
                   ? 'bg-surface-container-high font-semibold text-on-surface'
                   : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface')
               }
-              onClick={() => setView(v as View)}
+              onClick={() => {
+                if (v === 'Groom') setGroomId(null) // the nav entry always grooms from scratch
+                setView(v as View)
+              }}
             >
               <span
                 className="material-symbols-outlined text-[20px]"
@@ -250,6 +255,16 @@ function App(): React.JSX.Element {
             />
           ) : view === 'Runs' ? (
             <RunsView repo={repo} />
+          ) : view === 'Groom' ? (
+            <GroomView
+              repo={repo}
+              roles={data.roles}
+              itemId={groomId}
+              onApplied={() => {
+                refresh()
+                setView('Board')
+              }}
+            />
           ) : view === 'Board' ? (
             <BoardView
               repo={repo}
@@ -258,6 +273,10 @@ function App(): React.JSX.Element {
               roles={data.roles}
               runs={runs}
               refresh={refresh}
+              onGroom={(id) => {
+                setGroomId(id)
+                setView('Groom')
+              }}
             />
           ) : (
             <RolesView repo={repo} roles={data.roles} refresh={refresh} />

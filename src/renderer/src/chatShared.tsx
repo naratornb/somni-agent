@@ -1,5 +1,5 @@
-// Pieces shared by the two drafting surfaces (§7): the Draft view and the
-// workflow editor's chat panel. Rendering only — every decision is main's.
+// Pieces shared by the grooming surface and the field-level Refine controls
+// (§7). Rendering only — every decision is main's.
 import { useEffect, useRef, useState } from 'react'
 import type { ChatProposal, ChatQuestion, Role } from '../../preload/index'
 import {
@@ -71,20 +71,44 @@ export function ProposalPreview({
   return (
     <div className={`${CARD} max-h-[40vh] shrink-0 overflow-y-auto`}>
       <span className="text-sm text-on-surface-variant">
-        Proposed workflow — {plural(proposal.tasks.length, 'task')}
+        Proposed {proposal.kind === 'epic' ? 'Epic' : 'Story'} — {proposal.name} —{' '}
+        {proposal.kind === 'epic'
+          ? `${proposal.stories.length} ${proposal.stories.length === 1 ? 'story' : 'stories'}`
+          : plural(proposal.tasks.length, 'subtask')}
         {proposal.roles.length ? `, ${plural(proposal.roles.length, 'new role')}` : ''}
       </span>
-      {proposal.brief && (
+      {proposal.spec && (
         // Left-accent border marks the read-only source of truth (DESIGN.md).
         <details className="overflow-hidden rounded-lg border border-l-2 border-border-subtle border-l-primary-container bg-surface">
           <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-on-surface-variant hover:text-on-surface">
-            Brief
+            Spec
           </summary>
           <p className="px-4 pb-3 text-sm whitespace-pre-wrap text-on-surface-variant">
-            {proposal.brief}
+            {proposal.spec}
           </p>
         </details>
       )}
+      {/* Epic: one card per child Story (its own subtasks nested); Story: the
+          subtasks directly. Blocking edges are indices into this same list. */}
+      {proposal.stories.map((s, i) => (
+        <div
+          className="flex flex-col gap-1 rounded-lg border border-border-subtle bg-surface p-3"
+          key={i}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold text-on-surface">{s.name}</span>
+            <span className={CHIP}>
+              {s.tasks.length} subtask{s.tasks.length === 1 ? '' : 's'}
+            </span>
+            {s.blockedBy.length > 0 && (
+              <span className={CHIP}>
+                blocked by {s.blockedBy.map((b) => proposal.stories[b]?.name ?? b).join(', ')}
+              </span>
+            )}
+          </div>
+          <span className="text-sm text-on-surface-variant">{s.spec}</span>
+        </div>
+      ))}
       {proposal.tasks.map((t, i) => (
         <div
           className="flex flex-col gap-1 rounded-lg border border-border-subtle bg-surface p-3"

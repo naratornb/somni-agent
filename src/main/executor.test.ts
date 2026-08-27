@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execFileSync } from 'child_process'
+import { applyProposal } from './chat'
 import {
   chmodSync,
   existsSync,
@@ -496,6 +497,51 @@ describe('end-to-end: idea -> gate refusal -> ready -> drain -> review/needs-att
     expect(result.status).toBe('Failed')
     expect(statusOnDisk(feature)).toBe('needs-attention')
     expect(existsSync(join(repo, '.somni/runs', result.runId, 'report.md'))).toBe(true)
+  })
+})
+
+// §7/M14: a groomed epic proposal, Applied through chat.ts's own mutation
+// path (not hand-authored via saveItem/story()), must feed the M13 drain
+// exactly like a hand-authored blockedBy pair — dependency order honored,
+// frontmatter on disk agreeing with the in-memory result at each step.
+describe('end-to-end: groomed epic -> blocked children -> drain in dependency order', () => {
+  it('Applies an epic proposal, then drains both children in blockedBy order', async () => {
+    const idea = saveItem(repo, { name: 'Search Overhaul', kind: 'idea' })
+    const sub = (title: string): Task => ({ title, prompt: title, role: 'dev', selected: true })
+    const res = applyProposal(repo, idea.id, {
+      kind: 'epic',
+      name: 'Search Overhaul',
+      spec: 'why',
+      stories: [
+        { name: 'Index', spec: 'a', tasks: [sub('index it')], blockedBy: [] },
+        { name: 'Query', spec: 'b', tasks: [sub('query it')], blockedBy: [0] }
+      ],
+      tasks: [],
+      roles: []
+    })
+    expect(res.ok).toBe(true)
+    const children = loadItems(repo).filter((i) => i.epic === idea.id)
+    const [indexId, queryId] = children.map((c) => c.id)
+    expect(statusOnDisk(indexId)).toBe('ready')
+    expect(statusOnDisk(queryId)).toBe('ready')
+
+    // "Add to pipeline" both, same as a hand-authored pair (M13 §3).
+    add(indexId, queryId)
+
+    // Query is blocked on Index — the drain runs only Index this pass.
+    const first = await startDrain(repo, base, 2, noEvents)
+    expect(first.map((r) => r.workflow)).toEqual([indexId])
+    expect(statusOnDisk(indexId)).toBe('review')
+    expect(statusOnDisk(queryId)).toBe('in-progress') // still waiting, untouched
+
+    // Index isn't `done` yet (it's in Review) — Query still can't run.
+    expect(await startDrain(repo, base, 2, noEvents)).toEqual([])
+    expect(statusOnDisk(queryId)).toBe('in-progress')
+
+    setItemStatus(repo, indexId, 'done')
+    const second = await startDrain(repo, base, 2, noEvents)
+    expect(second.map((r) => r.workflow)).toEqual([queryId])
+    expect(statusOnDisk(queryId)).toBe('review')
   })
 })
 

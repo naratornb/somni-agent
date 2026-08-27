@@ -209,15 +209,15 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
   ipcMain.handle('role:save', (_e, repo: string, role: store.Role) => store.saveRole(repo, role))
   ipcMain.handle('role:delete', (_e, repo: string, slug: string) => store.deleteRole(repo, slug))
 
-  // Draft with AI (§7). Read-only chat; `proposal:apply` is the only write out
-  // of it, and it happens in main so definitions never round-trip the renderer.
+  // Grooming (§7). Read-only chat; `proposal:apply` is the only write out of
+  // it, and it happens in main so definitions never round-trip the renderer.
   ipcMain.handle('chat:load', (_e, repo: string, slug: string) => loadChat(repo, slug))
   ipcMain.handle('chat:new', (_e, repo: string, slug: string) => newChat(repo, slug))
   ipcMain.handle('chat:send', (_e, repo: string, slug: string, text: string) => {
-    // Only a workflow currently executing is refused; the draft chat and
-    // unrelated workflows stay usable during a pipeline (Decision 9).
+    // Only a story currently executing is refused; a from-scratch groom and
+    // unrelated items stay usable during a pipeline (Decision 9).
     if (slug !== DRAFT_KEY && isRunning(slug))
-      return { ok: false, error: 'this workflow is currently running' }
+      return { ok: false, error: 'this story is currently running' }
     const settings = repoSettings(repo)
     const roleSlugs = store.loadRepo(repo).roles.map((r) => r.slug)
     return sendChat(repo, slug, text, settings, roleSlugs, (ev: ChatEvent) =>
@@ -250,7 +250,7 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
     return cached
   })
 
-  ipcMain.handle('proposal:apply', (_e, repo: string, slug: string, proposal: ChatProposal) =>
-    applyProposal(repo, slug, proposal)
+  ipcMain.handle('proposal:apply', (_e, repo: string, key: string, proposal: ChatProposal) =>
+    applyProposal(repo, key, proposal)
   )
 }

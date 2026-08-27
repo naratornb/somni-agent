@@ -1,4 +1,4 @@
-// "Draft with AI" chat (architecture.md §7). Each turn is the same read-only
+// Grooming chat (architecture.md §7). Each turn is the same read-only
 // claude spawn path as task execution; the chat never writes definitions —
 // `applyProposal` below is the one user-triggered mutation.
 
@@ -7,13 +7,23 @@ import { dirname, join } from 'path'
 import { spawnRunner, SpawnHandle } from './runner'
 import { getRunner } from './runners'
 import * as store from './store'
-import type { Effort, Profile, Role, RunnerName, Settings, Task, Workflow } from './store'
+import type { Effort, Item, Profile, Role, RunnerName, Settings, Task } from './store'
 
-// Reserved chat key for the one pre-Apply brief-first draft (§7, Decision 1).
+// Reserved chat key for the one pre-Apply from-scratch groom (§7, Decision 1).
 export const DRAFT_KEY = '_draft'
 
 export type ChatMessage = { role: 'user' | 'assistant'; text: string; ts: string }
-export type ChatProposal = { name: string; brief: string; tasks: Task[]; roles: Role[] }
+// One proposed child Story. `blockedBy` holds *indices* of earlier entries in
+// the same array — Apply resolves them to real ids (§7).
+export type GroomedStory = { name: string; spec: string; tasks: Task[]; blockedBy: number[] }
+export type ChatProposal = {
+  kind: 'epic' | 'story'
+  name: string
+  spec: string
+  stories: GroomedStory[] // epics only
+  tasks: Task[] // single-story proposals only
+  roles: Role[]
+}
 export type ChatQuestion = { question: string; options: string[]; recommended: string }
 export type ChatEvent =
   | { slug: string; kind: 'text'; text: string }
@@ -31,21 +41,14 @@ const chatPath = (repo: string, slug: string): string =>
 
 // The fixed message Propose Now sends — visible in the transcript (Decision 4).
 export const PROPOSE_NOW =
-  'Stop interviewing and propose the workflow now, from my answers so far plus ' +
-  'your own stated assumptions for anything still open.'
+  'Stop interviewing and propose the groomed result now, from my answers so far ' +
+  'plus your own stated assumptions for anything still open.'
 
-// The fixed Refine structure message (M11 Decision 3). Deliberately silent on
-// the proposal format — the preamble's somni-workflow instruction covers it, so
-// the reply lands as an ordinary Proposal.
-export const REFINE_STRUCTURE =
-  "Reread this workflow's current definition and propose a refined version now: " +
-  'tighter task boundaries, better ordering, sharper prompts, the right role for ' +
-  'each task. Keep the intent — refine how it gets there.'
-
-export function draftPreamble(roleSlugs: string[], brief?: string, slug?: string): string {
+export function groomPreamble(roleSlugs: string[], context?: string): string {
   return [
-    'You are helping draft a somni workflow: an ordered list of tasks, each run',
-    'unattended by a coding agent in an isolated git worktree of this repo.',
+    'You are grooming a somni work item: turning intent into an approved Spec and',
+    'tracer-bullet Stories, each executed unattended by a coding agent in an',
+    'isolated git worktree of this repo. Grooming is the only path to Ready.',
     '',
     'Interview discipline — ask exactly ONE question per reply, as a fenced',
     '```somni-question block containing JSON of the form:',
@@ -56,25 +59,29 @@ export function draftPreamble(roleSlugs: string[], brief?: string, slug?: string
     'and propose in the same reply. If I ask you to propose now, stop interviewing',
     'and propose immediately, stating your assumptions.',
     '',
-    'When you propose, end your reply with a fenced ```somni-workflow block',
+    'Grooming charter — decide the altitude first: a big intent becomes an Epic of',
+    'vertical-slice Stories, each a tracer bullet that ships end to end, with',
+    'blocking edges where one genuinely must land first; a small intent is one',
+    'Story. Every Spec states the problem, the approach, and verifiable success',
+    'criteria. Subtask prompts are goals to achieve, never diffs to apply.',
+    '',
+    'When you propose, end your reply with a fenced ```somni-groomed block',
     'containing JSON of the form:',
-    '{"name": "...", "brief": "...", "tasks": [{"title": "...", "prompt": "...",',
-    '"role": "...", "selected": true}], "roles": [{"slug": "...", "name": "...",',
-    '"preamble": "..."}]}',
-    'where "brief" is the polished Markdown brief for the whole workflow, "prompt"',
-    'is a full self-contained brief for that task, and "role" is a role slug.',
+    '{"kind": "epic"|"story", "name": "...", "spec": "...",',
+    ' "stories": [{"name": "...", "spec": "...", "subtasks": [{"title": "...",',
+    ' "prompt": "...", "role": "..."}], "blockedBy": [0]}],',
+    ' "subtasks": [{"title": "...", "prompt": "...", "role": "..."}],',
+    ' "roles": [{"slug": "...", "name": "...", "preamble": "..."}]}',
+    'Use "stories" for kind "epic" and top-level "subtasks" for kind "story"',
+    '(never both). "spec" is the polished Markdown Spec body. Each "blockedBy"',
+    'entry is a ZERO-BASED INDEX of an EARLIER entry in the same "stories" array —',
+    'never its own index, never a later one, never an id; anything else rejects the',
+    'whole proposal.',
     `The repo's existing role slugs: ${roleSlugs.join(', ') || '(none defined yet)'}.`,
     'Prefer existing roles; list any genuinely new role you need under "roles"',
     '(an existing slug is never overwritten).',
     'Do not create or modify any files.',
-    // Editor chats only: without this a structure refine is structure-blind.
-    ...(slug
-      ? [
-          `This chat edits the existing workflow stored at \`.somni/workflows/${slug}.json\`;`,
-          'read it for the current structure.'
-        ]
-      : []),
-    ...(brief ? ['', "This workflow's current brief:", brief] : []),
+    ...(context ? ['', 'The item being groomed, as it stands today:', context] : []),
     '',
     'My request:'
   ].join('\n')
@@ -93,11 +100,10 @@ export function turnArgs(
   profile: Profile,
   roleSlugs: string[],
   settings: Settings = {},
-  brief?: string,
-  slug?: string
+  context?: string
 ): string[] {
   return chatRunner(profile, settings).buildArgs(
-    sessionId ? message : `${draftPreamble(roleSlugs, brief, slug)}\n${message}`,
+    sessionId ? message : `${groomPreamble(roleSlugs, context)}\n${message}`,
     { ...profile, resumeSessionId: sessionId ?? undefined, readOnly: true }
   )
 }
@@ -156,26 +162,57 @@ function parseRoles(raw: unknown): Role[] | null {
   return roles
 }
 
-// Last ```somni-workflow block in an assistant message, or null if absent/malformed.
-export function parseProposal(text: string): ChatProposal | null {
-  const raw = lastBlock(text, 'somni-workflow')
-  if (typeof raw?.name !== 'string' || !Array.isArray(raw.tasks)) return null
-  const roles = parseRoles(raw.roles)
-  if (!roles) return null
+// A proposal's subtask list. One invalid entry rejects the whole proposal.
+function parseSubtasks(raw: unknown): Task[] | null {
+  if (!Array.isArray(raw)) return null
   const tasks: Task[] = []
-  for (const t of raw.tasks as Record<string, unknown>[]) {
+  for (const t of raw as Record<string, unknown>[]) {
     if (typeof t?.title !== 'string' || typeof t.prompt !== 'string' || typeof t.role !== 'string')
       return null
-    tasks.push({
-      title: t.title,
-      prompt: t.prompt,
-      role: t.role,
-      selected: t.selected !== false
+    tasks.push({ title: t.title, prompt: t.prompt, role: t.role, selected: t.selected !== false })
+  }
+  return tasks
+}
+
+// Child Stories of an epic proposal. `blockedBy` may only point *backwards*: a
+// forward, self or out-of-range index rejects the proposal (the invalid-role
+// precedent) rather than silently dropping an edge the plan depends on.
+function parseStories(raw: unknown): GroomedStory[] | null {
+  if (!Array.isArray(raw)) return null
+  const stories: GroomedStory[] = []
+  for (const [i, s] of (raw as Record<string, unknown>[]).entries()) {
+    if (typeof s?.name !== 'string') return null
+    const tasks = parseSubtasks(s.subtasks)
+    if (!tasks) return null
+    const blockedBy = s.blockedBy === undefined ? [] : s.blockedBy
+    if (!Array.isArray(blockedBy)) return null
+    if (blockedBy.some((b) => !Number.isInteger(b) || (b as number) < 0 || (b as number) >= i))
+      return null
+    stories.push({
+      name: s.name,
+      spec: typeof s.spec === 'string' ? s.spec : '',
+      tasks,
+      blockedBy: blockedBy as number[]
     })
   }
+  return stories
+}
+
+// Last ```somni-groomed block in an assistant message, or null if absent/malformed.
+export function parseProposal(text: string): ChatProposal | null {
+  const raw = lastBlock(text, 'somni-groomed')
+  if (typeof raw?.name !== 'string') return null
+  if (raw.kind !== 'epic' && raw.kind !== 'story') return null
+  const roles = parseRoles(raw.roles)
+  if (!roles) return null
+  const stories = raw.kind === 'epic' ? parseStories(raw.stories) : []
+  const tasks = raw.kind === 'story' ? parseSubtasks(raw.subtasks) : []
+  if (!stories || !tasks) return null
   return {
+    kind: raw.kind,
     name: raw.name,
-    brief: typeof raw.brief === 'string' ? raw.brief : '',
+    spec: typeof raw.spec === 'string' ? raw.spec : '',
+    stories,
     tasks,
     roles
   }
@@ -237,15 +274,20 @@ export function sendChat(
   const lines = readLines(repo, slug)
   let sessionId = sessionOf(lines)
   appendLine(repo, slug, { role: 'user', text, ts: new Date().toISOString() })
-  // Editor chats carry the workflow's stored Brief and file path into turn-1
-  // context (§7, M11 Decision 4); a _draft has neither.
-  const draft = slug === DRAFT_KEY
-  const brief = draft ? undefined : store.loadBrief(repo, slug)
+  // An item-keyed groom seeds turn-1 context with the item as it stands, and
+  // the first turn moves it into Grooming (§7). A from-scratch groom has no
+  // item to seed or flip — it creates nothing until Apply.
+  const item = slug === DRAFT_KEY ? undefined : store.loadItems(repo).find((i) => i.id === slug)
+  let context: string | undefined
+  if (item) {
+    context = `# ${item.name}\n\n${item.spec}`.trim()
+    if (item.status !== 'grooming') store.setItemStatus(repo, item.id, 'grooming')
+  }
 
   let reply = ''
   const handle = spawnRunner(
     chatRunner(profile, settings),
-    turnArgs(text, sessionId, profile, roleSlugs, settings, brief, draft ? undefined : slug),
+    turnArgs(text, sessionId, profile, roleSlugs, settings, context),
     repo,
     (ev) => {
       if (ev.kind === 'session' && ev.sessionId !== sessionId) {
@@ -279,42 +321,59 @@ export function sendChat(
   return { ok: true }
 }
 
-// Apply — the only mutation out of a chat, and it lives here so every write
-// stays in main (Decisions 1/2/5/6). From the Draft view (`slug` = _draft) it
-// creates a ticked workflow and renames the transcript; from the editor it
-// updates in place, preserving the workflow's current tick.
+// Apply — the only mutation out of a groom, and it lives here so every write
+// stays in main (§7). The groomed item converts in place, keeping its id;
+// child Stories are created ready with their blockedBy indices resolved to real
+// ids. From-scratch (`key` = _draft) it creates the item(s) and renames the
+// transcript onto the root item's id.
 export function applyProposal(
   repo: string,
-  slug: string,
+  key: string,
   proposal: ChatProposal
-): { ok: true; workflow: Workflow } | { ok: false; error: string } {
+): { ok: true; item: Item } | { ok: false; error: string } {
   // Applying mid-turn would rename the transcript out from under the reply
   // still being appended to it.
-  if (inFlight.has(slug)) return { ok: false, error: 'a chat turn is already in flight' }
-  const draft = slug === DRAFT_KEY
-  const { roles } = store.loadRepo(repo)
-  const workflows = store.loadWorkflows(repo)
-  const existing = draft ? undefined : workflows.find((w) => w.slug === slug)
+  if (inFlight.has(key)) return { ok: false, error: 'a chat turn is already in flight' }
+  const scratch = key === DRAFT_KEY
+  const { roles, items } = store.loadRepo(repo)
+  const existing = scratch ? undefined : items.find((i) => i.id === key)
+  if (!scratch && !existing) return { ok: false, error: `item not found: ${key}` }
   const roleSlugs = new Set(roles.map((r) => r.slug))
   for (const role of proposal.roles) {
     if (!roleSlugs.has(role.slug)) store.saveRole(repo, role) // existing role always wins
   }
-  const taken = new Set(workflows.map((w) => w.slug))
-  let newSlug = store.slugify(proposal.name)
-  for (let n = 2; taken.has(newSlug); n++) newSlug = `${store.slugify(proposal.name)}-${n}`
-  const saved = store.saveWorkflow(repo, {
-    slug: draft ? newSlug : slug,
+  // An Epic never executes, so it lands back in Backlog; a groomed Story is
+  // Ready by definition — the Spec and its Subtasks just got approved.
+  const root = store.saveItem(repo, {
+    ...existing,
+    slug: store.slugify(proposal.name), // a renamed item moves file, keeping its id
+    kind: proposal.kind,
+    status: proposal.kind === 'epic' ? 'backlog' : 'ready',
     name: proposal.name,
-    selected: draft ? true : (existing?.selected ?? false),
-    tasks: proposal.tasks,
-    brief: proposal.brief
+    spec: proposal.spec,
+    tasks: proposal.kind === 'story' ? proposal.tasks : []
   })
-  if (draft) {
-    mkdirSync(dirname(chatPath(repo, saved.slug)), { recursive: true })
-    if (existsSync(chatPath(repo, DRAFT_KEY)))
-      renameSync(chatPath(repo, DRAFT_KEY), chatPath(repo, saved.slug))
+  const childIds: string[] = []
+  for (const story of proposal.stories) {
+    const child = store.saveItem(repo, {
+      kind: 'story',
+      status: 'ready',
+      name: story.name,
+      spec: story.spec,
+      tasks: story.tasks,
+      epic: root.id,
+      blockedBy: story.blockedBy.map((i) => childIds[i])
+    })
+    childIds.push(child.id)
   }
-  return { ok: true, workflow: saved }
+  if (scratch) {
+    // Mirrors `item:save`: a new Backlog item joins the column's ordering.
+    if (root.status === 'backlog') store.saveBacklog(repo, [...store.loadBacklog(repo), root.id])
+    mkdirSync(dirname(chatPath(repo, root.id)), { recursive: true })
+    if (existsSync(chatPath(repo, DRAFT_KEY)))
+      renameSync(chatPath(repo, DRAFT_KEY), chatPath(repo, root.id))
+  }
+  return { ok: true, item: root }
 }
 
 export function killChats(): void {
