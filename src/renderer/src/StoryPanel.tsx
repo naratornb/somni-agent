@@ -204,8 +204,9 @@ export function StoryPanel({
                             onClick={() => moveSubtask(i, 1)}
                             title="Move down"
                           >
-                            <span className="material-symbols-outlined text-[18px]">
-                              arrow_downward
+                            {/* rotated arrow_upward — arrow_downward isn't in the subset */}
+                            <span className="material-symbols-outlined rotate-180 text-[18px]">
+                              arrow_upward
                             </span>
                           </button>
                           <button

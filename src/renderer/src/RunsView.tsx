@@ -273,14 +273,14 @@ export function RunsView({ repo }: { repo: string }): React.JSX.Element {
                 <span className="font-mono-code text-xs text-on-surface-variant">
                   {stamp(r.startedAt)} → {endStamp(r.startedAt, r.finishedAt)}
                 </span>
+                {/* CSS border caret — expand_more isn't in the icon-font subset */}
                 <span
+                  aria-hidden="true"
                   className={
-                    'material-symbols-outlined text-on-surface-variant transition-transform ' +
-                    (open === r.runId ? 'rotate-180' : '')
+                    'h-[7px] w-[7px] border-b-2 border-r-2 border-on-surface-variant transition-transform duration-150 ' +
+                    (open === r.runId ? 'rotate-[225deg]' : 'rotate-45')
                   }
-                >
-                  expand_more
-                </span>
+                />
               </div>
             </div>
             {open === r.runId && (
