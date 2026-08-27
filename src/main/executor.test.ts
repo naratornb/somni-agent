@@ -916,3 +916,53 @@ describe('backlog', () => {
     expect(loadBacklog(repo)).toEqual([])
   })
 })
+
+// M15 §8: the full capture -> groom -> run -> review chain, built from the
+// exact literal renderer/src/ui.ts's `captureItem` produces (verified
+// separately by views.test.tsx — cross-importing it here would pull a
+// renderer-only DOM type (`window.somni`) into the main tsconfig and break
+// `npm run build`'s typecheck, so the split is reproduced inline instead),
+// landing through the real item:save create path (saveItem + the backlog
+// append that repoIpc's handler performs on create), then M14's
+// applyProposal, then M13's drain. Proves the M13/M14/M15 machinery composes
+// end to end, not just each milestone's own tests in isolation.
+describe('end-to-end: capture -> groom -> drain -> review', () => {
+  it('a captured idea lands ordered in Backlog, grooms to Ready, then drains to Review', async () => {
+    // captureItem('Nightly Cleanup\n\nSweep the stale worktrees.') — first line
+    // is the name, the rest (trimmed) is the spec.
+    const literal = {
+      kind: 'idea' as const,
+      status: 'backlog' as const,
+      name: 'Nightly Cleanup',
+      spec: 'Sweep the stale worktrees.'
+    }
+
+    // item:save's create path (repoIpc.ts): saveItem, then the new backlog id
+    // is appended to whatever ordering already exists (feature/docs from
+    // beforeEach never touched backlog.json, so it's empty here).
+    const idea = saveItem(repo, literal)
+    saveBacklog(repo, [...loadBacklog(repo), idea.id])
+    expect(loadBacklog(repo)).toEqual([idea.id])
+    expect(statusOnDisk(idea.id)).toBe('backlog')
+
+    // Groom now -> a single-story proposal Applied in place (M14), same as
+    // GroomView's item-keyed path.
+    const res = applyProposal(repo, idea.id, {
+      kind: 'story',
+      name: 'Nightly Cleanup',
+      spec: 'Sweep the stale worktrees.',
+      stories: [],
+      tasks: [{ title: 'sweep', prompt: 'sweep worktrees', role: 'dev', selected: true }],
+      roles: []
+    })
+    expect(res.ok).toBe(true)
+    expect(statusOnDisk(idea.id)).toBe('ready')
+
+    // Add to pipeline, drain (M13) — lands in Review with a run recorded.
+    add(idea.id)
+    const [result] = await startDrain(repo, base, 1, noEvents)
+    expect(result.status).toBe('Completed')
+    expect(statusOnDisk(idea.id)).toBe('review')
+    expect(existsSync(join(repo, '.somni/runs', result.runId, 'run.json'))).toBe(true)
+  })
+})

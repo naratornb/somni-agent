@@ -7,7 +7,8 @@ import { RunsView } from './RunsView'
 import { SettingsView } from './SettingsView'
 import { BoardView } from './BoardView'
 import { GroomView } from './GroomView'
-import { LABEL } from './ui'
+import { CaptureModal, CommandPalette } from './capture'
+import { LABEL, saveCapture, type PaletteResult } from './ui'
 
 // Nav order + Material Symbols glyph per view (mock: any code.html sidebar).
 const VIEWS = {
@@ -45,6 +46,11 @@ function App(): React.JSX.Element {
   // Which views the sidebar offers. Seeded from settings on mount, persisted
   // straight back through settings:set — no separate IPC, no localStorage.
   const [mode, setMode] = useState<ViewMode>('engineer')
+  // Capture surfaces (M15): the modal and the palette. Esc closes the top-most.
+  const [capturing, setCapturing] = useState(false)
+  const [palette, setPalette] = useState(false)
+  // Item the palette asked the Board to open in the StoryPanel; consumed once.
+  const [openId, setOpenId] = useState<string | null>(null)
 
   const refresh = useCallback(
     (path = repo): void => {
@@ -86,6 +92,29 @@ function App(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, [])
 
+  // Cmd+N / Cmd+K fire regardless of focus — the overlays guard themselves.
+  // No OS-level global shortcut (deferred to Settings).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.metaKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault()
+        if (repo) setCapturing(true)
+      } else if (e.metaKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setPalette(true)
+      } else if (e.key === 'Escape') {
+        // Top-most only: the palette sits above the capture modal.
+        setPalette((p) => {
+          if (p) return false
+          setCapturing(false)
+          return p
+        })
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [repo])
+
   const choose = async (): Promise<void> => {
     const path = await window.somni.chooseRepo()
     if (path) {
@@ -122,6 +151,23 @@ function App(): React.JSX.Element {
   const navViews = Object.entries(VIEWS).filter(
     ([v]) => mode === 'engineer' || PO_VIEWS.includes(v as View)
   )
+
+  // The palette is a second surface for actions that already exist — never a
+  // second write path (capture goes through the same helper as the modal).
+  const runPalette = (r: PaletteResult, query: string): void => {
+    setPalette(false)
+    if (r.action === 'capture') {
+      if (repo) void saveCapture(repo, query).then(() => refresh())
+    } else if (r.action === 'goto') {
+      if (r.view === 'Groom') setGroomId(null)
+      setView(r.view as View)
+    } else if (r.action === 'open') {
+      setOpenId(r.id)
+      setView('Board')
+    } else {
+      startPipeline([])
+    }
+  }
 
   const switchMode = (m: ViewMode): void => {
     setMode(m)
@@ -190,6 +236,15 @@ function App(): React.JSX.Element {
             <span className="truncate">{repo ?? 'No repo selected'}</span>
           </div>
           <div className="flex items-center gap-2">
+            {/* Capture is available from every view; no repo, nowhere to write. */}
+            <button
+              className="flex items-center gap-2 rounded border border-border-subtle bg-surface-container px-3 py-1.5 text-sm text-on-surface transition-colors hover:bg-surface-container-high disabled:pointer-events-none disabled:opacity-40"
+              disabled={!repo}
+              title="New idea (⌘N)"
+              onClick={() => setCapturing(true)}
+            >
+              <span className="material-symbols-outlined text-[16px]">add</span>
+            </button>
             <button
               className="flex items-center gap-2 rounded border border-border-subtle bg-surface-container px-3 py-1.5 text-sm text-on-surface transition-colors hover:bg-surface-container-high"
               onClick={choose}
@@ -273,6 +328,8 @@ function App(): React.JSX.Element {
               roles={data.roles}
               runs={runs}
               refresh={refresh}
+              openId={openId}
+              onClosePanel={() => setOpenId(null)}
               onGroom={(id) => {
                 setGroomId(id)
                 setView('Groom')
@@ -283,6 +340,26 @@ function App(): React.JSX.Element {
           )}
         </div>
       </main>
+      {capturing && repo && (
+        <CaptureModal
+          repo={repo}
+          onClose={() => setCapturing(false)}
+          onSaved={() => refresh()}
+          onGroom={(id) => {
+            setCapturing(false)
+            setGroomId(id)
+            setView('Groom')
+          }}
+        />
+      )}
+      {palette && (
+        <CommandPalette
+          items={data.items}
+          views={navViews.map(([v]) => v)}
+          onRun={runPalette}
+          onClose={() => setPalette(false)}
+        />
+      )}
     </div>
   )
 }

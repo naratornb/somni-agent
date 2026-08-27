@@ -17,6 +17,8 @@ import { RolesView } from './RolesView'
 import { RunDetailsPanel, RunsView } from './RunsView'
 import { SettingsView } from './SettingsView'
 import { MicButton, ProposalPreview, QuestionCard, RefineControl } from './chatShared'
+import { CaptureModal, CommandPalette } from './capture'
+import { captureItem, paletteResults, reorderBacklog, saveCapture } from './ui'
 
 // Every somni.* call is a noop; draftKey/proposeNow are read during render.
 const somni = new Proxy(
@@ -233,7 +235,21 @@ const views: [string, React.JSX.Element][] = [
     'RefineControl',
     <RefineControl key="rc" repo="/repo" kind="task" text="Add hello" onApply={() => {}} />
   ],
-  ['MicButton', <MicButton key="mb" onText={() => {}} />]
+  ['MicButton', <MicButton key="mb" onText={() => {}} />],
+  [
+    'CaptureModal',
+    <CaptureModal key="cm" repo="/repo" onClose={() => {}} onGroom={() => {}} onSaved={() => {}} />
+  ],
+  [
+    'CommandPalette',
+    <CommandPalette
+      key="cp"
+      items={items}
+      views={['Board', 'Groom']}
+      onRun={() => {}}
+      onClose={() => {}}
+    />
+  ]
 ]
 
 test.each(views)('%s renders', (_name, el) => {
@@ -426,4 +442,162 @@ test('RunDetailsPanel falls back to em-dashes and the minimal-style hint', () =>
   expect(html).toContain('report style is Minimal')
   expect(html).toContain('—')
   expect(html).toContain('Files Changed (0)')
+})
+
+// M15 §1: one shared helper builds the captured item — first line is the name,
+// everything after it is the Spec, so nothing typed is lost.
+test('captureItem splits the first line off as the name and keeps the rest as spec', () => {
+  expect(captureItem('Just a title')).toEqual({
+    kind: 'idea',
+    status: 'backlog',
+    name: 'Just a title',
+    spec: ''
+  })
+  expect(captureItem('  Add dark mode \n\nrespect the OS setting\nand persist it\n')).toEqual({
+    kind: 'idea',
+    status: 'backlog',
+    name: 'Add dark mode',
+    spec: 'respect the OS setting\nand persist it'
+  })
+  // Nothing typed = nothing to save; the callers key off the empty name.
+  expect(captureItem('   ').name).toBe('')
+})
+
+// §1/§8: saveCapture is the one write path CaptureModal, QuickAdd and the
+// palette's "Capture as idea" all call (grep: capture.tsx add()/submit(), and
+// App.tsx's runPalette) — assert its own contract directly: it forwards the
+// captureItem split to item:save, and is a silent noop on an empty/whitespace
+// field (no IPC call at all).
+test('saveCapture forwards the name/spec split to item:save, and noops on empty text', async () => {
+  const calls: unknown[] = []
+  const saved = { id: 'SOM-9' } as Item
+  Object.assign(globalThis, {
+    window: {
+      somni: { saveItem: (...args: unknown[]) => (calls.push(args), Promise.resolve(saved)) }
+    }
+  })
+  const single = await saveCapture('/repo', 'One-liner idea')
+  expect(single).toBe(saved)
+  expect(calls[0]).toEqual([
+    '/repo',
+    { kind: 'idea', status: 'backlog', name: 'One-liner idea', spec: '' }
+  ])
+
+  const multi = await saveCapture('/repo', 'Title line\nfirst detail\nsecond detail')
+  expect(calls[1]).toEqual([
+    '/repo',
+    { kind: 'idea', status: 'backlog', name: 'Title line', spec: 'first detail\nsecond detail' }
+  ])
+  expect(multi).toBe(saved)
+
+  expect(await saveCapture('/repo', '   \n  ')).toBeNull()
+  expect(calls).toHaveLength(2) // whitespace-only never reaches item:save
+
+  // restore the SSR-wide somni proxy the rest of this file depends on
+  Object.assign(globalThis, { window: { somni } })
+})
+
+// §5: commands rank ahead of item hits, and the order is deterministic.
+test('paletteResults ranks commands first, then item hits by id and by title', () => {
+  const r = paletteResults('hello', items, ['Board', 'Groom'])
+  expect(r.map((x) => x.action)).toEqual(['capture', 'open'])
+  expect(r[1]).toMatchObject({ action: 'open', id: 'SOM-1' })
+
+  // Empty query: no capture, no item hits — just the navigable commands.
+  expect(paletteResults('', items, ['Board', 'Groom']).map((x) => x.label)).toEqual([
+    'Go to Board',
+    'Go to Groom',
+    'Run pipeline'
+  ])
+  // Id match, case-insensitively
+  expect(paletteResults('som-3', items, []).map((x) => x.key)).toEqual(['capture', 'open:SOM-3'])
+  // Title match, case-insensitively (query upper, item name mixed-case)
+  expect(paletteResults('HELLO WORLD', items, []).map((x) => x.key)).toEqual([
+    'capture',
+    'open:SOM-1'
+  ])
+  expect(paletteResults('pipe', items, []).map((x) => x.action)).toEqual(['capture', 'pipeline'])
+  // Navigation offers only the views it was given (PO mode filters them upstream)
+  expect(paletteResults('go', items, ['Board']).some((x) => x.action === 'goto')).toBe(false)
+})
+
+// §6: an intra-Backlog drop computes the new order for backlog:set.
+test('reorderBacklog moves the dragged id into the target slot', () => {
+  expect(reorderBacklog(['a', 'b', 'c'], 'c', 'a')).toEqual(['c', 'a', 'b'])
+  expect(reorderBacklog(['a', 'b', 'c'], 'a', 'c')).toEqual(['b', 'a', 'c'])
+  // A target the ordering file has never seen: the dragged id trails
+  expect(reorderBacklog(['a', 'b'], 'a', 'z')).toEqual(['b', 'a'])
+  // The dragged id absent from the array entirely (hand-added item file):
+  // it simply joins at the target's slot, same as any other insert.
+  expect(reorderBacklog(['a', 'b'], 'z', 'b')).toEqual(['a', 'z', 'b'])
+})
+
+// The capture surfaces and the palette are overlays over whatever view is up.
+test('CaptureModal offers both capture actions and the mic', () => {
+  const html = renderToStaticMarkup(
+    <CaptureModal repo="/repo" onClose={() => {}} onGroom={() => {}} onSaved={() => {}} />
+  )
+  expect(html).toContain('New idea')
+  expect(html).toContain('Groom now →')
+  expect(html).toContain('Add to Backlog')
+  expect(html).toContain('<textarea')
+  // MicButton, present but disabled pre-effect (same signature as its own test)
+  expect(html).toContain('…')
+})
+
+test('CommandPalette lists the navigable views and the pipeline command', () => {
+  const html = renderToStaticMarkup(
+    <CommandPalette
+      items={items}
+      views={['Board', 'Pipeline']}
+      onRun={() => {}}
+      onClose={() => {}}
+    />
+  )
+  expect(html).toContain('Go to Board')
+  expect(html).toContain('Run pipeline')
+})
+
+// §3: capture is available from every view, and disabled with no repo.
+test('header carries the add glyph, disabled until a repo is loaded', () => {
+  const html = renderToStaticMarkup(<App />)
+  expect(html).toContain('New idea (⌘N)')
+  expect(html).toContain('>add</span>')
+  expect(html).toMatch(/New idea \(⌘N\)"[^>]*disabled=""|disabled=""[^>]*New idea/)
+})
+
+// §4: the Backlog column's quick-add row is pinned above the cards.
+test('Board pins the quick-add row atop the Backlog column', () => {
+  const html = renderToStaticMarkup(
+    <BoardView
+      repo="/repo"
+      items={items}
+      backlog={['SOM-1']}
+      roles={roles}
+      runs={{}}
+      refresh={() => {}}
+      onGroom={() => {}}
+    />
+  )
+  expect(html).toContain('+ Add idea…')
+})
+
+// The palette's "open item" arrives as a prop so the Board can show the panel
+// without an effect (the SSR harness never runs effects).
+test('Board opens the StoryPanel for openId', () => {
+  const html = renderToStaticMarkup(
+    <BoardView
+      repo="/repo"
+      items={items}
+      backlog={[]}
+      roles={roles}
+      runs={{}}
+      refresh={() => {}}
+      onGroom={() => {}}
+      openId="SOM-1"
+      onClosePanel={() => {}}
+    />
+  )
+  expect(html).toContain('Back to Board')
+  expect(html).toContain('Hello World Feature')
 })
