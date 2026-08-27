@@ -36,6 +36,8 @@ export function repoSettings(repo: string): Settings & typeof store.SETTINGS_DEF
   return store.resolveSettings(repo, readSettings())
 }
 
+export type IpcResult = { ok: boolean; error?: string }
+
 export type RunRow = RunState & { worktreeExists: boolean }
 export type RunDetails = { stats: RunStats | null; branchExists: boolean }
 
@@ -106,25 +108,40 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
     onSettingsChanged() // the nightly timer re-arms off the new time/armed flag
   })
 
-  // Backlog (M9 Decision 4): parked work, ordered by the user. Promote =
-  // unpark + tick + wake, so a live drain picks it up without restarting.
-  ipcMain.handle('backlog:set', (_e, repo: string, slugs: string[]) =>
-    store.saveBacklog(repo, slugs)
-  )
-  // Park: untick + append. One IPC so the two writes can't half-land.
-  ipcMain.handle('backlog:park', (_e, repo: string, slug: string) => {
-    store.setSelected(repo, slug, false)
-    const backlog = store.loadBacklog(repo)
-    if (!backlog.includes(slug)) store.saveBacklog(repo, [...backlog, slug])
+  // Item CRUD (§4.1). The Backlog column's order is a bare id array.
+  ipcMain.handle('item:save', (_e, repo: string, item: store.Item) => {
+    const created = !item.id
+    const saved = store.saveItem(repo, item)
+    // Create path only (TD ruling 3): a new Backlog item joins the column's
+    // ordering immediately, so backlog.json is never partial. An existing item
+    // dragged back to Backlog keeps whatever order it already had.
+    if (created && saved.status === 'backlog')
+      store.saveBacklog(repo, [...store.loadBacklog(repo), saved.id])
+    return saved
   })
-  ipcMain.handle('backlog:promote', (_e, repo: string, slug: string) => {
+  ipcMain.handle('item:delete', (_e, repo: string, id: string) => {
+    store.deleteItem(repo, id)
     store.saveBacklog(
       repo,
-      store.loadBacklog(repo).filter((s) => s !== slug)
+      store.loadBacklog(repo).filter((b) => b !== id)
     )
-    store.setSelected(repo, slug, true)
-    wakeDrain()
   })
+  // The Ready gate is enforced here, not in the UI (§4.1): main is the authority.
+  ipcMain.handle(
+    'item:setStatus',
+    (_e, repo: string, id: string, status: store.ItemStatus): IpcResult => {
+      const item = store.loadItems(repo).find((i) => i.id === id)
+      if (!item) return { ok: false, error: `item not found: ${id}` }
+      if (status === 'ready') {
+        const why = store.readyBlocker(item)
+        if (why) return { ok: false, error: why }
+      }
+      store.setItemStatus(repo, id, status)
+      if (status === 'in-progress') wakeDrain() // an external add still needs a nudge
+      return { ok: true }
+    }
+  )
+  ipcMain.handle('backlog:set', (_e, repo: string, ids: string[]) => store.saveBacklog(repo, ids))
 
   ipcMain.handle('runs:list', (_e, repo: string) => listRuns(repo))
   // Everything the expanded run card needs beyond run.json: stats (persisted at
@@ -191,12 +208,6 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
 
   ipcMain.handle('role:save', (_e, repo: string, role: store.Role) => store.saveRole(repo, role))
   ipcMain.handle('role:delete', (_e, repo: string, slug: string) => store.deleteRole(repo, slug))
-  ipcMain.handle('workflow:save', (_e, repo: string, wf: store.Workflow) =>
-    store.saveWorkflow(repo, wf)
-  )
-  ipcMain.handle('workflow:delete', (_e, repo: string, slug: string) =>
-    store.deleteWorkflow(repo, slug)
-  )
 
   // Draft with AI (§7). Read-only chat; `proposal:apply` is the only write out
   // of it, and it happens in main so definitions never round-trip the renderer.

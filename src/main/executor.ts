@@ -1,7 +1,7 @@
-// Orchestrator (architecture.md §3): runs one workflow per worktree, tasks
+// Orchestrator (architecture.md §3): runs one Story per worktree, subtasks
 // sequential within it. The pipeline is a drain (M9): one supervisor loop
-// re-scans the Queue for ticked workflows, consuming each tick at pickup, with
-// bounded concurrency. Every state transition is written to
+// re-scans the items for stories whose status is `in-progress` — status is the
+// tick (M13) — with bounded concurrency. Every state transition is written to
 // .somni/runs/<runId>/run.json before it is acted on.
 
 import { execFile } from 'child_process'
@@ -14,10 +14,13 @@ import { spawnRunner, SpawnHandle } from './runner'
 import { getRunner } from './runners'
 import {
   atomicWrite,
+  Item,
+  ItemStatus,
+  loadItems,
   loadRepo,
   resolveProfile,
   RunnerName,
-  setSelected,
+  setItemStatus,
   Settings,
   slugify
 } from './store'
@@ -62,6 +65,7 @@ export type TaskRun = {
 
 export type RunState = {
   runId: string
+  // The story id. The JSON key name is frozen for v1-run compatibility (§4.1).
   workflow: string
   name: string
   branch: string
@@ -163,8 +167,8 @@ type Pipeline = {
 let pipeline: Pipeline | null = null
 // Keep Running (M9 Decision 6): never persisted, cleared by cancel.
 let keepRunning = false
-// Workflow slugs with a job currently executing — lets the chat guard refuse
-// only the workflow being executed rather than the whole app (M8 Decision 9).
+// Story ids with a job currently executing — lets the chat guard refuse only
+// the story being executed rather than the whole app (M8 Decision 9).
 const activeSlugs = new Set<string>()
 
 export function isRunning(slug?: string): boolean {
@@ -319,7 +323,7 @@ async function drainLoop(
 }
 
 // Manual / nightly / keep-running all land here: a scanning drain over the
-// Queue (ticked workflows), consuming each tick as it picks the work up.
+// stories whose status is `in-progress` (M13 §3 — status is the tick).
 export function startDrain(
   repo: string,
   worktreeBase: string,
@@ -328,28 +332,31 @@ export function startDrain(
   opts: RunOpts = {},
   mode: DrainMode = 'manual'
 ): Promise<RunState[]> {
-  const skip = new Set<string>() // untick failed → don't retry it this drain
+  const skip = new Set<string>() // failed to even start → don't re-pick it this drain
   const next = (): Job | undefined => {
-    // ponytail: queue order is alphabetical by slug (loadRepo lists sorted).
-    // A `tickedAt` stamp on the workflow would make it FIFO if that ever matters.
-    for (const wf of loadRepo(repo).workflows) {
-      // A re-tick of a running workflow stays on disk and runs after, never
-      // concurrently with itself (Decision 2).
-      if (!wf.selected || skip.has(wf.slug) || activeSlugs.has(wf.slug)) continue
-      try {
-        setSelected(repo, wf.slug, false) // the tick is consumed before the spawn
-      } catch (err) {
-        // Skip *this* slug for the rest of the drain and keep looking — one bad
-        // workflow must not stall the ones behind it (Decision 2, fail-soft).
-        skip.add(wf.slug)
-        events.onLog(wf.slug, -1, `[somni] could not untick ${wf.slug}: ${message(err)} — skipping`)
-        continue
-      }
+    const items = loadItems(repo)
+    const done = new Set(items.filter((i) => i.status === 'done').map((i) => i.id))
+    // ponytail: pickup order is by id (loadItems sorts numerically). Stories
+    // blocked by anything not yet `done` simply wait for a later scan.
+    for (const it of items) {
+      // `kind` is checked here too: .somni/ is hand-editable, so a hand-marked
+      // in-progress epic must never spawn.
+      if (it.kind !== 'story' || it.status !== 'in-progress') continue
+      if (skip.has(it.id) || activeSlugs.has(it.id)) continue
+      if (it.blockedBy?.some((b) => !done.has(b))) continue
       return {
-        id: wf.slug,
-        slug: wf.slug,
-        run: (ctrl, gate) =>
-          runWorkflow(repo, wf.slug, worktreeBase, events, { ...opts, ctrl, gate })
+        id: it.id,
+        slug: it.id,
+        run: async (ctrl, gate) => {
+          try {
+            return await runStory(repo, it.id, worktreeBase, events, { ...opts, ctrl, gate })
+          } catch (err) {
+            // A story that cannot even start would otherwise be re-picked on
+            // every scan — its status stays `in-progress` on disk.
+            skip.add(it.id)
+            throw err
+          }
+        }
       }
     }
     return undefined
@@ -412,30 +419,30 @@ export function resumePipeline(
   return drainLoop(() => queue.shift(), maxConcurrency, events, opts, 'resume')
 }
 
-export function runWorkflow(
+export function runStory(
   repo: string,
-  wfSlug: string,
+  storyId: string,
   worktreeBase: string,
   events: RunEvents,
   opts: RunOpts = {}
 ): Promise<RunState> {
   const now = opts.now ?? ((): Date => new Date())
-  const wf = loadRepo(repo).workflows.find((w) => w.slug === wfSlug)
-  if (!wf) throw new Error(`workflow not found: ${wfSlug}`)
-  const defs = wf.tasks.filter((t) => t.selected !== false)
-  if (defs.length === 0) throw new Error(`no tasks selected in ${wf.name}`)
+  const story = loadItems(repo).find((i) => i.id === storyId)
+  if (!story) throw new Error(`story not found: ${storyId}`)
+  const defs = story.tasks.filter((t) => t.selected !== false)
+  if (defs.length === 0) throw new Error(`no tasks selected in ${story.name}`)
 
   const stamp = now().toISOString().replace(/[-:T]/g, '').slice(0, 14)
-  const runId = `${stamp}-${wf.slug}` // slug keeps concurrent same-second runs unique
+  const runId = `${stamp}-${story.slug}` // slug keeps concurrent same-second runs unique
   mkdirSync(join(repo, '.somni', 'runs', runId, 'logs'), { recursive: true })
 
   return execute(
     repo,
     {
       runId,
-      workflow: wf.slug,
-      name: wf.name,
-      branch: `somni/${wf.slug}-${stamp}`,
+      workflow: story.id,
+      name: story.name,
+      branch: `somni/${story.slug}-${stamp}`,
       worktree: join(worktreeBase, runId),
       status: 'Running',
       startedAt: now().toISOString(),
@@ -472,8 +479,8 @@ async function execute(
     events.onState(state)
   }
 
-  const { roles, workflows } = loadRepo(repo)
-  const defs = (workflows.find((w) => w.slug === state.workflow)?.tasks ?? []).filter(
+  const { roles, items } = loadRepo(repo)
+  const defs = (items.find((i: Item) => i.id === state.workflow)?.tasks ?? []).filter(
     (t) => t.selected !== false
   )
 
@@ -492,7 +499,7 @@ async function execute(
       defs.length !== state.tasks.length ||
       defs.some((d, i) => taskTitle(d, i) !== state.tasks[i].title)
     )
-      throw new Error('workflow changed since it started')
+      throw new Error('story changed since it started')
     state.baseSha ??= await headSha(repo)
     await ensureWorktree(repo, state.worktree, state.branch)
 
@@ -634,6 +641,24 @@ async function execute(
   } finally {
     state.finishedAt = now().toISOString()
     writeState()
+    // The board transition (§3), written after the run's own state: Completed →
+    // review, Failed → needs-attention, Cancelled → back to ready. Fail-soft —
+    // a hand-deleted item must not turn a finished run into a crash.
+    const to: ItemStatus | null =
+      state.status === 'Completed'
+        ? 'review'
+        : state.status === 'Failed'
+          ? 'needs-attention'
+          : state.status === 'Cancelled'
+            ? 'ready'
+            : null
+    if (to) {
+      try {
+        setItemStatus(repo, state.workflow, to)
+      } catch (err) {
+        events.onLog(state.runId, -1, `[somni] could not update ${state.workflow}: ${message(err)}`)
+      }
+    }
   }
   return state
 }

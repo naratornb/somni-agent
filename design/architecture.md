@@ -42,7 +42,7 @@ No microservices, no job-queue library, no worker threads. The orchestrator is a
 
 ## 3. Orchestration engine
 
-**Scheduling (M9: the pipeline is a drain).** One supervisor loop owns the concurrency slots. Whenever a slot is free it re-scans the Queue from disk (workflows with `selected: true`, alphabetical by slug) and picks the next workflow, **consuming its tick** with an atomic write *before* spawning — a tick means run once, and re-ticking a running workflow queues a follow-up run, never a concurrent one. Newly ticked or promoted workflows are picked up mid-run (a wake signal from the UI, plus a ~2 s poll that also catches external file edits). Three entry points share the one mechanism, differing only by stop rule: **Drain queue** (manual; stops when the Queue is empty and nothing is in flight), **Nightly Window** (a timer starts the same drain, having disarmed itself first — one night runs one night's consciously queued work), and **Keep Running** (idles when the Queue is empty and keeps scanning until toggled off; never persisted across restarts; Cancel clears it). Within a workflow, tasks stay sequential; across workflows, parallel up to `maxConcurrency`. Every state transition is written to the run's `run.json` (atomic write-temp-then-rename) *before* it is acted on, so the files are always the source of truth. Crash-resume stays a fixed-set path over the same loop — a resume never scans the Queue.
+**Scheduling (M9: the pipeline is a drain; M13: status is the tick).** One supervisor loop owns the concurrency slots. The tick is gone — a Story's `status` field is the scheduling signal: **Add to pipeline** (allowed only for Ready stories — the Ready gate is enforced in main) sets `status: in-progress` and wakes the drain. Whenever a slot is free the loop re-scans items from disk and picks the next Story with `status: in-progress` that is not already executing and whose `blockedBy` stories are all `done`. Completion writes the transition before anything else acts on it: run Completed → `review`, Failed → `needs-attention`, Cancelled → `ready`. Newly added stories are picked up mid-run (a wake signal from the UI, plus a ~2 s poll that also catches external file edits). Three entry points share the one mechanism, differing only by stop rule: **Drain** (manual; stops when no in-progress Story remains and nothing is in flight), **Nightly Window** (a timer starts the same drain, having disarmed itself first — one night runs one night's consciously added work), and **Keep Running** (idles when nothing is in progress and keeps scanning until toggled off; never persisted across restarts; Cancel clears it). Within a Story, subtasks stay sequential; across Stories, parallel up to `maxConcurrency`. Every state transition is written to the run's `run.json` (atomic write-temp-then-rename) *before* it is acted on, so the files are always the source of truth. Crash-resume stays a fixed-set path over the same loop — a resume never scans for new work.
 
 **Worktree isolation.** On workflow start:
 
@@ -62,31 +62,43 @@ All of the workflow's tasks share that worktree, so each task sees the previous 
 
 All per-repo state lives **inside the target repo** at `<repo>/.somni/` as plain files: transparent (reviewable, diffable) and portable — clone the repo on another machine, open somni, and your workflows and history are there. No database.
 
+**v2 — the work-item store (M13, clean break).** One flat item store; `kind` is a frontmatter field, so grooming converts an Idea in place — no file moves. v1 `workflows/` directories are ignored by the v2 loader (no migration, no error); old `runs/` render unchanged.
+
 ```
 .somni/
   .gitignore            # maintained by somni: ignores runs/*/logs/
   config.json           # optional per-repo overrides (report_style, concurrency, timeout,
-                        # default execution profile — runner/model/effort, see §5)
+                        # default execution profile — runner/model/effort, see §5;
+                        # M16 adds optional checkCommand)
+  seq                   # next item number, bare integer, monotonic — ids are never reused
   roles/<slug>.md       # role preamble as Markdown; H1 = display name; optional
                         # frontmatter: runner/model/effort override (§5)
-  workflows/<slug>.json # name, ordered tasks (title, prompt, role, selected)
-  workflows/<slug>.brief.md # the polished Brief (M8) — written on Apply, deleted with its workflow
-  chats/<slug>.jsonl    # "Draft with AI" transcript for that workflow (committable)
-  chats/_draft.jsonl    # the one in-progress brief-first draft (M8) — renamed to <slug>.jsonl on Apply
-  backlog.json          # the ordered Backlog (M9): a bare array of workflow slugs; missing slugs pruned on load
+  items/SOM-<n>-<slug>.md        # every work item. Frontmatter: id, kind (idea|epic|story),
+                                 #   status (backlog|grooming|ready|in-progress|
+                                 #   needs-attention|review|done), epic?, blockedBy?, created.
+                                 #   Body = the approved Spec.
+  items/SOM-<n>-<slug>.tasks.json # stories only: ordered subtasks
+                                 #   [{title, prompt, role, selected}] — the shape the executor consumes
+  chats/SOM-<n>.jsonl   # grooming transcript per item (committable)
+  chats/_draft.jsonl    # the one in-progress capture-seeded groom — renamed on Apply
+  backlog.json          # ordered item ids = Backlog column priority; missing ids pruned on load
   runs/<runId>/
-    run.json            # execution state: pipeline/workflow/task statuses, attempts,
+    run.json            # execution state: pipeline/story/subtask statuses, attempts,
                         # session_ids, timestamps, cost, exit codes — crash-resume source of truth
+                        # (the JSON key `workflow` is frozen for v1-run compatibility; it carries the story id)
     logs/<task>.jsonl   # raw stream-json CLI output (gitignored — large)
     report.md           # the summary report (committable)
 ```
 
-- **Committable**: definitions, `run.json`, reports — commit `.somni/` for cross-machine continuity. **Gitignored**: raw logs (somni writes `.somni/.gitignore` itself).
-- Roles are Markdown because preambles are prose; workflows are JSON because they're structured.
-- Writes are atomic (write temp file, rename). The files are authoritative: external edits — a `git pull`, hand-editing a workflow — are picked up on app refresh.
-- Definitions (`roles/`, `workflows/`) are deliberately separate from executions (`runs/`) so history survives edits and re-runs.
+- **Committable**: definitions, items, `run.json`, reports — commit `.somni/` for cross-machine continuity. **Gitignored**: raw logs (somni writes `.somni/.gitignore` itself).
+- Items and Roles are Markdown because specs and preambles are prose; subtask sidecars are JSON because they're structured. Frontmatter is parsed by the same hand-rolled parser as roles — no YAML dependency.
+- Ids are `SOM-<n>`: fixed prefix, one sequence across all kinds (Jira-style), unpadded — code sorts numerically.
+- **Board column = `status`.** The Backlog column is ordered by `backlog.json`; other columns sort by id/recency — no per-file order field, no multi-file rewrites on drag.
+- **The Ready gate lives in main**: `item:setStatus` and `pipeline:add` refuse `ready`/pipeline entry unless the Spec body is non-empty and the sidecar has ≥1 selected subtask. The UI hides affordances; main is the authority.
+- Writes are atomic (write temp file, rename). The files are authoritative: external edits — a `git pull`, hand-editing an item — are picked up on app refresh.
+- Definitions (`roles/`, `items/`) are deliberately separate from executions (`runs/`) so history survives edits and re-runs.
 
-Statuses: `Queued / Running / Completed / Failed / Skipped / Cancelled`, plus `Paused` at the pipeline level for rate-limit waits.
+Run statuses: `Queued / Running / Completed / Failed / Skipped / Cancelled`, plus `Paused` at the pipeline level for rate-limit waits. (Item statuses are the board columns above — the two vocabularies never mix.)
 
 **App-level state** (Electron `userData`, machine-specific): global settings (claude path, default concurrency, default report style, task timeout, and the Nightly Window — `nightlyTime` "HH:MM" + `nightlyArmed`, armed state surviving restart, time surviving disarm; it drains the last-opened repo), the list of known repos, and worktrees under `<appData>/worktrees/` — worktrees are disposable local build artifacts; the `somni/…` branches are the portable part. Keep Running is deliberately not persisted.
 
@@ -173,8 +185,8 @@ A chat button in the workflow editor lets you yap a rough idea; an assistant ref
 
 Sidebar navigation, six views:
 
-1. **Workflows** — list with per-workflow pipeline checkboxes. Click into the **Workflow editor**: ordered task list (drag to reorder), each task = title, prompt, role dropdown, checkbox; repo picker for the workspace; the persisted Brief shown read-only above the tasks (collapsed by default); **Draft with AI** button → side chat panel (message list, input, streaming reply, question cards, proposal preview with Apply/Dismiss; disabled while this workflow is running in a pipeline). Below the main list, the **Backlog** (M9): an ordered section of parked workflows — up/down reorder, **Promote** (into the Queue), and a "To backlog" park action on workflow rows; parked work has no tick checkbox and never runs by itself.
-2. **Draft** (M8) — the brief-first drafting view: describe an outcome with no saved workflow, answer the Interview's question cards, Propose Now anytime; Apply creates the queued workflow and lands in its editor.
+1. **Board** (M13, home) — the kanban view over the item store: seven status columns (Backlog / Grooming / Ready / In Progress / Needs Attention / Review / Done), cards per item with kind chips ("Idea" for ungroomed captures), drag between columns (a drop the Ready gate refuses bounces back), Backlog ordered by `backlog.json`. Card affordances by column: Groom → (M14), Add to pipeline (Ready), Re-run / Re-groom (Needs Attention), Accept (Review). Click a card → **StoryPanel**: the Spec body plus the ordered subtask editor (title, prompt, role dropdown, selected checkbox). Spec'd in [briefs/M13-ui.md](briefs/M13-ui.md).
+2. **Grooming view** (M14; the M8 Draft view re-aimed — hidden during M13) — the interview surface: describe an intent (or open a captured Idea), answer the Interview's question cards, Propose Now anytime; Apply writes the groomed Epic/Stories/Subtasks as Ready items and lands back on the Board.
 3. **Roles** — CRUD library of `name` + `preamble`.
 4. **Pipeline** — the drain dashboard: queued/running workflows as cards, each task a chip colored by status, overall progress bar, **Drain queue / Cancel** plus the **Keep Running** toggle and the drain mode/status (running, rate-limit paused with resume time, or "draining — waiting for work" while Keep Running idles). Click any running task → **live log pane** (streamed stdout tail).
 5. **Runs & Reports** — history of pipeline runs; per-workflow report (stats table + summary); links to the worktree/branch for review.
@@ -199,6 +211,13 @@ Sidebar navigation, six views:
 - **M11 — Refine, model lists, view modes.** One-shot "Refine with AI" on task prompts and role preambles (workflow-structure refinement routes through the editor chat as a canned message); Runner adapters gain `listModels()` (CLI query → curated fallback → free-text combo in the UI); PO/Engineer view modes — presentation-only sidebar switch for the same single user.
 - **M12 — Voice input.** In-app mic on every AI text field via locally run whisper.cpp `base.en`, model downloaded on first use; macOS dictation remains the fallback. Deliberately last: riskiest dependency, nothing else needs it.
 
+**Phase 3 — the Jira-vocabulary SDLC on the Pocock workflow.** somni's core becomes a kanban SDLC using Jira's work-item vocabulary (Backlog / Epic / Story / Subtask — no Sprint) fused with Matt Pocock's engineering workflow ([mattpocock/skills](https://github.com/mattpocock/skills)): the grill interview → approved Spec → tracer-bullet Stories with blocking edges → unattended implement with TDD closing in code-review. The fusion point is the **hard Ready gate** — nothing runs that wasn't groomed properly. Work items fully replace the Workflow/Task vocabulary (clean break, no migration); the execution engine keeps its names and machinery. Decided 2026-08-27; vocabulary in [CONTEXT.md](../CONTEXT.md).
+
+- **M13 — Work-item model v2 + the Board.** The `.somni/` v2 item store (§4), status-as-the-tick drain scanning (§3), the Ready gate in main, and the kanban Board as home with StoryPanel; WorkflowsView deleted, Draft view hidden pending M14. Stories are hand-authored this milestone. [briefs/M13.md](briefs/M13.md).
+- **M14 — Grooming.** The M8 interview machinery re-aimed: a grooming preamble encoding grill → spec → tickets discipline; proposals become a fenced `somni-groomed` block `{kind, epic?, stories: [{title, spec, subtasks, blockedBy}], roles?}`; Apply writes epic + story items with sidecars, all Ready; Draft view returns as the Grooming view keyed by item id; the drain honors `blockedBy` ordering end-to-end.
+- **M15 — Capture + command palette.** Friction-free idea entry per the accepted capture design: capture modal (header "+", Cmd+N; textarea + M12 mic; Enter = save to Backlog & stay open; "Groom now →" seeds the Grooming view), inline quick-add row atop the Backlog column sharing one `item:capture` IPC, muted "Idea" chips, and a Cmd+K palette (Capture / Search stories / navigation / Run pipeline). No OS-global shortcut yet.
+- **M16 — Vendored skills + the implement discipline.** Pinned Pocock skills bundled at `resources/skills/` (manifest: version + upstream commit) and injected deliberately into target repos (`.claude/skills/` + version marker + `docs/agents/issue-tracker.md` declaring `.somni/items/` as the local tracker + `docs/adr/`, CONTEXT.md stubbed only-if-absent; manifest-scoped writes, never touching user files). The executor prepends a per-subtask discipline preamble pointing at the Story's Spec, auto-appends a Review task (code-review + tests → fenced `somni-verdict` JSON), cycles findings → fix → review at most twice, then Needs Attention; green → Review awaiting Acceptance. Optional `checkCommand` in `.somni/config.json` is the primary deterministic green signal where set.
+
 Each milestone is shippable and exercises the one before it.
 
 ## 10. Risks & open questions
@@ -211,3 +230,5 @@ Each milestone is shippable and exercises the one before it.
 - **Merge-back is manual by design.** The app creates branches; you merge. Auto-merge is out of scope for v1.
 - **Antigravity CLI is young.** `agy` shipped mid-2026 and its flags may drift; the adapter pins exact flags at M7 implementation against the live docs, and CI-style smoke checks of both runners' output parsing guard against CLI updates breaking overnight runs. Rate-limit detection is per-adapter (Anthropic and Google error shapes differ).
 - **One machine at a time.** `.somni/` sync is via git, so running pipelines for the same repo on two machines concurrently is unsupported (last-writer-wins on `run.json`). Run overnight on one machine; review anywhere.
+- **Green-detection is the fragile joint (Phase 3).** `claude -p` exits 0 even when the work is bad, and a fenced verdict in a nondeterministic reply can be malformed or optimistic. A configured `checkCommand` is the primary deterministic signal; the verdict block is advisory. Without either, "green" means "the agent said so" — reports state that plainly.
+- **Skills injection touches repos somni doesn't own (Phase 3).** Mitigated by manifest-scoped writes only, never overwriting non-somni files, CONTEXT.md stubbed only-if-absent, and upgrades always deliberate. Antigravity cannot read `.claude/skills/`, so implement-stage roles default to the claude runner; inlining skill bodies into agy prompts is the noted upgrade path, not built.

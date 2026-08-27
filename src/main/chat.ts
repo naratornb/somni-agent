@@ -292,7 +292,8 @@ export function applyProposal(
   // still being appended to it.
   if (inFlight.has(slug)) return { ok: false, error: 'a chat turn is already in flight' }
   const draft = slug === DRAFT_KEY
-  const { roles, workflows } = store.loadRepo(repo)
+  const { roles } = store.loadRepo(repo)
+  const workflows = store.loadWorkflows(repo)
   const existing = draft ? undefined : workflows.find((w) => w.slug === slug)
   const roleSlugs = new Set(roles.map((r) => r.slug))
   for (const role of proposal.roles) {

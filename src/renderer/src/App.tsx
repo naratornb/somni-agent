@@ -5,14 +5,12 @@ import { LogLine, PipelineView } from './PipelineView'
 import { RolesView } from './RolesView'
 import { RunsView } from './RunsView'
 import { SettingsView } from './SettingsView'
-import { WorkflowsView } from './WorkflowsView'
-import { DraftView } from './DraftView'
+import { BoardView } from './BoardView'
 import { LABEL } from './ui'
 
 // Nav order + Material Symbols glyph per view (mock: any code.html sidebar).
 const VIEWS = {
-  Workflows: 'account_tree',
-  Draft: 'chat_bubble',
+  Board: 'account_tree',
   Pipeline: 'speed',
   Runs: 'history',
   Roles: 'groups',
@@ -21,9 +19,10 @@ const VIEWS = {
 } as const
 type View = keyof typeof VIEWS
 
-// PO hat = brief, queue, review outcomes (CONTEXT.md) — ticks and the Backlog
-// live in WorkflowsView, so queueing keeps it. Presentation only (Decision 9).
-const PO_VIEWS: View[] = ['Draft', 'Workflows', 'Pipeline', 'Runs']
+// PO hat = capture, groom, accept (CONTEXT.md) — all of which live on the
+// Board. Presentation only (Decision 9). The Draft view is hidden in M13; it
+// returns re-aimed as Grooming in M14, so its machinery stays put.
+const PO_VIEWS: View[] = ['Board', 'Pipeline', 'Runs']
 
 const timeAgo = (iso: string): string => {
   const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60_000)
@@ -32,8 +31,8 @@ const timeAgo = (iso: string): string => {
 
 function App(): React.JSX.Element {
   const [repo, setRepo] = useState<string | null>(null)
-  const [data, setData] = useState<RepoData>({ roles: [], workflows: [], backlog: [] })
-  const [view, setView] = useState<View>('Workflows')
+  const [data, setData] = useState<RepoData>({ roles: [], items: [], backlog: [] })
+  const [view, setView] = useState<View>('Board')
   const [runs, setRuns] = useState<Record<string, RunState>>({})
   const [logs, setLogs] = useState<Record<string, LogLine[]>>({})
   // Drain state is owned by main (Decision 8): seeded from pipeline:state on
@@ -41,9 +40,6 @@ function App(): React.JSX.Element {
   // pipeline:status pushes, which carry the mode.
   const [drain, setDrain] = useState<DrainState | null>(null)
   const [orphans, setOrphans] = useState<RunState[]>([])
-  // Post-Apply handoff: the Draft view names a slug, WorkflowsView opens it
-  // once and clears it (consume-once, no lifted editor state).
-  const [openSlug, setOpenSlug] = useState<string | null>(null)
   // Which views the sidebar offers. Seeded from settings on mount, persisted
   // straight back through settings:set — no separate IPC, no localStorage.
   const [mode, setMode] = useState<ViewMode>('engineer')
@@ -96,8 +92,8 @@ function App(): React.JSX.Element {
     }
   }
 
-  // Tick the named slugs (none = just drain the Queue) and start or join the
-  // drain. Finished runs stay on the board — a drain is continuous now, so
+  // Add the named stories (none = just drain what's in progress) and start or
+  // join the drain. Finished runs stay on the board — a drain is continuous now, so
   // wiping runs/logs on every join would erase the night's work (Decision 8).
   const startPipeline = (slugs: string[]): void => {
     if (!repo) return
@@ -121,12 +117,6 @@ function App(): React.JSX.Element {
   // Busy = a drain is live, per main — not derived from the run board.
   const busy = drain != null && drain.mode != null
   const keepRunning = drain?.mode === 'keep'
-  // Decision 9: chat is refused only for a workflow currently executing, not
-  // for the whole app — so the editor chat gates on these slugs, not on busy.
-  const runningSlugs = Object.values(runs)
-    .filter((r) => r.finishedAt == null)
-    .map((r) => r.workflow)
-  const selected = data.workflows.filter((w) => w.selected)
   const navViews = Object.entries(VIEWS).filter(
     ([v]) => mode === 'engineer' || PO_VIEWS.includes(v as View)
   )
@@ -134,7 +124,7 @@ function App(): React.JSX.Element {
   const switchMode = (m: ViewMode): void => {
     setMode(m)
     // Falling back keeps the shell coherent when the current view disappears.
-    if (m === 'po' && !PO_VIEWS.includes(view)) setView('Workflows')
+    if (m === 'po' && !PO_VIEWS.includes(view)) setView('Board')
     void window.somni.setSettings({ viewMode: m })
   }
 
@@ -245,11 +235,10 @@ function App(): React.JSX.Element {
             <SettingsView />
           ) : !repo ? (
             <p className="text-on-surface-variant">
-              Choose a repo to manage its workflows and roles.
+              Choose a repo to manage its work items and roles.
             </p>
           ) : view === 'Pipeline' ? (
             <PipelineView
-              workflows={selected}
               runs={runs}
               logs={logs}
               busy={busy}
@@ -259,29 +248,16 @@ function App(): React.JSX.Element {
               onStart={() => startPipeline([])}
               onCancel={() => void window.somni.cancelPipeline()}
             />
-          ) : view === 'Draft' ? (
-            <DraftView
-              repo={repo}
-              roles={data.roles}
-              onApplied={(wf) => {
-                refresh()
-                setOpenSlug(wf.slug)
-                setView('Workflows')
-              }}
-            />
           ) : view === 'Runs' ? (
             <RunsView repo={repo} />
-          ) : view === 'Workflows' ? (
-            <WorkflowsView
+          ) : view === 'Board' ? (
+            <BoardView
               repo={repo}
-              workflows={data.workflows}
+              items={data.items}
               backlog={data.backlog}
               roles={data.roles}
+              runs={runs}
               refresh={refresh}
-              onRun={(slug) => startPipeline([slug])}
-              runningSlugs={runningSlugs}
-              openSlug={openSlug}
-              onOpened={() => setOpenSlug(null)}
             />
           ) : (
             <RolesView repo={repo} roles={data.roles} refresh={refresh} />

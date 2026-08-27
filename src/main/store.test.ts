@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs'
+import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -10,11 +10,14 @@ import {
   saveBacklog,
   saveRole,
   deleteRole,
-  saveWorkflow,
-  deleteWorkflow,
+  saveItem,
+  deleteItem,
+  loadItems,
+  nextId,
+  readyBlocker,
   resolveProfile,
   resolveSettings,
-  setSelected
+  setItemStatus
 } from './store'
 
 let repo: string
@@ -35,35 +38,153 @@ describe('store round-trips', () => {
     expect(readFileSync(join(repo, '.somni/.gitignore'), 'utf8')).toContain('runs/*/logs/')
   })
 
-  it('saves and reloads roles and workflows', () => {
+  it('saves and reloads roles and items', () => {
     const role = saveRole(repo, { slug: '', name: 'Senior Tester', preamble: 'You test things.' })
     expect(role.slug).toBe('senior-tester')
-    const wf = saveWorkflow(repo, {
-      slug: '',
+    const item = saveItem(repo, {
       name: 'Add feature',
-      selected: true,
+      kind: 'story',
+      status: 'ready',
+      spec: 'Ship the thing.',
       tasks: [{ title: 'Design', prompt: 'Design it', role: 'senior-tester', selected: true }]
     })
+    expect(item.id).toBe('SOM-1')
+    expect(existsSync(join(repo, '.somni/items/SOM-1-add-feature.md'))).toBe(true)
     const data = loadRepo(repo)
     expect(data.roles).toEqual([role])
-    expect(data.workflows).toEqual([wf])
+    expect(data.items).toEqual([item])
   })
 
   it('deletes files', () => {
     saveRole(repo, { slug: '', name: 'X', preamble: 'p' })
     deleteRole(repo, 'x')
-    saveWorkflow(repo, { slug: '', name: 'Y', selected: false, tasks: [] })
-    deleteWorkflow(repo, 'y')
-    expect(loadRepo(repo)).toEqual({ roles: [], workflows: [], backlog: [] })
+    const y = saveItem(repo, { name: 'Y', kind: 'story', tasks: [] })
+    deleteItem(repo, y.id)
+    expect(loadRepo(repo)).toEqual({ roles: [], items: [], backlog: [] })
     expect(existsSync(join(repo, '.somni/roles/x.md'))).toBe(false)
   })
 
-  it('picks up hand-edited files and survives malformed ones', () => {
+  it('ignores v1 workflows/ and survives a malformed item', () => {
     mkdirSync(join(repo, '.somni/workflows'), { recursive: true })
     writeFileSync(join(repo, '.somni/workflows/hand.json'), '{"name":"Hand","tasks":[]}')
-    writeFileSync(join(repo, '.somni/workflows/broken.json'), 'not json')
-    const data = loadRepo(repo)
-    expect(data.workflows).toEqual([{ slug: 'hand', name: 'Hand', selected: false, tasks: [] }])
+    mkdirSync(join(repo, '.somni/items'), { recursive: true })
+    // a directory where a file should be: the read throws, the rest still loads
+    mkdirSync(join(repo, '.somni/items/SOM-9-broken.md'))
+    saveItem(repo, { name: 'Fine', kind: 'idea' })
+    // the v1 file is simply never read; a broken item doesn't take the rest down
+    expect(loadRepo(repo).items.map((i) => i.name)).toEqual(['Fine'])
+  })
+})
+
+describe('items', () => {
+  const story = (name: string, extra = {}): ReturnType<typeof saveItem> =>
+    saveItem(repo, {
+      name,
+      kind: 'story',
+      status: 'ready',
+      spec: 'the spec',
+      tasks: [{ title: 'T', prompt: 'p', role: 'dev', selected: true }],
+      ...extra
+    })
+
+  it('round-trips every frontmatter field including blockedBy', () => {
+    const a = story('First')
+    const b = story('Second', { epic: 'SOM-9', blockedBy: [a.id, 'SOM-9'] })
+    const raw = readFileSync(join(repo, '.somni/items', `${b.id}-second.md`), 'utf8')
+    expect(raw).toContain(`blockedBy: ${a.id}, SOM-9`)
+    expect(loadItems(repo)).toEqual([a, b])
+    expect(loadItems(repo)[1].blockedBy).toEqual([a.id, 'SOM-9'])
+  })
+
+  it('reads hand-written frontmatter and defaults the unknown', () => {
+    mkdirSync(join(repo, '.somni/items'), { recursive: true })
+    writeFileSync(
+      join(repo, '.somni/items/SOM-4-hand.md'),
+      '---\nid: SOM-4\nkind: saga\nstatus: nowhere\n---\n# Hand written\n\nSpec text.\n'
+    )
+    expect(loadItems(repo)[0]).toMatchObject({
+      id: 'SOM-4',
+      slug: 'hand',
+      kind: 'idea', // unknown kind falls back
+      status: 'backlog', // unknown status falls back
+      name: 'Hand written',
+      spec: 'Spec text.',
+      tasks: []
+    })
+  })
+
+  it('sorts numerically, not alphabetically', () => {
+    for (let i = 0; i < 11; i++) story(`S${i}`)
+    expect(loadItems(repo).map((i) => i.id)).toEqual(
+      Array.from({ length: 11 }, (_, i) => `SOM-${i + 1}`)
+    )
+  })
+
+  it('hands out monotonic ids and never reuses one', () => {
+    const a = story('A')
+    const b = story('B')
+    expect([a.id, b.id]).toEqual(['SOM-1', 'SOM-2'])
+    deleteItem(repo, b.id)
+    expect(story('C').id).toBe('SOM-3')
+    expect(readFileSync(join(repo, '.somni/seq'), 'utf8').trim()).toBe('4')
+  })
+
+  it('never hands out an id an existing file already claims (lost seq file)', () => {
+    story('A')
+    story('B')
+    rmSync(join(repo, '.somni/seq'))
+    expect(nextId(repo)).toBe('SOM-3')
+  })
+
+  it('moves the file when the title changes, keeping the id', () => {
+    const a = story('Before')
+    const renamed = saveItem(repo, { ...a, name: 'After', slug: '' })
+    expect(renamed.id).toBe(a.id)
+    expect(existsSync(join(repo, '.somni/items', `${a.id}-before.md`))).toBe(false)
+    expect(existsSync(join(repo, '.somni/items', `${a.id}-after.tasks.json`))).toBe(true)
+    expect(loadItems(repo)).toEqual([renamed])
+  })
+
+  it('setItemStatus rewrites only the status', () => {
+    const a = story('A')
+    expect(setItemStatus(repo, a.id, 'in-progress').status).toBe('in-progress')
+    expect(loadItems(repo)[0]).toEqual({ ...a, status: 'in-progress' })
+    expect(() => setItemStatus(repo, 'SOM-99', 'done')).toThrow()
+  })
+
+  it('drops the subtask sidecar when an item is not a story', () => {
+    const a = story('A')
+    saveItem(repo, { ...a, kind: 'epic' })
+    expect(existsSync(join(repo, '.somni/items', `${a.id}-a.tasks.json`))).toBe(false)
+    expect(loadItems(repo)[0].tasks).toEqual([])
+  })
+})
+
+// The Ready gate (§4.1) — main is the authority; item:setStatus and
+// pipeline:add both refuse on these.
+describe('readyBlocker', () => {
+  const make = (extra: object): ReturnType<typeof saveItem> =>
+    saveItem(repo, {
+      name: 'S',
+      kind: 'story',
+      spec: 'the spec',
+      tasks: [{ title: 'T', prompt: 'p', role: 'dev', selected: true }],
+      ...extra
+    })
+
+  it('passes a groomed story', () => {
+    expect(readyBlocker(make({}))).toBeNull()
+  })
+
+  it('refuses a missing item, a non-story kind, an empty spec and zero selected subtasks', () => {
+    expect(readyBlocker(undefined)).toMatch(/not found/)
+    expect(readyBlocker(make({ kind: 'idea' }))).toMatch(/only a Story/)
+    expect(readyBlocker(make({ kind: 'epic' }))).toMatch(/only a Story/)
+    expect(readyBlocker(make({ spec: '   ' }))).toMatch(/empty Spec/)
+    expect(readyBlocker(make({ tasks: [] }))).toMatch(/no selected subtasks/)
+    expect(
+      readyBlocker(make({ tasks: [{ title: 'T', prompt: 'p', role: 'dev', selected: false }] }))
+    ).toMatch(/no selected subtasks/)
   })
 })
 
@@ -137,52 +258,13 @@ describe('execution profile & settings resolution', () => {
   })
 })
 
-describe('setSelected', () => {
-  it('flips only the tick, leaving tasks and the Brief sidecar untouched', () => {
-    saveWorkflow(repo, {
-      slug: '',
-      name: 'Ship it',
-      selected: false,
-      brief: 'the why',
-      tasks: [{ title: 'T', prompt: 'p', role: 'dev', selected: true }]
-    })
-    setSelected(repo, 'ship-it', true)
-    const wf = loadRepo(repo).workflows[0]
-    expect(wf.selected).toBe(true)
-    expect(wf.tasks).toEqual([{ title: 'T', prompt: 'p', role: 'dev', selected: true }])
-    expect(wf.brief).toBe('the why\n')
-    setSelected(repo, 'ship-it', false)
-    expect(loadRepo(repo).workflows[0].selected).toBe(false)
-  })
-
-  it('throws for a workflow that is not on disk (callers fail soft)', () => {
-    expect(() => setSelected(repo, 'ghost', true)).toThrow()
-  })
-})
-
-// repoIpc's backlog:promote and backlog:park handlers are thin compositions of
-// these store functions (M9 Decision 4) — exercised here since the IPC layer
-// itself needs an Electron mock to unit test.
-describe('backlog promote/park (mirrors repoIpc composition)', () => {
-  it('promote removes the slug from backlog and ticks its workflow', () => {
-    saveWorkflow(repo, { slug: '', name: 'Ship it', selected: false, tasks: [] })
-    saveWorkflow(repo, { slug: '', name: 'Other', selected: false, tasks: [] })
-    saveBacklog(repo, ['ship-it', 'other'])
-    saveBacklog(
-      repo,
-      loadBacklog(repo).filter((s) => s !== 'ship-it')
-    )
-    setSelected(repo, 'ship-it', true)
-    expect(loadBacklog(repo)).toEqual(['other'])
-    expect(loadRepo(repo).workflows.find((w) => w.slug === 'ship-it')?.selected).toBe(true)
-  })
-
-  it('park unticks the workflow and appends it to backlog', () => {
-    saveWorkflow(repo, { slug: '', name: 'Ship it', selected: true, tasks: [] })
-    setSelected(repo, 'ship-it', false)
-    const backlog = loadBacklog(repo)
-    saveBacklog(repo, [...backlog, 'ship-it'])
-    expect(loadBacklog(repo)).toEqual(['ship-it'])
-    expect(loadRepo(repo).workflows.find((w) => w.slug === 'ship-it')?.selected).toBe(false)
+describe('backlog ordering', () => {
+  it('round-trips ids and prunes ones whose item is gone', () => {
+    const a = saveItem(repo, { name: 'A', kind: 'idea' })
+    const b = saveItem(repo, { name: 'B', kind: 'idea' })
+    saveBacklog(repo, [b.id, a.id, 'SOM-99'])
+    expect(loadBacklog(repo)).toEqual([b.id, a.id])
+    deleteItem(repo, b.id)
+    expect(loadBacklog(repo)).toEqual([a.id])
   })
 })

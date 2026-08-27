@@ -6,16 +6,17 @@
 // tester's. Add a DOM environment only if that gap ever bites.
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, test } from 'vitest'
-import type { RunDetails, RunRow } from '../../preload/index'
+import type { Item, RunDetails, RunRow } from '../../preload/index'
 import App from './App'
 import { DraftChatPanel } from './DraftChatPanel'
 import { DraftView } from './DraftView'
+import { BoardView } from './BoardView'
 import { PipelineView } from './PipelineView'
+import { StoryPanel } from './StoryPanel'
 import { Playground } from './Playground'
 import { RolesView } from './RolesView'
 import { RunDetailsPanel, RunsView } from './RunsView'
 import { SettingsView } from './SettingsView'
-import { WorkflowsView } from './WorkflowsView'
 import { MicButton, ProposalPreview, QuestionCard, RefineControl } from './chatShared'
 
 // Every somni.* call is a noop; draftKey/proposeNow/refineStructure are read
@@ -38,6 +39,81 @@ const workflow = {
   brief: '# Hello',
   tasks: [{ title: 'Implement greeting', prompt: 'Add hello', role: 'dev', selected: true }]
 }
+// One item per column, so the Board smoke test walks every card branch.
+const items: Item[] = [
+  {
+    id: 'SOM-1',
+    slug: 'hello',
+    kind: 'story',
+    status: 'backlog',
+    name: 'Hello World Feature',
+    spec: 'Ship a greeting.',
+    created: '2026-08-26T09:00:00.000Z',
+    tasks: workflow.tasks
+  },
+  {
+    id: 'SOM-2',
+    slug: 'e',
+    kind: 'epic',
+    status: 'grooming',
+    name: 'Epic',
+    spec: '',
+    created: '',
+    tasks: []
+  },
+  {
+    id: 'SOM-3',
+    slug: 'r',
+    kind: 'story',
+    status: 'ready',
+    name: 'Ready one',
+    spec: 's',
+    created: '',
+    tasks: workflow.tasks,
+    blockedBy: ['SOM-9']
+  },
+  {
+    id: 'SOM-4',
+    slug: 'p',
+    kind: 'story',
+    status: 'in-progress',
+    name: 'Running one',
+    spec: 's',
+    created: '',
+    tasks: workflow.tasks
+  },
+  {
+    id: 'SOM-5',
+    slug: 'n',
+    kind: 'story',
+    status: 'needs-attention',
+    name: 'Broken one',
+    spec: 's',
+    created: '',
+    tasks: workflow.tasks
+  },
+  {
+    id: 'SOM-6',
+    slug: 'v',
+    kind: 'story',
+    status: 'review',
+    name: 'Review one',
+    spec: 's',
+    created: '',
+    tasks: workflow.tasks
+  },
+  {
+    id: 'SOM-7',
+    slug: 'd',
+    kind: 'idea',
+    status: 'done',
+    name: 'Done one',
+    spec: 's',
+    created: '',
+    tasks: []
+  }
+]
+
 const run: RunRow = {
   runId: 'r1',
   workflow: 'hello',
@@ -77,7 +153,6 @@ const views: [string, React.JSX.Element][] = [
     'Pipeline',
     <PipelineView
       key="p"
-      workflows={[workflow]}
       runs={{ r1: run as never }}
       logs={{ r1: [{ taskIndex: 0, text: 'hi' }] }}
       busy={false}
@@ -89,16 +164,28 @@ const views: [string, React.JSX.Element][] = [
     />
   ],
   [
-    'Workflows',
-    <WorkflowsView
-      key="w"
+    'Board',
+    <BoardView
+      key="b"
       repo="/repo"
-      workflows={[workflow]}
-      backlog={[]}
+      items={items}
+      backlog={['SOM-1']}
+      roles={roles}
+      runs={{ r1: run as never }}
+      refresh={() => {}}
+    />
+  ],
+  [
+    'StoryPanel',
+    <StoryPanel
+      key="sp"
+      repo="/repo"
+      item={items[0]}
+      items={items}
       roles={roles}
       refresh={() => {}}
-      onRun={() => {}}
-      runningSlugs={[]}
+      onClose={() => {}}
+      onOpen={() => {}}
     />
   ],
   ['Runs', <RunsView key="r" repo="/repo" />],
@@ -178,11 +265,54 @@ test('MicButton renders disabled with the checking placeholder before voice:stat
 // actually checked, not just "renders without throwing"; PO's *filtered* nav
 // needs a DOM/effects environment this SSR harness doesn't have — flagged as
 // a gap for the TD, exercise by hand in the live-app pass.
-test('App default (engineer) mode nav lists all seven views', () => {
+test('App default (engineer) mode nav lists every view, and not the hidden Draft', () => {
   const html = renderToStaticMarkup(<App />)
-  for (const v of ['Workflows', 'Draft', 'Pipeline', 'Runs', 'Roles', 'Settings', 'Playground']) {
+  for (const v of ['Board', 'Pipeline', 'Runs', 'Roles', 'Settings', 'Playground']) {
     expect(html).toContain(`>${v}</button>`)
   }
+  expect(html).not.toContain('>Draft</button>')
+})
+
+// §1/§5: the seven-column shell is permanent furniture — every column renders
+// with its count and, when empty, its own copy.
+test('Board renders all seven columns with counts and empty copy', () => {
+  const html = renderToStaticMarkup(
+    <BoardView repo="/repo" items={[]} backlog={[]} roles={roles} runs={{}} refresh={() => {}} />
+  )
+  for (const label of [
+    'BACKLOG',
+    'GROOMING',
+    'READY',
+    'IN PROGRESS',
+    'NEEDS ATTENTION',
+    'REVIEW',
+    'DONE'
+  ])
+    expect(html).toContain(label)
+  expect(html).toContain('Nothing yet — New Story to get started.')
+  expect(html).toContain('Nothing shipped yet.')
+})
+
+// §2: the per-column affordances, and the two cards that must not be draggable.
+test('Board cards carry their column affordance and drag rules', () => {
+  const html = renderToStaticMarkup(
+    <BoardView
+      repo="/repo"
+      items={items}
+      backlog={['SOM-1']}
+      roles={roles}
+      runs={{}}
+      refresh={() => {}}
+    />
+  )
+  expect(html).toContain('Groom →')
+  expect(html).toContain('Add to pipeline')
+  expect(html).toContain('Re-run')
+  expect(html).toContain('Accept')
+  // SOM-3 is blocked by an id that isn't done: chip shown, button disabled
+  expect(html).toContain('Blocked by SOM-9')
+  // in-progress and done cards are not draggable; the other five are
+  expect(html.match(/draggable="true"/g)).toHaveLength(5)
 })
 
 // The expanded card is the runs_reports mock: tiles, summary, per-file list.

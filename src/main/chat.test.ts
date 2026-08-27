@@ -17,7 +17,7 @@ import {
 } from './chat'
 import type { ChatEvent } from './chat'
 import { existsSync } from 'fs'
-import { deleteWorkflow, loadRepo, saveRole, saveWorkflow } from './store'
+import { deleteWorkflow, loadRepo, loadWorkflows, saveRole, saveWorkflow } from './store'
 
 const block = (json: string): string => '```somni-workflow\n' + json + '\n```'
 
@@ -279,7 +279,8 @@ describe('applyProposal', () => {
     )
 
     expect(res.ok && res.workflow.slug).toBe('nightly-cleanup')
-    const { workflows, roles } = loadRepo(repo)
+    const { roles } = loadRepo(repo)
+    const workflows = loadWorkflows(repo)
     expect(workflows[0].selected).toBe(true) // auto-ticked (Decision 6)
     expect(workflows[0].brief).toContain('Tidy up.')
     // an existing role always wins — byte-identical (Decision 5)
@@ -303,8 +304,8 @@ describe('applyProposal', () => {
     saveWorkflow(repo, { slug: 'existing', name: 'Existing', selected: false, tasks: [] })
     const res = applyProposal(repo, 'existing', proposal({ roles: [] }))
     expect(res.ok && res.workflow.slug).toBe('existing')
-    expect(loadRepo(repo).workflows[0].selected).toBe(false)
-    expect(loadRepo(repo).workflows[0].name).toBe('Nightly Cleanup')
+    expect(loadWorkflows(repo)[0].selected).toBe(false)
+    expect(loadWorkflows(repo)[0].name).toBe('Nightly Cleanup')
   })
 
   it('preserves an existing brief sidecar when the editor Apply proposal has no brief', () => {
@@ -316,7 +317,7 @@ describe('applyProposal', () => {
       brief: 'original brief'
     })
     applyProposal(repo, 'existing', proposal({ roles: [], brief: '' }))
-    expect(loadRepo(repo).workflows[0].brief).toBe('original brief\n')
+    expect(loadWorkflows(repo)[0].brief).toBe('original brief\n')
   })
 
   it('writes a genuinely new role with the right frontmatter and preamble', () => {
@@ -339,8 +340,8 @@ describe('applyProposal', () => {
     writeFileSync(join(repo, '.somni', 'chats', DRAFT_KEY + '.jsonl'), '{"role":"user"}\n')
     const second = applyProposal(repo, DRAFT_KEY, proposal({ roles: [] }))
     expect(second.ok && second.workflow.slug).toBe('nightly-cleanup-2')
-    const slugs = loadRepo(repo)
-      .workflows.map((w) => w.slug)
+    const slugs = loadWorkflows(repo)
+      .map((w) => w.slug)
       .sort()
     expect(slugs).toEqual(['nightly-cleanup', 'nightly-cleanup-2'])
   })
