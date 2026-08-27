@@ -4,7 +4,17 @@
 import { useState } from 'react'
 import type { Item, ItemStatus, Role, RunState } from '../../preload/index'
 import { StoryPanel } from './StoryPanel'
-import { BTN_GHOST_SM, CHIP, CHIP_SM, ERROR_BANNER, ICON_BTN, KIND_CHIP, LABEL } from './ui'
+import { QuickAdd } from './capture'
+import {
+  BTN_GHOST_SM,
+  CHIP,
+  CHIP_SM,
+  ERROR_BANNER,
+  ICON_BTN,
+  KIND_CHIP,
+  LABEL,
+  reorderBacklog
+} from './ui'
 
 type Props = {
   repo: string
@@ -14,6 +24,8 @@ type Props = {
   runs: Record<string, RunState> // this session's live runs, keyed by runId
   refresh: () => void
   onGroom: (id: string) => void // hand off to the Groom view (§7)
+  openId?: string | null // item the palette asked to open in the StoryPanel
+  onClosePanel?: () => void
 }
 
 // Fixed and ordered — never reordered, never hidden (§1).
@@ -47,7 +59,9 @@ export function BoardView({
   roles,
   runs,
   refresh,
-  onGroom
+  onGroom,
+  openId,
+  onClosePanel
 }: Props): React.JSX.Element {
   const [editing, setEditing] = useState<Item | null>(null)
   const [refused, setRefused] = useState<{ status: ItemStatus; error: string } | null>(null)
@@ -98,15 +112,20 @@ export function BoardView({
     return [...inColumn].sort((a, b) => rank(a) - rank(b))
   }
 
-  if (editing)
+  // The palette's "open item" arrives as a prop, so it works without an effect.
+  const panelItem = editing ?? items.find((i) => i.id === openId) ?? null
+  if (panelItem)
     return (
       <StoryPanel
         repo={repo}
-        item={editing}
+        item={panelItem}
         items={items}
         roles={roles}
         refresh={refresh}
-        onClose={() => setEditing(null)}
+        onClose={() => {
+          setEditing(null)
+          onClosePanel?.()
+        }}
         onOpen={setEditing}
       />
     )
@@ -131,6 +150,22 @@ export function BoardView({
         key={item.id}
         draggable={draggable}
         onDragStart={(e) => e.dataTransfer.setData('text/plain', item.id)}
+        // Intra-Backlog drops reorder; a card from another column falls through
+        // to the column's drop handler, keeping M13's status-change semantics.
+        onDragOver={status === 'backlog' ? (e) => e.preventDefault() : undefined}
+        onDrop={
+          status === 'backlog'
+            ? (e) => {
+                const id = e.dataTransfer.getData('text/plain')
+                const dragged = items.find((i) => i.id === id)
+                if (!dragged || dragged.status !== 'backlog' || id === item.id) return
+                e.stopPropagation()
+                void window.somni
+                  .setBacklog(repo, reorderBacklog(backlog, id, item.id))
+                  .then(refresh)
+              }
+            : undefined
+        }
         className={`cursor-pointer rounded-xl border bg-surface-elevated p-card-padding transition-colors ${border}`}
         // A card mid-groom resumes its interview; everywhere else the card is
         // the hand-edit surface (§7).
@@ -252,6 +287,7 @@ export function BoardView({
                   if (id) void move(id, col.status)
                 }}
               >
+                {col.status === 'backlog' && <QuickAdd repo={repo} refresh={refresh} />}
                 {cards.length === 0 ? (
                   <p className="p-4 text-center text-sm text-on-surface-variant">{col.empty}</p>
                 ) : (
