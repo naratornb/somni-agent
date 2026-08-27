@@ -107,6 +107,26 @@ export function summarize(nameStatus: string, diffStat: string): Stats {
 const duration = (ms?: number): string => (ms == null ? '—' : `${Math.round(ms / 1000)}s`)
 const cost = (n?: number): string => (n == null ? '—' : `$${n.toFixed(4)}`)
 
+// The closing review loop (M16). §10 is explicit that a green with no
+// checkCommand means "the agent said so" — the report says exactly that.
+export function reviewSection(state: RunState): string[] {
+  if (!state.reviews?.length) return []
+  return [
+    '## Review',
+    '',
+    ...state.reviews.flatMap((r) => [
+      `### Cycle ${r.cycle} — ${r.green ? 'green' : 'red'}`,
+      '',
+      `- Agent verdict: ${r.verdict}`,
+      r.check
+        ? `- checkCommand \`${r.check.command}\`: ${r.check.ok ? 'passed' : 'FAILED'}`
+        : '- checkCommand: not configured — green means the agent said so',
+      ...(r.findings ? ['', '```', r.findings, '```'] : []),
+      ''
+    ])
+  ]
+}
+
 export function minimalReport(state: RunState, stats: Stats): string {
   const total = state.tasks.reduce((c, t) => c + (t.costUsd ?? 0), 0)
   const time = state.tasks.reduce((c, t) => c + (t.durationMs ?? 0), 0)
@@ -133,7 +153,8 @@ export function minimalReport(state: RunState, stats: Stats): string {
     '```',
     stats.diffStat || '(no changes)',
     '```',
-    ''
+    '',
+    ...reviewSection(state)
   ].join('\n')
 }
 
@@ -155,7 +176,11 @@ export function runnerText(
   prompt: string,
   opts: RunnerOpts,
   cwd: string,
-  logPath?: string
+  logPath?: string,
+  // Lets a caller record the run's cost/usage on a TaskRun (M16's review loop).
+  onUsage?: (
+    usage: Pick<TaskRun, 'costUsd' | 'promptTokens' | 'completionTokens' | 'durationMs'>
+  ) => void
 ): Promise<string | null> {
   const runner = getRunner(settings.runner, settings)
   let out = ''
@@ -164,7 +189,15 @@ export function runnerText(
     runner.buildArgs(prompt, { model: settings.model, effort: settings.effort, ...opts }),
     cwd,
     (ev) => {
-      if (ev.kind === 'result' && ev.detail) out = ev.detail
+      if (ev.kind === 'result') {
+        if (ev.detail) out = ev.detail
+        onUsage?.({
+          costUsd: ev.costUsd,
+          promptTokens: ev.promptTokens,
+          completionTokens: ev.completionTokens,
+          durationMs: ev.durationMs
+        })
+      }
     },
     (chunk) => {
       if (logPath) appendFileSync(logPath, chunk)
@@ -216,6 +249,7 @@ export async function writeReport(
     const task: TaskRun = {
       title: 'Report',
       role: '',
+      aux: true,
       status: 'Running',
       log: 'logs/report.log'
     }

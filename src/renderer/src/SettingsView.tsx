@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Effort, ReportStyle, RunnerName, Settings } from '../../preload/index'
+import type { Effort, ReportStyle, RunnerName, Settings, SkillsStatus } from '../../preload/index'
 import { BTN_PRIMARY, CHECKBOX, CHIP, INPUT, LABEL, STATUS_CHIP, STATUS_CHIP_BASE } from './ui'
 
 /** Label + control row — the Settings/Roles form idiom (M10-ui.md §0). */
@@ -18,7 +18,67 @@ export function FieldRow({
   )
 }
 
-export function SettingsView(): React.JSX.Element {
+/** Repo-scoped settings: .somni/config.json + the injected skills (M16). */
+function RepoSection({ repo }: { repo: string }): React.JSX.Element {
+  const [check, setCheck] = useState('')
+  const [savedAt, setSavedAt] = useState(false)
+  const [skills, setSkills] = useState<SkillsStatus | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    void window.somni.getRepoConfig(repo).then((c) => setCheck(c.checkCommand ?? ''))
+    void window.somni.skillsStatus(repo).then(setSkills)
+  }, [repo])
+
+  const inject = async (): Promise<void> => {
+    setBusy(true)
+    setSkills(await window.somni.injectSkills(repo))
+    setBusy(false)
+  }
+
+  return (
+    <div className="mt-6">
+      <h2 className={`mb-2 ${LABEL}`}>This repo</h2>
+      <div className="flex flex-col divide-y divide-border-subtle rounded-xl border border-border-subtle bg-surface-elevated p-6">
+        <FieldRow label="Check command">
+          <input
+            className={`${INPUT} flex-1 font-mono-code`}
+            placeholder="npm test (optional — the review loop's deterministic signal)"
+            value={check}
+            onChange={(e) => {
+              setCheck(e.target.value)
+              setSavedAt(false)
+            }}
+            onBlur={() => {
+              void window.somni
+                .setRepoConfig(repo, { checkCommand: check })
+                .then(() => setSavedAt(true))
+            }}
+          />
+          {savedAt && <span className="text-sm text-on-surface-variant">Saved</span>}
+        </FieldRow>
+        <FieldRow label="Engineering skills">
+          <span className="flex-1 text-sm text-on-surface-variant">
+            {skills == null
+              ? 'Checking…'
+              : skills.repoVersion == null
+                ? 'Not set up in this repo'
+                : skills.repoVersion < skills.bundledVersion
+                  ? `v${skills.repoVersion} — v${skills.bundledVersion} available`
+                  : `v${skills.repoVersion} — up to date`}
+          </span>
+          {skills != null && skills.repoVersion !== skills.bundledVersion && (
+            <button className={BTN_PRIMARY} disabled={busy} onClick={() => void inject()}>
+              {skills.repoVersion == null ? 'Set up' : 'Upgrade'}
+            </button>
+          )}
+        </FieldRow>
+      </div>
+    </div>
+  )
+}
+
+export function SettingsView({ repo }: { repo: string | null }): React.JSX.Element {
   const [s, setS] = useState<Settings | null>(null)
   const [saved, setSaved] = useState(false)
   const [models, setModels] = useState<string[]>([])
@@ -173,6 +233,7 @@ export function SettingsView(): React.JSX.Element {
         <code className="font-mono-code">.somni/config.json</code>; a role can override
         runner/model/effort in its frontmatter.
       </p>
+      {repo && <RepoSection repo={repo} />}
     </div>
   )
 }
