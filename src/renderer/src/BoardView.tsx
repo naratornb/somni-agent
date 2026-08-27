@@ -13,6 +13,7 @@ type Props = {
   roles: Role[]
   runs: Record<string, RunState> // this session's live runs, keyed by runId
   refresh: () => void
+  onGroom: (id: string) => void // hand off to the Groom view (§7)
 }
 
 // Fixed and ordered — never reordered, never hidden (§1).
@@ -45,7 +46,8 @@ export function BoardView({
   backlog,
   roles,
   runs,
-  refresh
+  refresh,
+  onGroom
 }: Props): React.JSX.Element {
   const [editing, setEditing] = useState<Item | null>(null)
   const [refused, setRefused] = useState<{ status: ItemStatus; error: string } | null>(null)
@@ -66,9 +68,9 @@ export function BoardView({
     return res.ok
   }
 
-  const groom = async (item: Item): Promise<void> => {
-    if (await move(item.id, 'grooming')) setEditing({ ...item, status: 'grooming' })
-  }
+  // Grooming is the AI interview, not the hand-edit panel: main flips the
+  // status on the first turn, so this just opens the view (§7).
+  const groom = (item: Item): void => onGroom(item.id)
 
   // Add to pipeline / Re-run share the gate-checking path in main.
   const addToPipeline = async (id: string): Promise<void> => {
@@ -130,7 +132,9 @@ export function BoardView({
         draggable={draggable}
         onDragStart={(e) => e.dataTransfer.setData('text/plain', item.id)}
         className={`cursor-pointer rounded-xl border bg-surface-elevated p-card-padding transition-colors ${border}`}
-        onClick={() => setEditing(item)}
+        // A card mid-groom resumes its interview; everywhere else the card is
+        // the hand-edit surface (§7).
+        onClick={() => (status === 'grooming' ? groom(item) : setEditing(item))}
       >
         <div className="flex items-center justify-between gap-2">
           <span className="font-mono-code text-mono-code text-on-surface-variant">{item.id}</span>
@@ -171,7 +175,7 @@ export function BoardView({
         {item.kind !== 'epic' && (
           <div className="mt-3" onClick={(e) => e.stopPropagation()}>
             {status === 'backlog' && (
-              <button className={BTN_GHOST_SM} onClick={() => void groom(item)}>
+              <button className={BTN_GHOST_SM} onClick={() => groom(item)}>
                 Groom →
               </button>
             )}
@@ -186,12 +190,17 @@ export function BoardView({
               </button>
             )}
             {status === 'needs-attention' && (
-              <button
-                className="rounded-lg border border-border-subtle bg-surface px-3 py-1 text-xs text-error transition-colors hover:bg-error-container/20"
-                onClick={() => void addToPipeline(item.id)}
-              >
-                Re-run
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  className="rounded-lg border border-border-subtle bg-surface px-3 py-1 text-xs text-error transition-colors hover:bg-error-container/20"
+                  onClick={() => void addToPipeline(item.id)}
+                >
+                  Re-run
+                </button>
+                <button className={BTN_GHOST_SM} onClick={() => groom(item)}>
+                  Re-groom
+                </button>
+              </div>
             )}
             {status === 'review' && (
               <button

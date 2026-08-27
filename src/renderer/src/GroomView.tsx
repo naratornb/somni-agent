@@ -1,13 +1,14 @@
-// Brief-first drafting (§7): a full-page interview under the reserved _draft
-// key. Apply is a main-process call; this view only renders and hands off.
+// Grooming (§7): the full-page grill interview, keyed by the item being groomed
+// or the reserved _draft key from scratch. Apply is a main-process call; this
+// view only renders and hands off.
 import { useEffect, useRef, useState } from 'react'
 import type {
   ChatEvent,
   ChatMessage,
   ChatProposal,
   ChatQuestion,
-  Role,
-  Workflow
+  Item,
+  Role
 } from '../../preload/index'
 import { MicButton, ProposalPreview, QuestionCard } from './chatShared'
 import { appendText, BTN_GHOST, BTN_PRIMARY, BUBBLE_AI, BUBBLE_USER, ERROR_BANNER } from './ui'
@@ -15,17 +16,20 @@ import { appendText, BTN_GHOST, BTN_PRIMARY, BUBBLE_AI, BUBBLE_USER, ERROR_BANNE
 type Props = {
   repo: string
   roles: Role[]
-  onApplied: (workflow: Workflow) => void
+  // The item being groomed, or null to groom from scratch under DRAFT_KEY.
+  itemId?: string | null
+  onApplied: (item: Item) => void
 }
 
-const EMPTY = "Describe what you want built — I'll ask a few questions, then propose a workflow."
+const EMPTY =
+  "Describe what you want built — I'll ask a few questions, then propose a Spec and Stories."
 
 // Width caps are the full-page chat's; the 340px panel drops them (§6/§7).
 const USER = `max-w-[80%] ${BUBBLE_USER}`
 const AI = `max-w-[80%] ${BUBBLE_AI}`
 
-export function DraftView({ repo, roles, onApplied }: Props): React.JSX.Element {
-  const slug = window.somni.draftKey
+export function GroomView({ repo, roles, itemId, onApplied }: Props): React.JSX.Element {
+  const slug = itemId ?? window.somni.draftKey
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -90,11 +94,11 @@ export function DraftView({ repo, roles, onApplied }: Props): React.JSX.Element 
       setError(res.error)
       return
     }
-    onApplied(res.workflow)
+    onApplied(res.item)
   }
 
-  const newDraft = async (): Promise<void> => {
-    if (messages.length && !confirm('Start a new draft? The current transcript is discarded.'))
+  const newGroom = async (): Promise<void> => {
+    if (messages.length && !confirm('Start a new groom? The current transcript is discarded.'))
       return
     await window.somni.newChat(repo, slug)
     setMessages([])
@@ -114,9 +118,11 @@ export function DraftView({ repo, roles, onApplied }: Props): React.JSX.Element 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-stack-gap">
       <div className="flex shrink-0 items-center gap-4 border-b border-border-subtle pb-4">
-        <h2 className="font-headline-md text-headline-md font-bold">Draft</h2>
-        <button className={BTN_GHOST} onClick={newDraft} disabled={sending}>
-          New draft
+        <h2 className="font-headline-md text-headline-md font-bold">
+          {itemId ? `Groom ${itemId}` : 'Groom'}
+        </h2>
+        <button className={BTN_GHOST} onClick={newGroom} disabled={sending}>
+          New groom
         </button>
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-stack-gap overflow-y-auto" ref={listRef}>

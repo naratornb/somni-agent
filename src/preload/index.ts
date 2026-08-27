@@ -28,13 +28,6 @@ export type Role = {
   effort?: Effort
 }
 export type Task = { title: string; prompt: string; role: string; selected: boolean }
-export type Workflow = {
-  slug: string
-  name: string
-  selected: boolean
-  tasks: Task[]
-  brief?: string
-}
 export type ItemKind = 'idea' | 'epic' | 'story'
 export type ItemStatus =
   'backlog' | 'grooming' | 'ready' | 'in-progress' | 'needs-attention' | 'review' | 'done'
@@ -105,7 +98,15 @@ export type Transcription = { ok: boolean; text?: string; error?: string }
 export type ModelProgress = { received: number; total: number }
 
 export type ChatMessage = { role: 'user' | 'assistant'; text: string; ts: string }
-export type ChatProposal = { name: string; brief: string; tasks: Task[]; roles: Role[] }
+export type GroomedStory = { name: string; spec: string; tasks: Task[]; blockedBy: number[] }
+export type ChatProposal = {
+  kind: 'epic' | 'story'
+  name: string
+  spec: string
+  stories: GroomedStory[]
+  tasks: Task[]
+  roles: Role[]
+}
 export type ChatQuestion = { question: string; options: string[]; recommended: string }
 export type ChatEvent =
   | { slug: string; kind: 'text'; text: string }
@@ -124,23 +125,17 @@ function on(channel: string, cb: (payload: unknown) => void): () => void {
   return () => ipcRenderer.removeListener(channel, listener)
 }
 
-// Reserved chat key for the one pre-Apply brief-first draft (keep in sync with
+// Reserved chat key for the one pre-Apply from-scratch groom (keep in sync with
 // DRAFT_KEY in src/main/chat.ts).
 export const DRAFT_KEY = '_draft'
 // The fixed Propose Now message (keep in sync with PROPOSE_NOW in chat.ts).
 export const PROPOSE_NOW =
-  'Stop interviewing and propose the workflow now, from my answers so far plus ' +
-  'your own stated assumptions for anything still open.'
-// The fixed Refine structure message (keep in sync with REFINE_STRUCTURE in chat.ts).
-export const REFINE_STRUCTURE =
-  "Reread this workflow's current definition and propose a refined version now: " +
-  'tighter task boundaries, better ordering, sharper prompts, the right role for ' +
-  'each task. Keep the intent — refine how it gets there.'
+  'Stop interviewing and propose the groomed result now, from my answers so far ' +
+  'plus your own stated assumptions for anything still open.'
 
 const somni = {
   draftKey: DRAFT_KEY,
   proposeNow: PROPOSE_NOW,
-  refineStructure: REFINE_STRUCTURE,
   runTask: (prompt: string): Promise<void> => ipcRenderer.invoke('task:run', prompt),
   onTaskEvent: (cb: (ev: unknown) => void): (() => void) => on('task:event', cb),
   startPipeline: (repo: string, ids: string[]): Promise<{ refused: string[] }> =>
@@ -216,15 +211,15 @@ const somni = {
     ipcRenderer.invoke('chat:new', repo, slug),
   sendChat: (repo: string, slug: string, text: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('chat:send', repo, slug, text),
-  // Apply — the only write out of a chat. `slug` is DRAFT_KEY for the Draft
-  // view (creates a ticked workflow, renames the transcript) or an existing
-  // workflow slug from the editor (tick preserved).
+  // Apply — the only write out of a groom. `key` is DRAFT_KEY (creates the
+  // item(s), renames the transcript) or the groomed item's id (converted in
+  // place, keeping its id).
   applyProposal: (
     repo: string,
-    slug: string,
+    key: string,
     proposal: ChatProposal
-  ): Promise<{ ok: true; workflow: Workflow } | { ok: false; error: string }> =>
-    ipcRenderer.invoke('proposal:apply', repo, slug, proposal),
+  ): Promise<{ ok: true; item: Item } | { ok: false; error: string }> =>
+    ipcRenderer.invoke('proposal:apply', repo, key, proposal),
   onChatEvent: (cb: (ev: ChatEvent) => void): (() => void) =>
     on('chat:event', (p) => cb(p as ChatEvent))
 }

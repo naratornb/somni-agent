@@ -8,8 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, test } from 'vitest'
 import type { Item, RunDetails, RunRow } from '../../preload/index'
 import App from './App'
-import { DraftChatPanel } from './DraftChatPanel'
-import { DraftView } from './DraftView'
+import { GroomView } from './GroomView'
 import { BoardView } from './BoardView'
 import { PipelineView } from './PipelineView'
 import { StoryPanel } from './StoryPanel'
@@ -19,14 +18,9 @@ import { RunDetailsPanel, RunsView } from './RunsView'
 import { SettingsView } from './SettingsView'
 import { MicButton, ProposalPreview, QuestionCard, RefineControl } from './chatShared'
 
-// Every somni.* call is a noop; draftKey/proposeNow/refineStructure are read
-// during render.
+// Every somni.* call is a noop; draftKey/proposeNow are read during render.
 const somni = new Proxy(
-  {
-    draftKey: '_draft',
-    proposeNow: 'PROPOSE_NOW',
-    refineStructure: 'REFINE_STRUCTURE'
-  } as Record<string, unknown>,
+  { draftKey: '_draft', proposeNow: 'PROPOSE_NOW' } as Record<string, unknown>,
   { get: (t, k) => (k in t ? t[k as string] : () => Promise.resolve(undefined)) }
 )
 Object.assign(globalThis, { window: { somni } })
@@ -141,9 +135,14 @@ const runDetails: RunDetails = {
   }
 }
 const proposal = {
+  kind: 'epic' as const,
   name: 'Hello',
-  brief: '# Hello',
-  tasks: workflow.tasks,
+  spec: '# Hello',
+  stories: [
+    { name: 'First slice', spec: 'a', tasks: workflow.tasks, blockedBy: [] },
+    { name: 'Second slice', spec: 'b', tasks: workflow.tasks, blockedBy: [0] }
+  ],
+  tasks: [],
   roles: [{ slug: 'qa', name: 'QA', preamble: 'You test.' }]
 }
 
@@ -173,6 +172,7 @@ const views: [string, React.JSX.Element][] = [
       roles={roles}
       runs={{ r1: run as never }}
       refresh={() => {}}
+      onGroom={() => {}}
     />
   ],
   [
@@ -204,18 +204,10 @@ const views: [string, React.JSX.Element][] = [
   ['Roles', <RolesView key="ro" repo="/repo" roles={roles} refresh={() => {}} />],
   ['Settings', <SettingsView key="s" />],
   ['Playground', <Playground key="pl" />],
-  ['Draft', <DraftView key="d" repo="/repo" roles={roles} onApplied={() => {}} />],
+  ['Groom', <GroomView key="g" repo="/repo" roles={roles} onApplied={() => {}} />],
   [
-    'DraftChatPanel',
-    <DraftChatPanel
-      key="dc"
-      repo="/repo"
-      slug="hello"
-      roles={roles}
-      open
-      running={false}
-      onApply={() => {}}
-    />
+    'GroomView on an item',
+    <GroomView key="gi" repo="/repo" roles={roles} itemId="SOM-1" onApplied={() => {}} />
   ],
   [
     'QuestionCard',
@@ -267,17 +259,24 @@ test('MicButton renders disabled with the checking placeholder before voice:stat
 // a gap for the TD, exercise by hand in the live-app pass.
 test('App default (engineer) mode nav lists every view, and not the hidden Draft', () => {
   const html = renderToStaticMarkup(<App />)
-  for (const v of ['Board', 'Pipeline', 'Runs', 'Roles', 'Settings', 'Playground']) {
+  for (const v of ['Board', 'Groom', 'Pipeline', 'Runs', 'Roles', 'Settings', 'Playground']) {
     expect(html).toContain(`>${v}</button>`)
   }
-  expect(html).not.toContain('>Draft</button>')
 })
 
 // §1/§5: the seven-column shell is permanent furniture — every column renders
 // with its count and, when empty, its own copy.
 test('Board renders all seven columns with counts and empty copy', () => {
   const html = renderToStaticMarkup(
-    <BoardView repo="/repo" items={[]} backlog={[]} roles={roles} runs={{}} refresh={() => {}} />
+    <BoardView
+      repo="/repo"
+      items={[]}
+      backlog={[]}
+      roles={roles}
+      runs={{}}
+      refresh={() => {}}
+      onGroom={() => {}}
+    />
   )
   for (const label of [
     'BACKLOG',
@@ -293,6 +292,43 @@ test('Board renders all seven columns with counts and empty copy', () => {
   expect(html).toContain('Nothing shipped yet.')
 })
 
+// §7: ProposalPreview must show one card per epic child Story with its
+// "blocked by" chip resolved to the blocker's name (not the raw index), and
+// a single-story proposal's subtasks listed directly (no story cards).
+test('ProposalPreview renders epic child cards with blocked-by and a single story its subtask list', () => {
+  const html = renderToStaticMarkup(
+    <ProposalPreview
+      proposal={proposal}
+      roles={roles}
+      disabled={false}
+      onApply={() => {}}
+      onDismiss={() => {}}
+    />
+  )
+  expect(html).toContain('First slice')
+  expect(html).toContain('Second slice')
+  expect(html).toContain('blocked by First slice')
+
+  const storyProposal = {
+    kind: 'story' as const,
+    name: 'Solo',
+    spec: 's',
+    stories: [],
+    tasks: workflow.tasks,
+    roles: []
+  }
+  const storyHtml = renderToStaticMarkup(
+    <ProposalPreview
+      proposal={storyProposal}
+      roles={roles}
+      disabled={false}
+      onApply={() => {}}
+      onDismiss={() => {}}
+    />
+  )
+  for (const t of workflow.tasks) expect(storyHtml).toContain(t.title)
+})
+
 // §2: the per-column affordances, and the two cards that must not be draggable.
 test('Board cards carry their column affordance and drag rules', () => {
   const html = renderToStaticMarkup(
@@ -303,11 +339,14 @@ test('Board cards carry their column affordance and drag rules', () => {
       roles={roles}
       runs={{}}
       refresh={() => {}}
+      onGroom={() => {}}
     />
   )
   expect(html).toContain('Groom →')
   expect(html).toContain('Add to pipeline')
   expect(html).toContain('Re-run')
+  // Needs Attention offers both rulings (§7)
+  expect(html).toContain('Re-groom')
   expect(html).toContain('Accept')
   // SOM-3 is blocked by an id that isn't done: chip shown, button disabled
   expect(html).toContain('Blocked by SOM-9')

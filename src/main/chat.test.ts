@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   applyProposal,
-  draftPreamble,
+  groomPreamble,
   DRAFT_KEY,
   killChats,
   loadChat,
@@ -17,27 +17,68 @@ import {
 } from './chat'
 import type { ChatEvent } from './chat'
 import { existsSync } from 'fs'
-import { deleteWorkflow, loadRepo, loadWorkflows, saveRole, saveWorkflow } from './store'
+import { loadBacklog, loadItems, loadRepo, saveItem, saveRole } from './store'
 
-const block = (json: string): string => '```somni-workflow\n' + json + '\n```'
+const block = (json: string): string => '```somni-groomed\n' + json + '\n```'
+// A one-Story proposal in the pinned schema; `over` swaps any field.
+const story = (over: Record<string, unknown> = {}): string =>
+  JSON.stringify({
+    kind: 'story',
+    name: 'N',
+    spec: 's',
+    subtasks: [{ title: 't', prompt: 'p', role: 'dev' }],
+    ...over
+  })
 
 describe('parseProposal', () => {
-  it('takes the last block and defaults selected', () => {
-    const text = [
-      block('{"name":"old","tasks":[]}'),
-      'more chat',
-      block(
-        '{"name":"New","tasks":[{"title":"t","prompt":"p","role":"dev"},' +
-          '{"title":"u","prompt":"q","role":"qa","selected":false}]}'
-      )
-    ].join('\n')
+  it('parses a single-story proposal and defaults selected', () => {
+    const text = [block(story({ name: 'old' })), 'more chat', block(story({ name: 'New' }))].join(
+      '\n'
+    )
     expect(parseProposal(text)).toEqual({
+      kind: 'story',
       name: 'New',
-      brief: '',
+      spec: 's',
+      stories: [],
       roles: [],
-      tasks: [
-        { title: 't', prompt: 'p', role: 'dev', selected: true },
-        { title: 'u', prompt: 'q', role: 'qa', selected: false }
+      tasks: [{ title: 't', prompt: 'p', role: 'dev', selected: true }]
+    })
+  })
+
+  it('parses an epic proposal with its stories and backward blockedBy indices', () => {
+    const json = JSON.stringify({
+      kind: 'epic',
+      name: 'Big',
+      spec: 'why',
+      stories: [
+        { name: 'One', spec: 'a', subtasks: [{ title: 't', prompt: 'p', role: 'dev' }] },
+        {
+          name: 'Two',
+          spec: 'b',
+          subtasks: [{ title: 'u', prompt: 'q', role: 'dev' }],
+          blockedBy: [0]
+        }
+      ]
+    })
+    expect(parseProposal(block(json))).toEqual({
+      kind: 'epic',
+      name: 'Big',
+      spec: 'why',
+      tasks: [],
+      roles: [],
+      stories: [
+        {
+          name: 'One',
+          spec: 'a',
+          blockedBy: [],
+          tasks: [{ title: 't', prompt: 'p', role: 'dev', selected: true }]
+        },
+        {
+          name: 'Two',
+          spec: 'b',
+          blockedBy: [0],
+          tasks: [{ title: 'u', prompt: 'q', role: 'dev', selected: true }]
+        }
       ]
     })
   })
@@ -45,8 +86,74 @@ describe('parseProposal', () => {
   it('returns null when absent or malformed', () => {
     expect(parseProposal('just prose')).toBeNull()
     expect(parseProposal(block('{not json'))).toBeNull()
-    expect(parseProposal(block('{"tasks":[]}'))).toBeNull()
-    expect(parseProposal(block('{"name":"x","tasks":[{"title":"t"}]}'))).toBeNull()
+    expect(parseProposal(block(story({ kind: 'workflow' })))).toBeNull() // unknown kind
+    expect(parseProposal(block(story({ name: 3 })))).toBeNull()
+    expect(parseProposal(block(story({ subtasks: undefined })))).toBeNull() // story needs subtasks
+    expect(parseProposal(block(story({ subtasks: [{ title: 't' }] })))).toBeNull()
+    expect(parseProposal(block('{"kind":"epic","name":"E","spec":"s"}'))).toBeNull() // epic needs stories
+  })
+
+  // Index-based edges are only meaningful backwards; anything else would
+  // silently lose (or invent) a dependency, so it rejects the whole proposal.
+  it('rejects forward, self, out-of-range and non-integer blockedBy indices', () => {
+    const epic = (blockedBy: unknown): string =>
+      JSON.stringify({
+        kind: 'epic',
+        name: 'E',
+        spec: 's',
+        stories: [
+          { name: 'One', spec: 'a', subtasks: [] },
+          { name: 'Two', spec: 'b', subtasks: [], blockedBy }
+        ]
+      })
+    expect(parseProposal(block(epic([0])))).not.toBeNull() // backward is fine
+    expect(parseProposal(block(epic([1])))).toBeNull() // self
+    expect(parseProposal(block(epic([2])))).toBeNull() // forward / out of range
+    expect(parseProposal(block(epic([-1])))).toBeNull()
+    expect(parseProposal(block(epic(['SOM-1'])))).toBeNull() // an id, not an index
+    expect(parseProposal(block(epic('0')))).toBeNull()
+  })
+
+  it('ignores unknown extra keys on the block and on subtasks', () => {
+    const json = story({
+      extra: 'x',
+      subtasks: [{ title: 't', prompt: 'p', role: 'dev', weight: 5, selected: false }]
+    })
+    expect(parseProposal(block(json))?.tasks).toEqual([
+      { title: 't', prompt: 'p', role: 'dev', selected: false }
+    ])
+  })
+
+  // The closing fence is anchored to the start of a line, so a fence inside a
+  // prompt string (where JSON escapes the newlines) no longer truncates it.
+  it('parses a prompt containing its own triple-backtick fence', () => {
+    const prompt = 'Run ```js\nconsole.log(1)\n``` then done'
+    const json = story({ subtasks: [{ title: 't', prompt, role: 'dev' }] })
+    expect(parseProposal(block(json))?.tasks[0].prompt).toBe(prompt)
+  })
+
+  it('takes the last of three or more blocks', () => {
+    const text = [
+      block(story({ name: 'A' })),
+      block(story({ name: 'B' })),
+      block(story({ name: 'C' }))
+    ].join('\n')
+    expect(parseProposal(text)?.name).toBe('C')
+  })
+
+  it('parses new roles and rejects the proposal when one is invalid (M8 parity)', () => {
+    const json = story({
+      roles: [
+        { slug: 'writer', name: 'Writer', preamble: 'write', runner: 'antigravity' },
+        { slug: 'x', name: 'X', preamble: 'p', effort: 'bogus', model: 'opus' }
+      ]
+    })
+    expect(parseProposal(block(json))?.roles).toEqual([
+      { slug: 'writer', name: 'Writer', preamble: 'write', runner: 'antigravity' },
+      { slug: 'x', name: 'X', preamble: 'p', model: 'opus' }
+    ])
+    expect(parseProposal(block(story({ roles: [{ slug: 'a', name: 'A' }] })))).toBeNull()
+    expect(parseProposal(block(story({ roles: 'nope' })))).toBeNull()
   })
 })
 
@@ -55,7 +162,7 @@ describe('turnArgs', () => {
     const args = turnArgs('do a thing', null, {}, ['dev', 'qa'])
     expect(args[0]).toBe('-p')
     expect(args[1]).toContain('dev, qa')
-    expect(args[1]).toContain('somni-workflow')
+    expect(args[1]).toContain('somni-groomed')
     expect(args[1].endsWith('do a thing')).toBe(true)
     expect(args).toContain('--allowedTools')
     expect(args).not.toContain('--resume')
@@ -94,64 +201,6 @@ describe('turnArgs', () => {
       expect(args).not.toContain('--dangerously-skip-permissions')
       expect(args).toEqual(expect.arrayContaining(['--mode', 'plan', '--sandbox']))
     }
-  })
-})
-
-describe('parseProposal edge cases', () => {
-  it('preserves selected:false and empty tasks arrays', () => {
-    expect(parseProposal(block('{"name":"Empty","tasks":[]}'))).toEqual({
-      name: 'Empty',
-      brief: '',
-      roles: [],
-      tasks: []
-    })
-    expect(
-      parseProposal(
-        block('{"name":"N","tasks":[{"title":"t","prompt":"p","role":"dev","selected":false}]}')
-      )
-    ).toEqual({
-      name: 'N',
-      brief: '',
-      roles: [],
-      tasks: [{ title: 't', prompt: 'p', role: 'dev', selected: false }]
-    })
-  })
-
-  it('ignores unknown extra keys on the block and on tasks', () => {
-    const json =
-      '{"name":"N","extra":"x","tasks":[{"title":"t","prompt":"p","role":"dev","weight":5}]}'
-    expect(parseProposal(block(json))).toEqual({
-      name: 'N',
-      brief: '',
-      roles: [],
-      tasks: [{ title: 't', prompt: 'p', role: 'dev', selected: true }]
-    })
-  })
-
-  // The closing fence is anchored to the start of a line, so a fence inside a
-  // prompt string (where JSON escapes the newlines) no longer truncates it.
-  it('parses a prompt containing its own triple-backtick fence', () => {
-    const prompt = 'Run ```js\nconsole.log(1)\n``` then done'
-    const json = JSON.stringify({ name: 'N', tasks: [{ title: 't', prompt, role: 'dev' }] })
-    expect(parseProposal(block(json))?.tasks[0].prompt).toBe(prompt)
-  })
-
-  it('survives double-backtick (inline-code-like) content inside a prompt', () => {
-    const json = JSON.stringify({
-      name: 'N',
-      tasks: [{ title: 't', prompt: 'Run ``npm test`` then done', role: 'dev' }]
-    })
-    const result = parseProposal(block(json))
-    expect(result?.tasks[0].prompt).toBe('Run ``npm test`` then done')
-  })
-
-  it('takes the last of three or more blocks', () => {
-    const text = [
-      block('{"name":"A","tasks":[]}'),
-      block('{"name":"B","tasks":[]}'),
-      block('{"name":"C","tasks":[]}')
-    ].join('\n')
-    expect(parseProposal(text)?.name).toBe('C')
   })
 })
 
@@ -196,36 +245,6 @@ describe('parseQuestion', () => {
   })
 })
 
-describe('parseProposal brief + roles (M8)', () => {
-  it('parses the brief and new roles, keeping known profile keys', () => {
-    const json = JSON.stringify({
-      name: 'N',
-      brief: '# Brief\n\nDo the thing.',
-      tasks: [{ title: 't', prompt: 'p', role: 'writer' }],
-      roles: [
-        { slug: 'writer', name: 'Writer', preamble: 'write', runner: 'antigravity' },
-        { slug: 'x', name: 'X', preamble: 'p', effort: 'bogus', model: 'opus' }
-      ]
-    })
-    expect(parseProposal(block(json))).toEqual({
-      name: 'N',
-      brief: '# Brief\n\nDo the thing.',
-      tasks: [{ title: 't', prompt: 'p', role: 'writer', selected: true }],
-      roles: [
-        { slug: 'writer', name: 'Writer', preamble: 'write', runner: 'antigravity' },
-        { slug: 'x', name: 'X', preamble: 'p', model: 'opus' }
-      ]
-    })
-  })
-
-  it('rejects the whole proposal when a role entry is invalid', () => {
-    expect(
-      parseProposal(block('{"name":"N","tasks":[],"roles":[{"slug":"a","name":"A"}]}'))
-    ).toBeNull()
-    expect(parseProposal(block('{"name":"N","tasks":[],"roles":"nope"}'))).toBeNull()
-  })
-})
-
 // Crash-safety (M8): nothing about finding/loading a draft depends on
 // in-process state — a transcript written by a prior process lifetime (i.e.
 // before an app restart) must load exactly like one written this session.
@@ -249,101 +268,125 @@ describe('draft transcript survives a simulated restart', () => {
 
 describe('applyProposal', () => {
   let repo: string
-  const proposal = (over = {}): Parameters<typeof applyProposal>[2] => ({
+  const groomed = (over = {}): Parameters<typeof applyProposal>[2] => ({
+    kind: 'story',
     name: 'Nightly Cleanup',
-    brief: '# Brief\n\nTidy up.',
+    spec: 'Tidy up.',
+    stories: [],
     tasks: [{ title: 't', prompt: 'p', role: 'dev', selected: true }],
     roles: [{ slug: 'dev', name: 'Hijacked', preamble: 'nope' }],
     ...over
   })
+  const epic = (over = {}): Parameters<typeof applyProposal>[2] =>
+    groomed({
+      kind: 'epic',
+      name: 'Search Overhaul',
+      tasks: [],
+      stories: [
+        { name: 'Index', spec: 'a', tasks: [{ ...sub }], blockedBy: [] },
+        { name: 'Query', spec: 'b', tasks: [{ ...sub }], blockedBy: [0] }
+      ],
+      ...over
+    })
+  const sub = { title: 't', prompt: 'p', role: 'dev', selected: true }
 
   beforeEach(() => {
     repo = mkdtempSync(join(tmpdir(), 'somni-apply-'))
   })
 
-  it('creates a ticked workflow, the brief sidecar, new roles only, and renames the draft', () => {
+  it('converts a groomed idea into a ready Story in place, keeping its id', () => {
+    const idea = saveItem(repo, { name: 'Vague thought', kind: 'idea', spec: 'hmm' })
+    const res = applyProposal(repo, idea.id, groomed({ roles: [] }))
+    expect(res.ok && res.item.id).toBe(idea.id)
+    const items = loadItems(repo)
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      id: idea.id,
+      kind: 'story',
+      status: 'ready',
+      name: 'Nightly Cleanup',
+      spec: 'Tidy up.',
+      created: idea.created
+    })
+    // the .tasks.json sidecar rides with the story
+    expect(items[0].tasks).toEqual([{ title: 't', prompt: 'p', role: 'dev', selected: true }])
+    expect(existsSync(join(repo, '.somni', 'items', `${idea.id}-nightly-cleanup.tasks.json`))).toBe(
+      true
+    )
+  })
+
+  it('rewrites an already-groomed story in place when re-groomed', () => {
+    const first = applyProposal(repo, saveItem(repo, { name: 'Thing' }).id, groomed({ roles: [] }))
+    expect(first.ok).toBe(true)
+    const id = first.ok ? first.item.id : ''
+    applyProposal(
+      repo,
+      id,
+      groomed({ roles: [], spec: 'Sharper.', tasks: [{ ...sub, title: 'u' }] })
+    )
+    const items = loadItems(repo)
+    expect(items).toHaveLength(1)
+    expect(items[0].spec).toBe('Sharper.')
+    expect(items[0].tasks.map((t) => t.title)).toEqual(['u'])
+  })
+
+  it('converts an epic and creates its stories ready, with resolved blockedBy ids', () => {
+    const idea = saveItem(repo, { name: 'Search', kind: 'idea' })
+    const res = applyProposal(repo, idea.id, epic({ roles: [] }))
+    expect(res.ok).toBe(true)
+    const items = loadItems(repo)
+    const root = items.find((i) => i.id === idea.id)!
+    const children = items.filter((i) => i.epic === idea.id)
+    // the epic never executes, so it lands back in Backlog
+    expect(root).toMatchObject({ kind: 'epic', status: 'backlog', name: 'Search Overhaul' })
+    expect(root.tasks).toEqual([])
+    expect(children.map((c) => [c.name, c.kind, c.status])).toEqual([
+      ['Index', 'story', 'ready'],
+      ['Query', 'story', 'ready']
+    ])
+    expect(children[0].blockedBy).toBeUndefined()
+    expect(children[1].blockedBy).toEqual([children[0].id])
+    expect(children.every((c) => c.tasks.length === 1)).toBe(true)
+  })
+
+  it('writes new roles only — an existing slug always wins', () => {
     saveRole(repo, { slug: 'dev', name: 'Dev', preamble: 'existing' })
     const before = readFileSync(join(repo, '.somni', 'roles', 'dev.md'), 'utf8')
-    mkdirSync(join(repo, '.somni', 'chats'), { recursive: true })
-    writeFileSync(join(repo, '.somni', 'chats', DRAFT_KEY + '.jsonl'), '{"role":"user"}\n')
-
-    const res = applyProposal(
+    applyProposal(
       repo,
-      DRAFT_KEY,
-      proposal({
+      saveItem(repo, { name: 'Thing' }).id,
+      groomed({
         roles: [
           { slug: 'dev', name: 'Hijacked', preamble: 'nope' },
-          { slug: 'qa', name: 'QA', preamble: 'test it' }
+          { slug: 'writer', name: 'Writer', preamble: 'write things', model: 'opus' }
         ]
       })
     )
-
-    expect(res.ok && res.workflow.slug).toBe('nightly-cleanup')
-    const { roles } = loadRepo(repo)
-    const workflows = loadWorkflows(repo)
-    expect(workflows[0].selected).toBe(true) // auto-ticked (Decision 6)
-    expect(workflows[0].brief).toContain('Tidy up.')
-    // an existing role always wins — byte-identical (Decision 5)
     expect(readFileSync(join(repo, '.somni', 'roles', 'dev.md'), 'utf8')).toBe(before)
-    expect(roles.map((r) => r.slug).sort()).toEqual(['dev', 'qa'])
-    // transcript renamed to the new slug
-    expect(existsSync(join(repo, '.somni', 'chats', DRAFT_KEY + '.jsonl'))).toBe(false)
-    expect(existsSync(join(repo, '.somni', 'chats', 'nightly-cleanup.jsonl'))).toBe(true)
-  })
-
-  it('deletes the transcript and brief sidecar with the workflow', () => {
-    applyProposal(repo, DRAFT_KEY, proposal({ roles: [] }))
-    const chat = join(repo, '.somni', 'chats', 'nightly-cleanup.jsonl')
-    writeFileSync(chat, '{"sessionId":"s"}\n')
-    deleteWorkflow(repo, 'nightly-cleanup')
-    expect(existsSync(chat)).toBe(false)
-    expect(existsSync(join(repo, '.somni', 'workflows', 'nightly-cleanup.brief.md'))).toBe(false)
-  })
-
-  it('preserves the tick and the slug when applied from the editor', () => {
-    saveWorkflow(repo, { slug: 'existing', name: 'Existing', selected: false, tasks: [] })
-    const res = applyProposal(repo, 'existing', proposal({ roles: [] }))
-    expect(res.ok && res.workflow.slug).toBe('existing')
-    expect(loadWorkflows(repo)[0].selected).toBe(false)
-    expect(loadWorkflows(repo)[0].name).toBe('Nightly Cleanup')
-  })
-
-  it('preserves an existing brief sidecar when the editor Apply proposal has no brief', () => {
-    saveWorkflow(repo, {
-      slug: 'existing',
-      name: 'Existing',
-      selected: true,
-      tasks: [],
-      brief: 'original brief'
-    })
-    applyProposal(repo, 'existing', proposal({ roles: [], brief: '' }))
-    expect(loadWorkflows(repo)[0].brief).toBe('original brief\n')
-  })
-
-  it('writes a genuinely new role with the right frontmatter and preamble', () => {
-    applyProposal(
-      repo,
-      DRAFT_KEY,
-      proposal({
-        roles: [{ slug: 'writer', name: 'Writer', preamble: 'write things', model: 'opus' }]
-      })
-    )
+    expect(loadRepo(repo).roles.map((r) => r.slug)).toEqual(['dev', 'writer'])
     const md = readFileSync(join(repo, '.somni', 'roles', 'writer.md'), 'utf8')
     expect(md).toContain('model: opus')
-    expect(md).toContain('# Writer')
     expect(md).toContain('write things')
   })
 
-  it('uniquifies a colliding workflow slug instead of overwriting the existing one', () => {
-    const first = applyProposal(repo, DRAFT_KEY, proposal({ roles: [] }))
-    expect(first.ok && first.workflow.slug).toBe('nightly-cleanup')
+  it('creates the item from scratch and renames the _draft transcript onto its id', () => {
+    mkdirSync(join(repo, '.somni', 'chats'), { recursive: true })
     writeFileSync(join(repo, '.somni', 'chats', DRAFT_KEY + '.jsonl'), '{"role":"user"}\n')
-    const second = applyProposal(repo, DRAFT_KEY, proposal({ roles: [] }))
-    expect(second.ok && second.workflow.slug).toBe('nightly-cleanup-2')
-    const slugs = loadWorkflows(repo)
-      .map((w) => w.slug)
-      .sort()
-    expect(slugs).toEqual(['nightly-cleanup', 'nightly-cleanup-2'])
+    const res = applyProposal(repo, DRAFT_KEY, epic({ roles: [] }))
+    expect(res.ok).toBe(true)
+    const id = res.ok ? res.item.id : ''
+    expect(loadItems(repo).map((i) => i.name)).toEqual(['Search Overhaul', 'Index', 'Query'])
+    expect(existsSync(join(repo, '.somni', 'chats', DRAFT_KEY + '.jsonl'))).toBe(false)
+    expect(existsSync(join(repo, '.somni', 'chats', id + '.jsonl'))).toBe(true)
+    // a new Backlog item joins the column's ordering, as item:save does
+    expect(loadBacklog(repo)).toEqual([id])
+  })
+
+  it('refuses an unknown item key and writes nothing', () => {
+    const res = applyProposal(repo, 'SOM-99', groomed({ roles: [] }))
+    expect(res).toEqual({ ok: false, error: 'item not found: SOM-99' })
+    expect(loadItems(repo)).toEqual([])
+    expect(existsSync(join(repo, '.somni', 'roles'))).toBe(false)
   })
 })
 
@@ -434,7 +477,7 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     const calls1 = callsLogged()
     expect(calls1).toHaveLength(1)
     expect(calls1[0]).not.toContain('--resume')
-    expect(calls1[0][1]).toContain('somni-workflow') // preamble present in the -p message
+    expect(calls1[0][1]).toContain('somni-groomed') // preamble present in the -p message
     expect(first.some((e) => e.kind === 'done')).toBe(true)
 
     // sessionId captured and persisted
@@ -448,7 +491,7 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     const calls2 = callsLogged()
     expect(calls2).toHaveLength(2)
     expect(calls2[1]).toEqual(expect.arrayContaining(['--resume', 'sess-abc']))
-    expect(calls2[1][1]).not.toContain('somni-workflow')
+    expect(calls2[1][1]).not.toContain('somni-groomed')
 
     // transcript accumulates user+assistant lines in order
     const loaded2 = loadChat(repo, slug)
@@ -468,12 +511,27 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     expect(calls3[2]).not.toContain('--resume')
   })
 
+  // §7: the interview itself moves the item into Grooming, and turn 1 carries
+  // the item's current name + Spec — nothing else is written until Apply.
+  it('flips an item-keyed groom to grooming and seeds turn 1 with its name + spec', async () => {
+    const item = saveItem(repo, { name: 'Search is slow', spec: 'Make it fast.', kind: 'idea' })
+    await send(item.id, 'lets groom')
+    expect(loadItems(repo)[0].status).toBe('grooming')
+    const [call] = callsLogged()
+    expect(call[1]).toContain('# Search is slow')
+    expect(call[1]).toContain('Make it fast.')
+    // still an idea — only Apply changes kind
+    expect(loadItems(repo)[0].kind).toBe('idea')
+  })
+
   it('refuses Apply while that key has a turn in flight', async () => {
     const slug = nextSlug()
     const done = send(slug, 'hi')
     const res = applyProposal(repo, slug, {
+      kind: 'story',
       name: 'N',
-      brief: 'b',
+      spec: 'b',
+      stories: [],
       tasks: [],
       roles: []
     })
@@ -494,14 +552,17 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
   it('parses a proposal block from the turn reply', async () => {
     fake({
       FAKE_TEXT:
-        'Sure, here.\n```somni-workflow\n' +
-        '{"name":"Plan","tasks":[{"title":"t","prompt":"p","role":"dev"}]}\n```'
+        'Sure, here.\n```somni-groomed\n' +
+        '{"kind":"story","name":"Plan","spec":"why",' +
+        '"subtasks":[{"title":"t","prompt":"p","role":"dev"}]}\n```'
     })
     const events = await send(nextSlug(), 'propose something')
     const done = events.find((e) => e.kind === 'done') as Extract<ChatEvent, { kind: 'done' }>
     expect(done.proposal).toEqual({
+      kind: 'story',
       name: 'Plan',
-      brief: '',
+      spec: 'why',
+      stories: [],
       roles: [],
       tasks: [{ title: 't', prompt: 'p', role: 'dev', selected: true }]
     })
@@ -583,15 +644,26 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
   })
 })
 
-// M11 Decision 4: an editor chat must know which file holds the structure.
-describe('draftPreamble workflow file line', () => {
-  it('names the workflow json for an editor slug and omits it for a draft', () => {
-    expect(draftPreamble(['dev'], undefined, 'nightly-cleanup')).toContain(
-      '.somni/workflows/nightly-cleanup.json'
-    )
-    expect(draftPreamble(['dev'])).not.toContain('.somni/workflows/')
-    expect(turnArgs('hi', null, {}, ['dev'], {}, undefined, 'nightly-cleanup')[1]).toContain(
-      '.somni/workflows/nightly-cleanup.json'
+// The preamble is the whole grooming contract — schema, index rule, roles.
+describe('groomPreamble', () => {
+  it('carries the somni-groomed schema, the index-based blockedBy rule and the role slugs', () => {
+    const p = groomPreamble(['dev', 'qa'])
+    expect(p).toContain('somni-groomed')
+    expect(p).toContain('"kind": "epic"|"story"')
+    expect(p).toContain('"blockedBy"')
+    expect(p).toContain('ZERO-BASED INDEX')
+    expect(p).toContain('EARLIER entry')
+    expect(p).toContain('dev, qa')
+    expect(p).toContain('somni-question')
+    expect(p).not.toContain('The item being groomed')
+  })
+
+  it('seeds turn-1 context with the item when grooming an existing item', () => {
+    const p = groomPreamble(['dev'], '# Search\n\nMake it fast.')
+    expect(p).toContain('The item being groomed')
+    expect(p).toContain('Make it fast.')
+    expect(turnArgs('hi', null, {}, ['dev'], {}, '# Search\n\nMake it fast.')[1]).toContain(
+      'Make it fast.'
     )
   })
 })
