@@ -32,7 +32,7 @@ const timeAgo = (iso: string): string => {
 
 function App(): React.JSX.Element {
   const [repo, setRepo] = useState<string | null>(null)
-  const [data, setData] = useState<RepoData>({ roles: [], workflows: [], backlog: [] })
+  const [data, setData] = useState<RepoData>({ roles: [], items: [], workflows: [], backlog: [] })
   const [view, setView] = useState<View>('Workflows')
   const [runs, setRuns] = useState<Record<string, RunState>>({})
   const [logs, setLogs] = useState<Record<string, LogLine[]>>({})

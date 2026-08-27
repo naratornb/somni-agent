@@ -7,7 +7,7 @@ import { wireTaskIpc, killTask } from './runner'
 import { killChats } from './chat'
 import { patchSettings, readSettings, repoSettings, wireRepoIpc } from './repoIpc'
 import { wireVoiceIpc } from './voice'
-import { setSelected } from './store'
+import { loadItems, readyBlocker, setItemStatus } from './store'
 import {
   abandonRun,
   cancelPipeline,
@@ -129,19 +129,33 @@ app.whenReady().then(() => {
   }
   armNightly()
 
-  // Decision 3: tick the named slugs, then wake a live drain or start one.
+  // Add to pipeline (M13 §3): the Ready gate is enforced here — main is the
+  // authority, the UI merely hides affordances. Passing the gate writes
+  // `in-progress` (the tick), then wakes a live drain or starts one.
   // PipelineView's "Drain queue" sends [] — it only starts/joins.
-  ipcMain.handle('pipeline:start', (_e, repo: string, slugs: string[]) => {
-    for (const slug of slugs) {
+  const addToPipeline = (repo: string, ids: string[]): { refused: string[] } => {
+    const items = loadItems(repo)
+    const refused: string[] = []
+    for (const id of ids) {
+      const why = readyBlocker(items.find((i) => i.id === id))
+      if (why) {
+        refused.push(why)
+        continue
+      }
       try {
-        setSelected(repo, slug, true)
-      } catch {
-        /* a missing/unwritable workflow just doesn't join */
+        setItemStatus(repo, id, 'in-progress')
+      } catch (err) {
+        refused.push(String(err instanceof Error ? err.message : err))
       }
     }
-    if (isRunning()) return wakeDrain()
-    drain(repo, 'manual')
-  })
+    if (refused.length < ids.length || ids.length === 0) {
+      if (isRunning()) wakeDrain()
+      else drain(repo, 'manual')
+    }
+    return { refused }
+  }
+  ipcMain.handle('pipeline:add', (_e, repo: string, ids: string[]) => addToPipeline(repo, ids))
+  ipcMain.handle('pipeline:start', (_e, repo: string, ids: string[]) => addToPipeline(repo, ids))
   ipcMain.handle('pipeline:state', () => getDrainState())
   ipcMain.handle('pipeline:keepRunning', (_e, repo: string, on: boolean) => {
     setKeepRunning(on)

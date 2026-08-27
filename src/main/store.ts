@@ -53,7 +53,44 @@ export type Workflow = {
   // The Brief sidecar (workflows/<slug>.brief.md, M8 §4) — absent if never written.
   brief?: string
 }
-export type RepoData = { roles: Role[]; workflows: Workflow[]; backlog: string[] }
+
+// Work-item store v2 (architecture.md §4.1). One flat store; `kind` is a field,
+// so grooming converts an Idea in place.
+export type ItemKind = 'idea' | 'epic' | 'story'
+export type ItemStatus =
+  'backlog' | 'grooming' | 'ready' | 'in-progress' | 'needs-attention' | 'review' | 'done'
+export const ITEM_KINDS: ItemKind[] = ['idea', 'epic', 'story']
+export const ITEM_STATUSES: ItemStatus[] = [
+  'backlog',
+  'grooming',
+  'ready',
+  'in-progress',
+  'needs-attention',
+  'review',
+  'done'
+]
+export type Item = {
+  id: string // SOM-<n>, one sequence across kinds, never reused
+  slug: string // the file-name slug, derived from the title
+  kind: ItemKind
+  status: ItemStatus
+  name: string // H1 of the body
+  spec: string // the rest of the body — the approved Spec
+  created: string
+  epic?: string
+  blockedBy?: string[] // ids that must be `done` first
+  tasks: Task[] // stories only: the .tasks.json sidecar
+}
+
+export type RepoData = {
+  roles: Role[]
+  items: Item[]
+  backlog: string[]
+  // ponytail: v1 `workflows/` are ignored by the v2 loader (§4.1) — this always
+  // empty array only keeps the not-yet-replaced WorkflowsView compiling; it goes
+  // with that view in the Board stage.
+  workflows: Workflow[]
+}
 
 export function slugify(name: string): string {
   return (
@@ -79,21 +116,41 @@ export function ensureSomni(repo: string): void {
   if (!existsSync(gi)) atomicWrite(gi, 'runs/*/logs/\n')
 }
 
-// Optional `---\nrunner: agy\nmodel: x\neffort: high\n---` frontmatter before the H1 (§5).
-// ponytail: three known keys, hand-parsed — a YAML dependency for this is absurd.
-function parseFrontmatter(md: string): { profile: Profile; body: string } {
+// `---\nkey: value\n---` frontmatter before the H1 — roles carry an execution
+// profile (§5), items carry id/kind/status/… (§4.1).
+// ponytail: flat `key: value` lines only, hand-parsed — a YAML dependency for
+// this is absurd. Lists (`blockedBy`) are comma-separated on one line.
+function parseFrontmatter(md: string): { fields: Record<string, string>; body: string } {
   const m = /^---\n([\s\S]*?)\n---\n?/.exec(md)
-  if (!m) return { profile: {}, body: md }
-  const profile: Profile = {}
+  if (!m) return { fields: {}, body: md }
+  const fields: Record<string, string> = {}
   for (const line of m[1].split('\n')) {
-    const kv = /^\s*(model|effort|runner)\s*:\s*(.+?)\s*$/.exec(line)
-    if (kv?.[1] === 'model') profile.model = kv[2]
-    if (kv?.[1] === 'effort' && ['low', 'medium', 'high'].includes(kv[2]))
-      profile.effort = kv[2] as Effort
-    if (kv?.[1] === 'runner' && (RUNNER_NAMES as string[]).includes(kv[2]))
-      profile.runner = kv[2] as RunnerName
+    const kv = /^\s*([A-Za-z][A-Za-z0-9_]*)\s*:\s*(.*?)\s*$/.exec(line)
+    if (kv) fields[kv[1]] = kv[2]
   }
-  return { profile, body: md.slice(m[0].length) }
+  return { fields, body: md.slice(m[0].length) }
+}
+
+function profileOf(fields: Record<string, string>): Profile {
+  const profile: Profile = {}
+  if (fields.model) profile.model = fields.model
+  if (['low', 'medium', 'high'].includes(fields.effort)) profile.effort = fields.effort as Effort
+  if ((RUNNER_NAMES as string[]).includes(fields.runner))
+    profile.runner = fields.runner as RunnerName
+  return profile
+}
+
+// Body → display name (the H1) + the rest.
+function splitBody(body: string, fallback: string): { name: string; rest: string } {
+  const lines = body.split('\n')
+  const h1 = lines.findIndex((l) => l.startsWith('# '))
+  return {
+    name: h1 >= 0 ? lines[h1].slice(2).trim() : fallback,
+    rest: lines
+      .slice(h1 + 1)
+      .join('\n')
+      .trim()
+  }
 }
 
 // Execution profile resolution (§5): role → repo config → global settings.
@@ -124,15 +181,9 @@ export function resolveSettings(
 }
 
 function parseRole(slug: string, raw: string): Role {
-  const { profile, body: md } = parseFrontmatter(raw)
-  const lines = md.split('\n')
-  const h1 = lines.findIndex((l) => l.startsWith('# '))
-  const name = h1 >= 0 ? lines[h1].slice(2).trim() : slug
-  const preamble = lines
-    .slice(h1 + 1)
-    .join('\n')
-    .trim()
-  return { slug, name, preamble, ...profile }
+  const { fields, body } = parseFrontmatter(raw)
+  const { name, rest } = splitBody(body, slug)
+  return { slug, name, preamble: rest, ...profileOf(fields) }
 }
 
 function listFiles(path: string, ext: string): string[] {
@@ -148,42 +199,190 @@ export function loadRepo(repo: string): RepoData {
   const roles = listFiles(dir(repo, 'roles'), '.md').map((f) =>
     parseRole(f.replace(/\.md$/, ''), readFileSync(dir(repo, 'roles', f), 'utf8'))
   )
-  const workflows = listFiles(dir(repo, 'workflows'), '.json').flatMap((f) => {
+  // v1 `workflows/` are ignored without error (§4.1) — no migration.
+  return { roles, items: loadItems(repo), backlog: loadBacklog(repo), workflows: [] }
+}
+
+// ponytail: the v1 workflow reader, kept only for `applyProposal` (chat.ts) —
+// the Draft view is hidden in M13 and returns re-aimed at items as Grooming in
+// M14, which retires this along with saveWorkflow/deleteWorkflow.
+export function loadWorkflows(repo: string): Workflow[] {
+  return listFiles(dir(repo, 'workflows'), '.json').flatMap((f) => {
     try {
       const w = JSON.parse(readFileSync(dir(repo, 'workflows', f), 'utf8'))
+      const slug = f.replace(/\.json$/, '')
       return [
         {
-          slug: f.replace(/\.json$/, ''),
+          slug,
           name: String(w.name ?? f),
           selected: w.selected === true,
           tasks: Array.isArray(w.tasks) ? w.tasks : [],
-          brief: loadBrief(repo, f.replace(/\.json$/, ''))
+          brief: loadBrief(repo, slug)
         }
       ]
     } catch {
       return [] // a malformed file shouldn't take the whole repo down
     }
   })
-  return { roles, workflows, backlog: loadBacklog(repo) }
 }
 
-// Backlog (M9 Decision 4): a bare ordered array of slugs in .somni/backlog.json.
-// Slugs whose workflow is gone are pruned in memory; the prune lands on disk on
-// the next save.
-export function loadBacklog(repo: string): string[] {
-  let slugs: unknown
+// ---- items (architecture.md §4.1) -------------------------------------------
+
+const itemFiles = (repo: string): string[] => listFiles(dir(repo, 'items'), '.md')
+
+const idNum = (id: string): number => Number(/(\d+)/.exec(id)?.[1] ?? 0)
+
+function parseItem(repo: string, file: string): Item {
+  const base = file.slice(0, -3)
+  const { fields, body } = parseFrontmatter(readFileSync(dir(repo, 'items', file), 'utf8'))
+  const named = /^(SOM-\d+)-(.+)$/.exec(base)
+  const id = fields.id || named?.[1] || base
+  const slug = named?.[2] ?? base
+  const { name, rest } = splitBody(body, slug)
+  const blockedBy = (fields.blockedBy ?? '').split(/[,\s]+/).filter(Boolean)
+  return {
+    id,
+    slug,
+    kind: (ITEM_KINDS as string[]).includes(fields.kind) ? (fields.kind as ItemKind) : 'idea',
+    status: (ITEM_STATUSES as string[]).includes(fields.status)
+      ? (fields.status as ItemStatus)
+      : 'backlog',
+    name,
+    spec: rest,
+    created: fields.created ?? '',
+    ...(fields.epic ? { epic: fields.epic } : {}),
+    ...(blockedBy.length ? { blockedBy } : {}),
+    tasks: loadTasks(repo, base)
+  }
+}
+
+function loadTasks(repo: string, base: string): Task[] {
   try {
-    slugs = JSON.parse(readFileSync(dir(repo, 'backlog.json'), 'utf8'))
+    const t = JSON.parse(readFileSync(dir(repo, 'items', base + '.tasks.json'), 'utf8'))
+    return Array.isArray(t) ? (t as Task[]) : []
   } catch {
     return []
   }
-  if (!Array.isArray(slugs)) return []
-  const known = new Set(listFiles(dir(repo, 'workflows'), '.json').map((f) => f.slice(0, -5)))
-  return slugs.filter((s): s is string => typeof s === 'string' && known.has(s))
 }
 
-export function saveBacklog(repo: string, slugs: string[]): void {
-  atomicWrite(dir(repo, 'backlog.json'), JSON.stringify(slugs, null, 2) + '\n')
+export function loadItems(repo: string): Item[] {
+  return itemFiles(repo)
+    .flatMap((f) => {
+      try {
+        return [parseItem(repo, f)]
+      } catch {
+        return [] // a malformed file shouldn't take the whole repo down
+      }
+    })
+    .sort((a, b) => idNum(a.id) - idNum(b.id)) // ids are unpadded: sort numerically
+}
+
+// The id sequence: a bare monotonic integer in .somni/seq. Ids are never reused.
+// ponytail: the max over existing files is the belt to seq's braces — a seq file
+// lost to a bad merge must not hand out an id that already exists.
+export function nextId(repo: string): string {
+  const path = dir(repo, 'seq')
+  let n = 1
+  try {
+    n = Math.max(n, parseInt(readFileSync(path, 'utf8').trim(), 10) || 1)
+  } catch {
+    /* no seq yet */
+  }
+  for (const f of itemFiles(repo)) {
+    const m = /^SOM-(\d+)-/.exec(f)
+    if (m) n = Math.max(n, Number(m[1]) + 1)
+  }
+  atomicWrite(path, `${n + 1}\n`)
+  return `SOM-${n}`
+}
+
+export function saveItem(repo: string, item: Partial<Item> & { name: string }): Item {
+  const id = item.id || nextId(repo)
+  const slug = item.slug || slugify(item.name)
+  const full: Item = {
+    id,
+    slug,
+    kind: item.kind ?? 'idea',
+    status: item.status ?? 'backlog',
+    name: item.name,
+    spec: (item.spec ?? '').trim(),
+    created: item.created || new Date().toISOString(),
+    ...(item.epic ? { epic: item.epic } : {}),
+    ...(item.blockedBy?.length ? { blockedBy: item.blockedBy } : {}),
+    tasks: item.tasks ?? []
+  }
+  const base = `${id}-${slug}`
+  // A retitled item keeps its id and moves file: drop the old basename.
+  for (const f of itemFiles(repo)) {
+    if (f.startsWith(id + '-') && f !== base + '.md') {
+      rmSync(dir(repo, 'items', f), { force: true })
+      rmSync(dir(repo, 'items', f.slice(0, -3) + '.tasks.json'), { force: true })
+    }
+  }
+  const fm = [
+    `id: ${id}`,
+    `kind: ${full.kind}`,
+    `status: ${full.status}`,
+    `created: ${full.created}`,
+    full.epic ? `epic: ${full.epic}` : '',
+    full.blockedBy ? `blockedBy: ${full.blockedBy.join(', ')}` : ''
+  ].filter(Boolean)
+  atomicWrite(
+    dir(repo, 'items', base + '.md'),
+    `---\n${fm.join('\n')}\n---\n# ${full.name}\n\n${full.spec}\n`
+  )
+  const tasksPath = dir(repo, 'items', base + '.tasks.json')
+  if (full.kind === 'story') atomicWrite(tasksPath, JSON.stringify(full.tasks, null, 2) + '\n')
+  else rmSync(tasksPath, { force: true })
+  return full
+}
+
+export function deleteItem(repo: string, id: string): void {
+  for (const f of itemFiles(repo)) {
+    if (!f.startsWith(id + '-')) continue
+    rmSync(dir(repo, 'items', f), { force: true })
+    rmSync(dir(repo, 'items', f.slice(0, -3) + '.tasks.json'), { force: true })
+  }
+  rmSync(dir(repo, 'chats', id + '.jsonl'), { force: true })
+}
+
+// Status is the only field the engine writes, and it re-reads the file first so
+// a spec edited meanwhile is never clobbered. Throws if the item is gone.
+export function setItemStatus(repo: string, id: string, status: ItemStatus): Item {
+  const item = loadItems(repo).find((i) => i.id === id)
+  if (!item) throw new Error(`item not found: ${id}`)
+  return saveItem(repo, { ...item, status })
+}
+
+// The Ready gate (§4.1) — main is the authority for both `item:setStatus` and
+// `pipeline:add`. Returns the refusal reason, or null when the item may run.
+// The kind check matters because .somni/ is hand-editable: a hand-marked epic
+// must not spawn.
+export function readyBlocker(item: Item | undefined): string | null {
+  if (!item) return 'item not found'
+  if (item.kind !== 'story') return `only a Story can be Ready — ${item.id} is an ${item.kind}`
+  if (!item.spec.trim()) return `${item.id} has an empty Spec`
+  if (!item.tasks.some((t) => t.selected !== false)) return `${item.id} has no selected subtasks`
+  return null
+}
+
+// Backlog (M9 Decision 4, v2): a bare ordered array of item ids in
+// .somni/backlog.json. Ids whose item is gone are pruned in memory; the prune
+// lands on disk on the next save.
+export function loadBacklog(repo: string): string[] {
+  let ids: unknown
+  try {
+    ids = JSON.parse(readFileSync(dir(repo, 'backlog.json'), 'utf8'))
+  } catch {
+    return []
+  }
+  if (!Array.isArray(ids)) return []
+  const known = new Set(itemFiles(repo).map((f) => /^(SOM-\d+)-/.exec(f)?.[1] ?? f.slice(0, -3)))
+  return ids.filter((s): s is string => typeof s === 'string' && known.has(s))
+}
+
+export function saveBacklog(repo: string, ids: string[]): void {
+  atomicWrite(dir(repo, 'backlog.json'), JSON.stringify(ids, null, 2) + '\n')
 }
 
 export function saveRole(repo: string, role: Role): Role {
@@ -220,15 +419,6 @@ export function saveWorkflow(repo: string, wf: Workflow): Workflow {
     JSON.stringify({ name, selected, tasks }, null, 2) + '\n'
   )
   return { ...wf, slug }
-}
-
-// Tick / untick only. Deliberately not `saveWorkflow`: the drain unticks from a
-// stale in-memory snapshot's slug, and a full save would clobber `tasks` edited
-// meanwhile. Throws if the file is unreadable/unwritable — callers fail soft.
-export function setSelected(repo: string, slug: string, selected: boolean): void {
-  const path = dir(repo, 'workflows', slug + '.json')
-  const w = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
-  atomicWrite(path, JSON.stringify({ ...w, selected }, null, 2) + '\n')
 }
 
 export function deleteWorkflow(repo: string, slug: string): void {

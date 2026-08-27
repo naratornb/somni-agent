@@ -7,6 +7,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RunDetails } from './repoIpc'
+import type { Item, RepoData } from './store'
 import type { RunStats } from './report'
 
 type Handler = (event: unknown, ...args: never[]) => unknown
@@ -285,5 +286,69 @@ describe('models:list', () => {
     rmSync(bin)
     const second = await invoke('models:list', 'antigravity')
     expect(second).toEqual(first)
+  })
+})
+
+// The Ready gate (architecture.md §4.1) is enforced in main: the UI hides
+// affordances, but a hand-edited file or a rogue renderer must still be refused.
+describe('item CRUD + the Ready gate', () => {
+  const story = async (over: object = {}): Promise<Item> =>
+    invoke<Item>('item:save', repo, {
+      name: 'Ship it',
+      kind: 'story',
+      status: 'backlog',
+      spec: 'the spec',
+      tasks: [{ title: 'T', prompt: 'p', role: 'dev', selected: true }],
+      ...over
+    })
+
+  it('creates, reads back, reorders the backlog and deletes', async () => {
+    const a = await story()
+    expect(a.id).toBe('SOM-1')
+    expect((await invoke<RepoData>('repo:load', repo)).items).toEqual([a])
+    await invoke('backlog:set', repo, [a.id])
+    expect((await invoke<RepoData>('repo:load', repo)).backlog).toEqual([a.id])
+    await invoke('item:delete', repo, a.id)
+    const data = await invoke<RepoData>('repo:load', repo)
+    expect(data.items).toEqual([])
+    expect(data.backlog).toEqual([]) // the deleted id leaves the ordering too
+  })
+
+  it('allows ready for a groomed story and any non-ready status freely', async () => {
+    const a = await story()
+    expect(await invoke('item:setStatus', repo, a.id, 'ready')).toEqual({ ok: true })
+    expect(await invoke('item:setStatus', repo, a.id, 'grooming')).toEqual({ ok: true })
+    expect((await invoke<RepoData>('repo:load', repo)).items[0].status).toBe('grooming')
+  })
+
+  it('refuses ready for an empty spec, zero subtasks, zero *selected* subtasks and a non-story', async () => {
+    const cases: [object, RegExp][] = [
+      [{ spec: '   ' }, /empty Spec/],
+      [{ tasks: [] }, /no selected subtasks/],
+      [{ tasks: [{ title: 'T', prompt: 'p', role: 'dev', selected: false }] }, /no selected/],
+      [{ kind: 'idea' }, /only a Story/],
+      [{ kind: 'epic' }, /only a Story/]
+    ]
+    for (const [over, why] of cases) {
+      const a = await story(over)
+      const res = await invoke<{ ok: boolean; error?: string }>(
+        'item:setStatus',
+        repo,
+        a.id,
+        'ready'
+      )
+      expect(res.ok).toBe(false)
+      expect(res.error).toMatch(why)
+      // refused means nothing moved
+      const items = (await invoke<RepoData>('repo:load', repo)).items
+      expect(items.find((i) => i.id === a.id)!.status).toBe('backlog')
+    }
+  })
+
+  it('refuses a status change for an item that is not there', async () => {
+    expect(await invoke('item:setStatus', repo, 'SOM-99', 'done')).toEqual({
+      ok: false,
+      error: 'item not found: SOM-99'
+    })
   })
 })
