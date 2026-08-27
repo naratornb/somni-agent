@@ -7,6 +7,7 @@ import { wireTaskIpc, killTask } from './runner'
 import { killChats } from './chat'
 import { patchSettings, readSettings, repoSettings, wireRepoIpc } from './repoIpc'
 import { wireVoiceIpc } from './voice'
+import { wireSkillsIpc } from './skills'
 import { loadItems, readyBlocker, setItemStatus } from './store'
 import {
   abandonRun,
@@ -73,6 +74,7 @@ app.whenReady().then(() => {
   wireTaskIpc(ipcMain, () => BrowserWindow.getAllWindows()[0]?.webContents ?? null)
   wireRepoIpc(() => armNightly())
   wireVoiceIpc()
+  wireSkillsIpc()
 
   const wc = (): Electron.WebContents | undefined => BrowserWindow.getAllWindows()[0]?.webContents
 

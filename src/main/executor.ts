@@ -8,7 +8,7 @@ import { execFile } from 'child_process'
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { promisify } from 'util'
-import { writeReport } from './report'
+import { runnerText, writeReport } from './report'
 import type { RunStats } from './report'
 import { spawnRunner, SpawnHandle } from './runner'
 import { getRunner } from './runners'
@@ -48,6 +48,9 @@ export type PipelineStatus = 'Running' | 'Paused' | 'Idle'
 export type TaskRun = {
   title: string
   role: string
+  // Auto-appended by somni (Review / fix / Report) rather than a Story subtask.
+  // Excluded from the "story changed since it started" resume check.
+  aux?: true
   status: TaskStatus
   attempts?: number
   sessionId?: string
@@ -75,7 +78,19 @@ export type RunState = {
   startedAt: string
   finishedAt?: string
   tasks: TaskRun[]
+  reviews?: ReviewCycle[] // the closing review loop, one entry per cycle (M16)
   stats?: RunStats // written at report time; see report.ts (architecture.md §4)
+}
+
+// One pass of the closing review loop. `verdict` is what the agent claimed
+// ('unknown' = no parseable somni-verdict block); `green` is what somni ruled,
+// which is what actually decides the run (architecture.md §10).
+export type ReviewCycle = {
+  cycle: number
+  verdict: 'green' | 'red' | 'unknown'
+  findings: string
+  check?: { command: string; ok: boolean; output: string }
+  green: boolean
 }
 
 export type RunEvents = {
@@ -237,6 +252,116 @@ const message = (err: unknown): string => (err instanceof Error ? err.message : 
 const taskTitle = (t: { title?: string }, i: number): string => t.title || `task ${i + 1}`
 const human = (ms: number): string =>
   ms >= 60_000 ? `${Math.round(ms / 60_000)}m` : `${Math.round(ms / 1000)}s`
+
+// The implement discipline (M16). Prompt text only — the runner adapters stay
+// runner-agnostic. Prepended to every subtask *alongside* the role preamble.
+export const DISCIPLINE_PREAMBLE = [
+  'You are working through somni, unattended, in an isolated git worktree.',
+  '',
+  'Discipline for this subtask:',
+  '- Read the Story Spec at `{SPEC}` first. It is the contract; the subtask below is one step of it.',
+  '- Work through the `implement` skill in `.claude/skills/` — TDD at the agreed seams:',
+  '  a failing test first, the smallest change that passes it, then refactor.',
+  '- Stay strictly within this subtask. Do not start the next one, do not refactor',
+  '  code the Spec does not name, and do not add dependencies.',
+  '- If the Spec and the subtask disagree, follow the Spec and say so in your reply.'
+].join('\n')
+
+/** Discipline preamble → role preamble → the subtask prompt (M16 §3). */
+export function subtaskPrompt(
+  specPath: string,
+  rolePreamble: string | undefined,
+  prompt: string
+): string {
+  return [DISCIPLINE_PREAMBLE.replace('{SPEC}', specPath), rolePreamble, prompt]
+    .filter(Boolean)
+    .join('\n\n---\n\n')
+}
+
+const MAX_FIX_CYCLES = 2 // Review → fix+Review → fix+Review → Failed
+
+const REVIEW_PROMPT = (base: string): string =>
+  [
+    'You are closing out an unattended coding run in this worktree.',
+    '',
+    `1. Code-review the full diff against \`${base}\` (\`git diff ${base}\`) using the`,
+    '   `code-review` skill in `.claude/skills/`: correctness, scope creep, missing tests.',
+    "2. Run this repo's test suite and report what it actually did.",
+    '3. End your reply with exactly one fenced block, and nothing after it:',
+    '',
+    '```somni-verdict',
+    '{"verdict": "green", "findings": ""}',
+    '```',
+    '',
+    'Use "red" and put every blocking problem in `findings` (plain text, one per line)',
+    'if the tests fail or the review found something that must be fixed. Do not be',
+    'generous: "green" means a human could merge this as-is.'
+  ].join('\n')
+
+const FIX_PROMPT = (findings: string): string =>
+  [
+    'The closing review of this worktree came back red. Fix these findings, and only these:',
+    '',
+    findings,
+    '',
+    'Keep the same TDD discipline: a failing test first where a test is the right proof.',
+    'Do not expand scope beyond the findings.'
+  ].join('\n')
+
+/** Last ```somni-verdict block; null when absent or malformed (§10: that is red). */
+export function parseVerdict(text: string): { verdict: 'green' | 'red'; findings: string } | null {
+  const blocks = [...text.matchAll(/```somni-verdict[^\n]*\n([\s\S]*?)\n```/g)]
+  const last = blocks[blocks.length - 1]
+  if (!last) return null
+  try {
+    const raw = JSON.parse(last[1]) as Record<string, unknown>
+    if (raw.verdict !== 'green' && raw.verdict !== 'red') return null
+    return { verdict: raw.verdict, findings: typeof raw.findings === 'string' ? raw.findings : '' }
+  } catch {
+    return null
+  }
+}
+
+const TAIL_CHARS = 4000
+
+/** The deterministic half of the green signal (§10). Undefined = not configured. */
+export async function runCheckCommand(
+  command: string | undefined,
+  cwd: string,
+  timeoutMs: number
+): Promise<{ command: string; ok: boolean; output: string } | undefined> {
+  if (!command?.trim()) return undefined
+  try {
+    const { stdout, stderr } = await promisify(execFile)('/bin/sh', ['-c', command], {
+      cwd,
+      timeout: timeoutMs,
+      maxBuffer: 10 << 20
+    })
+    return { command, ok: true, output: `${stdout}${stderr}`.slice(-TAIL_CHARS) }
+  } catch (err) {
+    const e = err as { stdout?: string; stderr?: string; message?: string }
+    return {
+      command,
+      ok: false,
+      output: `${e.stdout ?? ''}${e.stderr ?? ''}${e.stdout || e.stderr ? '' : (e.message ?? '')}`
+        .slice(-TAIL_CHARS)
+        .trim()
+    }
+  }
+}
+
+/**
+ * The verdict semantics, pinned by the M16 decisions log: a configured
+ * checkCommand is authoritative — failing is red whatever the agent claimed,
+ * passing makes a missing/malformed verdict green. Without one, only an
+ * explicit "green" is green.
+ */
+export function isGreen(
+  verdict: 'green' | 'red' | 'unknown',
+  check: { ok: boolean } | undefined
+): boolean {
+  return check ? check.ok && verdict !== 'red' : verdict === 'green'
+}
 
 type Job = { id: string; slug: string; run: (ctrl: Ctrl, gate: Gate) => Promise<RunState> }
 
@@ -480,9 +605,71 @@ async function execute(
   }
 
   const { roles, items } = loadRepo(repo)
-  const defs = (items.find((i: Item) => i.id === state.workflow)?.tasks ?? []).filter(
-    (t) => t.selected !== false
-  )
+  const story = items.find((i: Item) => i.id === state.workflow)
+  const defs = (story?.tasks ?? []).filter((t) => t.selected !== false)
+  const specPath = story ? join('.somni', 'items', `${story.id}-${story.slug}.md`) : ''
+
+  // ponytail: aux tasks are spawned directly rather than threaded through the
+  // retry/gate loop below (report.ts's Report-task precedent) — one shot each,
+  // and the review loop is itself the retry. They still record attempts/cost so
+  // run.json and the report treat them like any other task.
+  const auxTask = async (title: string, prompt: string, log: string): Promise<string | null> => {
+    const task: TaskRun = {
+      title,
+      role: '',
+      aux: true,
+      status: 'Running',
+      attempts: 1,
+      runner: settings.runner,
+      model: settings.model,
+      effort: settings.effort,
+      log: `logs/${log}`
+    }
+    state.tasks.push(task)
+    writeState()
+    const text = await runnerText(
+      settings,
+      prompt,
+      { autonomous: true },
+      state.worktree,
+      join(runDir, task.log),
+      (usage) => Object.assign(task, usage)
+    ).catch(() => null)
+    task.status = text ? 'Completed' : 'Failed'
+    if (!text) task.error = `${title.toLowerCase()} task produced no output`
+    writeState()
+    return text
+  }
+
+  // Review → (red) fix → review, at most MAX_FIX_CYCLES fixes. Returns the
+  // honest green signal; false lands the run in needs-attention.
+  const reviewLoop = async (): Promise<boolean> => {
+    const reviews = (state.reviews ??= [])
+    for (let cycle = 0; ; cycle++) {
+      const check = await runCheckCommand(settings.checkCommand, state.worktree, timeoutMs)
+      const text = await auxTask(
+        'Review',
+        REVIEW_PROMPT(state.baseSha ?? 'HEAD'),
+        `review-${cycle + 1}.log`
+      )
+      const parsed = text ? parseVerdict(text) : null
+      const verdict = parsed?.verdict ?? 'unknown'
+      const green = isGreen(verdict, check)
+      const findings =
+        [
+          parsed?.findings?.trim(),
+          check && !check.ok ? `checkCommand \`${check.command}\` failed:\n${check.output}` : ''
+        ]
+          .filter(Boolean)
+          .join('\n\n') || 'The review produced no parseable verdict.'
+      reviews.push({ cycle: cycle + 1, verdict, findings: green ? '' : findings, check, green })
+      writeState()
+      if (green) return true
+      if (cycle >= MAX_FIX_CYCLES || ctrl.cancelled) return false
+      events.onLog(state.runId, -1, `[somni] review red — fix cycle ${cycle + 1}`)
+      await auxTask('Address review findings', FIX_PROMPT(findings), `fix-${cycle + 1}.log`)
+    }
+  }
 
   // A dead process left these Running; they get re-attempted from scratch.
   for (const t of state.tasks) if (t.status === 'Running') t.status = 'Queued'
@@ -495,15 +682,16 @@ async function execute(
     // still line up — a same-count reorder would otherwise run the wrong prompt
     // under the old title. Renaming a task mid-orphan invalidates the run too;
     // that's the safe direction, and cheaper than putting ids in the schema.
+    const subtasks = state.tasks.filter((t) => !t.aux)
     if (
-      defs.length !== state.tasks.length ||
-      defs.some((d, i) => taskTitle(d, i) !== state.tasks[i].title)
+      defs.length !== subtasks.length ||
+      defs.some((d, i) => taskTitle(d, i) !== subtasks[i].title)
     )
       throw new Error('story changed since it started')
     state.baseSha ??= await headSha(repo)
     await ensureWorktree(repo, state.worktree, state.branch)
 
-    for (let i = 0; i < state.tasks.length; i++) {
+    for (let i = 0; i < defs.length; i++) {
       const task = state.tasks[i]
       if (task.status === 'Completed') continue
       if (ctrl.cancelled) {
@@ -519,8 +707,7 @@ async function execute(
       task.runner = profile.runner
       task.model = profile.model
       task.effort = profile.effort
-      const preamble = role?.preamble
-      const prompt = preamble ? `${preamble}\n\n---\n\n${def.prompt}` : def.prompt
+      const prompt = subtaskPrompt(specPath, role?.preamble, def.prompt)
       const logPath = join(runDir, task.log)
       task.status = 'Running'
       task.attempts ??= 0
@@ -621,7 +808,13 @@ async function execute(
       }
     }
 
-    const failed = state.tasks.some((t) => t.status === 'Failed')
+    // The closing review loop (M16 §9). Only when every subtask landed — a run
+    // that already failed has nothing honest to review.
+    let reviewGreen = true
+    if (!ctrl.cancelled && state.tasks.filter((t) => !t.aux).every((t) => t.status === 'Completed'))
+      reviewGreen = await reviewLoop()
+
+    const failed = state.tasks.some((t) => t.status === 'Failed') || !reviewGreen
     const cancelled = state.tasks.some((t) => t.status === 'Cancelled')
     state.status = cancelled ? 'Cancelled' : failed ? 'Failed' : 'Completed'
     // Land the final status on disk *before* generating the report: a full-style

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fileChanges, minimalReport, runStats, summarize } from './report'
+import { fileChanges, minimalReport, reviewSection, runStats, summarize } from './report'
 import type { RunState } from './executor'
 
 describe('minimal report stats', () => {
@@ -76,5 +76,57 @@ describe('structured run stats', () => {
       completionTokens: 1200
     })
     expect(runStats({ tasks: [{}] } as RunState, []).totalCostUsd).toBeUndefined()
+  })
+})
+
+describe('review section (M16)', () => {
+  it('renders nothing when the story never reached the review loop', () => {
+    expect(reviewSection({ tasks: [] } as unknown as RunState)).toEqual([])
+  })
+
+  it('carries the "agent said so" caveat when green came from the verdict alone', () => {
+    const state = {
+      reviews: [{ cycle: 1, verdict: 'green', findings: '', green: true }]
+    } as RunState
+    const md = reviewSection(state).join('\n')
+    expect(md).toContain('### Cycle 1 — green')
+    expect(md).toContain('- Agent verdict: green')
+    expect(md).toContain('checkCommand: not configured — green means the agent said so')
+  })
+
+  it('shows the checkCommand result instead of the caveat when one ran', () => {
+    const state = {
+      reviews: [
+        {
+          cycle: 1,
+          verdict: 'red',
+          findings: 'checkCommand `npm test` failed:\nboom',
+          check: { command: 'npm test', ok: false, output: 'boom' },
+          green: false
+        }
+      ]
+    } as RunState
+    const md = reviewSection(state).join('\n')
+    expect(md).toContain('### Cycle 1 — red')
+    expect(md).toContain('checkCommand `npm test`: FAILED')
+    expect(md).not.toContain('the agent said so')
+    expect(md).toContain('boom')
+  })
+
+  it('is included in the rendered minimal report', () => {
+    const state = {
+      runId: 'r1',
+      workflow: 'w',
+      name: 'Nightly',
+      branch: 'somni/w-1',
+      worktree: '/tmp/wt',
+      status: 'Completed',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      tasks: [{ title: 'Review', role: '', aux: true, status: 'Completed', log: '' }],
+      reviews: [{ cycle: 1, verdict: 'green', findings: '', green: true }]
+    } as RunState
+    const md = minimalReport(state, summarize('', ''))
+    expect(md).toContain('## Review')
+    expect(md).toContain('green means the agent said so')
   })
 })

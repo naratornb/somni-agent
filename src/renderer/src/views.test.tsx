@@ -204,7 +204,7 @@ const views: [string, React.JSX.Element][] = [
     />
   ],
   ['Roles', <RolesView key="ro" repo="/repo" roles={roles} refresh={() => {}} />],
-  ['Settings', <SettingsView key="s" />],
+  ['Settings', <SettingsView key="s" repo="/repo" />],
   ['Playground', <Playground key="pl" />],
   ['Groom', <GroomView key="g" repo="/repo" roles={roles} onApplied={() => {}} />],
   [

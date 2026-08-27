@@ -33,6 +33,9 @@ export type Settings = Profile & {
   nightlyArmed?: boolean
   // Which sidebar views are shown (M11 Decision 8) — presentation only.
   viewMode?: ViewMode
+  // The deterministic green signal for the closing review loop (M16, §10).
+  // Repo-level only: it lives in .somni/config.json, never in global settings.
+  checkCommand?: string
 }
 
 export const SETTINGS_DEFAULTS = {

@@ -102,6 +102,15 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
     return store.loadRepo(repo)
   })
 
+  // Repo-level overrides (.somni/config.json). Only checkCommand is edited from
+  // the UI today (M16); the file may hold any Settings key by hand.
+  ipcMain.handle('config:get', (_e, repo: string) => store.loadConfig(repo))
+  ipcMain.handle('config:set', (_e, repo: string, patch: Settings) => {
+    const next: Record<string, unknown> = { ...store.loadConfig(repo), ...patch }
+    for (const [k, v] of Object.entries(next)) if (v === '' || v == null) delete next[k]
+    atomicWrite(join(repo, '.somni', 'config.json'), JSON.stringify(next, null, 2) + '\n')
+  })
+
   ipcMain.handle('settings:get', () => ({ ...store.SETTINGS_DEFAULTS, ...readSettings() }))
   ipcMain.handle('settings:set', (_e, s: Settings) => {
     patchSettings(s)

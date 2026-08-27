@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { DrainState, RepoData, RunState, ViewMode } from '../../preload/index'
+import type { DrainState, RepoData, RunState, SkillsStatus, ViewMode } from '../../preload/index'
 import { Playground } from './Playground'
 import { LogLine, PipelineView } from './PipelineView'
 import { RolesView } from './RolesView'
@@ -51,11 +51,15 @@ function App(): React.JSX.Element {
   const [palette, setPalette] = useState(false)
   // Item the palette asked the Board to open in the StoryPanel; consumed once.
   const [openId, setOpenId] = useState<string | null>(null)
+  // Vendored skills (M16): the offer banner. Dismissal is per-session.
+  const [skills, setSkills] = useState<SkillsStatus | null>(null)
+  const [skillsHidden, setSkillsHidden] = useState(false)
 
   const refresh = useCallback(
     (path = repo): void => {
       if (!path) return
       void window.somni.loadRepo(path).then(setData)
+      void window.somni.skillsStatus(path).then(setSkills)
       // runs left Running on disk belong to a somni that quit or crashed
       void window.somni.orphanedRuns(path).then(setOrphans)
     },
@@ -289,10 +293,34 @@ function App(): React.JSX.Element {
               </div>
             </div>
           ))}
+          {/* M16: the one-time skills offer. Silent once set up or dismissed. */}
+          {repo && skills && !skillsHidden && skills.repoVersion !== skills.bundledVersion && (
+            <div className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface-elevated p-card-padding">
+              <span>
+                {skills.repoVersion == null
+                  ? 'Set up engineering skills for this repo? somni writes .claude/skills/, docs/agents/issue-tracker.md and docs/adr/ — it never touches your other files.'
+                  : `Engineering skills v${skills.bundledVersion} are available (this repo has v${skills.repoVersion}). Upgrading overwrites only somni's skill folders.`}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  className="rounded-full bg-primary-container px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-inverse-primary"
+                  onClick={() => void window.somni.injectSkills(repo).then(setSkills)}
+                >
+                  {skills.repoVersion == null ? 'Set up skills' : 'Upgrade skills'}
+                </button>
+                <button
+                  className="rounded border border-border-subtle bg-surface-container px-3 py-1.5 text-sm text-on-surface transition-colors hover:bg-surface-bright"
+                  onClick={() => setSkillsHidden(true)}
+                >
+                  Not now
+                </button>
+              </div>
+            </div>
+          )}
           {view === 'Playground' ? (
             <Playground />
           ) : view === 'Settings' ? (
-            <SettingsView />
+            <SettingsView repo={repo} />
           ) : !repo ? (
             <p className="text-on-surface-variant">
               Choose a repo to manage its work items and roles.

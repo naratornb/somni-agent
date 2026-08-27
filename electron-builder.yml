@@ -11,6 +11,11 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+# Vendored Pocock skills (M16): agents read them off disk, so they cannot live
+# in the asar — they ship beside it as <Resources>/skills.
+extraResources:
+  - from: resources/skills
+    to: skills
 win:
   executableName: somni
 nsis:

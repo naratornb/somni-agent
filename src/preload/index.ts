@@ -18,6 +18,8 @@ export type Settings = {
   nightlyTime?: string
   nightlyArmed?: boolean
   viewMode: ViewMode
+  // Repo-level only (.somni/config.json) — the closing review loop's signal.
+  checkCommand?: string
 }
 export type Role = {
   slug: string
@@ -44,6 +46,14 @@ export type Item = {
   tasks: Task[]
 }
 export type IpcResult = { ok: boolean; error?: string }
+export type SkillsStatus = { bundledVersion: number; repoVersion: number | null }
+export type ReviewCycle = {
+  cycle: number
+  verdict: 'green' | 'red' | 'unknown'
+  findings: string
+  check?: { command: string; ok: boolean; output: string }
+  green: boolean
+}
 export type RepoData = { roles: Role[]; items: Item[]; backlog: string[] }
 export type TaskStatus = 'Queued' | 'Running' | 'Completed' | 'Failed' | 'Skipped' | 'Cancelled'
 export type PipelineStatus = 'Running' | 'Paused' | 'Idle'
@@ -53,6 +63,7 @@ export type PipelinePush = { status: PipelineStatus; resumeAt?: string; mode?: D
 export type TaskRun = {
   title: string
   role: string
+  aux?: true
   status: TaskStatus
   attempts?: number
   sessionId?: string
@@ -78,6 +89,7 @@ export type RunState = {
   startedAt: string
   finishedAt?: string
   tasks: TaskRun[]
+  reviews?: ReviewCycle[]
   stats?: RunStats
 }
 export type FileChange = { path: string; kind: 'A' | 'M' | 'D'; lines: number }
@@ -162,6 +174,14 @@ const somni = {
   onRunLog: (cb: (log: { runId: string; taskIndex: number; text: string }) => void): (() => void) =>
     on('run:log', (p) => cb(p as { runId: string; taskIndex: number; text: string })),
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('settings:get'),
+  // Repo-level .somni/config.json (M16: checkCommand). Never global.
+  getRepoConfig: (repo: string): Promise<Partial<Settings>> =>
+    ipcRenderer.invoke('config:get', repo),
+  setRepoConfig: (repo: string, patch: Partial<Settings>): Promise<void> =>
+    ipcRenderer.invoke('config:set', repo, patch),
+  // Vendored skills (M16): status of <repo>/.claude/skills/ vs the bundle.
+  skillsStatus: (repo: string): Promise<SkillsStatus> => ipcRenderer.invoke('skills:status', repo),
+  injectSkills: (repo: string): Promise<SkillsStatus> => ipcRenderer.invoke('skills:inject', repo),
   setSettings: (s: Partial<Settings>): Promise<void> => ipcRenderer.invoke('settings:set', s),
   // One-shot Refine (M11). The result is inert — the renderer applies it into
   // its editing buffer only; nothing reaches disk until the editor's Save.

@@ -14,6 +14,8 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   abandonRun,
+  DISCIPLINE_PREAMBLE,
+  subtaskPrompt,
   cancelPipeline,
   findOrphanedRuns,
   isRunning,
@@ -46,12 +48,15 @@ import {
 //   FAKE_TRAP         never exit AND ignore SIGTERM — only SIGKILL stops it
 //   FAKE_SLEEP=<sec>  sleep before succeeding — a window to observe overlap
 //   FAKE_RL_MATCH=<s> rate-limit only invocations whose args contain <s>
+//   FAKE_VERDICT=red|none  the somni-verdict block the closing Review emits (M16)
+//   FAKE_ARGV=<file>  dump argv to <file> (the discipline-preamble assertion)
 const FAKE_CLAUDE = `#!/bin/sh
 n=1
 if [ -n "$FAKE_COUNT" ]; then
   n=$(( $(cat "$FAKE_COUNT" 2>/dev/null || echo 0) + 1 ))
   echo "$n" > "$FAKE_COUNT"
 fi
+if [ -n "$FAKE_ARGV" ]; then printf '%s\n' "$@" >> "$FAKE_ARGV"; fi
 if [ -n "$FAKE_HANG" ]; then exec sleep 30; fi
 if [ -n "$FAKE_TRAP" ]; then trap '' TERM; while :; do sleep 0.05; done; fi
 if [ -n "$FAKE_RL_MATCH" ]; then
@@ -74,7 +79,11 @@ if [ -n "$FAKE_SLEEP" ]; then sleep "$FAKE_SLEEP"; fi
 echo '{"type":"system","subtype":"init","session_id":"s1"}'
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"did work"}]}}'
 touch task-ran-here
-echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"duration_ms":5}'
+case "\${FAKE_VERDICT:-green}" in
+  red) printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"duration_ms":5,"result":"\`\`\`somni-verdict\\n{\\"verdict\\": \\"red\\", \\"findings\\": \\"no tests\\"}\\n\`\`\`"}';;
+  none) printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"duration_ms":5,"result":"Looks fine to me."}';;
+  *) printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"duration_ms":5,"result":"\`\`\`somni-verdict\\n{\\"verdict\\": \\"green\\", \\"findings\\": \\"\\"}\\n\`\`\`"}';;
+esac
 `
 
 // A fake `agy` on PATH mirroring FAKE_CLAUDE but emitting antigravity's stream
@@ -97,7 +106,7 @@ fi
 echo '{"event":"init","conversation_id":"agy-s1"}'
 echo '{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"did work"}}'
 touch task-ran-here
-echo '{"event":"result","result":{"status":"SUCCESS","response":"done","duration_seconds":0.005}}'
+printf '%s\n' '{"event":"result","result":{"status":"SUCCESS","response":"\`\`\`somni-verdict\\n{\\"verdict\\": \\"green\\", \\"findings\\": \\"\\"}\\n\`\`\`","duration_seconds":0.005}}'
 `
 
 let repo: string
@@ -171,8 +180,9 @@ describe('runStory', () => {
     const state = await runStory(repo, feature, base, noEvents)
     expect(state.status).toBe('Completed')
     // deselected task is excluded entirely
-    expect(state.tasks.map((t) => t.title)).toEqual(['Design', 'Build'])
-    expect(state.tasks.map((t) => t.status)).toEqual(['Completed', 'Completed'])
+    // M16 appends the closing Review; the subtasks are the non-aux ones.
+    expect(state.tasks.filter((t) => !t.aux).map((t) => t.title)).toEqual(['Design', 'Build'])
+    expect(state.tasks.map((t) => t.status)).toEqual(['Completed', 'Completed', 'Completed'])
     expect(state.tasks[0].sessionId).toBe('s1')
     expect(state.tasks[0].costUsd).toBe(0.01)
     // ran inside the worktree, on the somni branch
@@ -195,7 +205,7 @@ describe('runStory', () => {
     fake({ FAKE_COUNT: join(root, 'n'), FAKE_FAIL_TIMES: '1' })
     const state = await runStory(repo, feature, base, noEvents)
     expect(state.status).toBe('Completed')
-    expect(state.tasks.map((t) => t.attempts)).toEqual([2, 1])
+    expect(state.tasks.map((t) => t.attempts)).toEqual([2, 1, 1])
     expect(state.tasks[0].error).toBeUndefined()
   })
 
@@ -420,6 +430,33 @@ describe('crash resume', () => {
     const results = await resumePipeline(repo, [first.runId], 2, noEvents)
     expect(results.map((r) => r.workflow)).toEqual([docs])
     expect(statusOnDisk(feature)).toBe('in-progress') // never picked up
+  })
+
+  // M16: a kill mid-review leaves an aux Review task stuck Running. The
+  // story-diff refusal check only compares non-aux subtasks (executor.ts),
+  // so this must resume and complete rather than hit "story changed".
+  it('resumes past an orphaned aux Review task without the story-changed refusal', async () => {
+    const first = await runStory(repo, docs, base, noEvents)
+    expect(first.status).toBe('Completed')
+    orphan(first.runId, (s) => {
+      s.status = 'Running'
+      // Simulate the kill: the Review task that closed the story never finished.
+      const review = s.tasks.find((t) => t.aux && t.title === 'Review')
+      expect(review).toBeDefined()
+      review!.status = 'Running'
+      s.reviews = [] // no verdict was recorded before the kill
+    })
+    const errors: string[] = []
+    const [state] = await resumePipeline(repo, [first.runId], 1, {
+      ...noEvents,
+      onLog: (_id, _i, text) => errors.push(text)
+    })
+    expect(errors.some((e) => e.includes('story changed since it started'))).toBe(false)
+    expect(state.status).toBe('Completed')
+    // A fresh review loop ran (Decision log: resume restarts at cycle 1).
+    expect(state.reviews).toHaveLength(1)
+    expect(state.reviews?.[0]).toMatchObject({ verdict: 'green', green: true })
+    expect(statusOnDisk(docs)).toBe('review')
   })
 
   // M8 Decision 9: the chat guard must key off the story id correctly
@@ -885,6 +922,97 @@ describe('startDrain', () => {
     })
     expect(modes[0]).toBe('manual')
     expect(modes[modes.length - 1]).toBe(null)
+  })
+})
+
+// ---- M16: the discipline preamble + the closing review loop ----------------
+
+describe('discipline preamble', () => {
+  it('carries discipline, the story spec path and the role preamble into argv', async () => {
+    const argv = join(root, 'argv')
+    fake({ FAKE_ARGV: argv })
+    const state = await runStory(repo, docs, base, noEvents)
+    expect(state.status).toBe('Completed')
+    // Every spawn appends; the first record is the subtask, the last the Review.
+    const prompt = readFileSync(argv, 'utf8').split('You are closing out')[0]
+    expect(prompt).toContain('implement` skill')
+    const disciplineAt = prompt.indexOf('Read the Story Spec at')
+    const specAt = prompt.indexOf(`.somni/items/${docs}-docs.md`)
+    const roleAt = prompt.indexOf('You are dev.')
+    const taskAt = prompt.indexOf('write docs')
+    expect(disciplineAt).toBeGreaterThanOrEqual(0)
+    expect(specAt).toBeGreaterThan(disciplineAt)
+    expect(roleAt).toBeGreaterThan(specAt)
+    expect(taskAt).toBeGreaterThan(roleAt)
+  })
+
+  it('keeps the role preamble optional and the order stable', () => {
+    expect(subtaskPrompt('.somni/items/SOM-1-x.md', undefined, 'do it')).toBe(
+      `${DISCIPLINE_PREAMBLE.replace('{SPEC}', '.somni/items/SOM-1-x.md')}\n\n---\n\ndo it`
+    )
+  })
+})
+
+describe('the closing review loop', () => {
+  const reviewTitles = (state: RunState): string[] =>
+    state.tasks.filter((t) => t.aux).map((t) => t.title)
+
+  it('green verdict lands the story in review', async () => {
+    const state = await runStory(repo, docs, base, noEvents)
+    expect(state.status).toBe('Completed')
+    expect(reviewTitles(state)).toEqual(['Review'])
+    expect(state.reviews).toHaveLength(1)
+    expect(state.reviews?.[0]).toMatchObject({ cycle: 1, verdict: 'green', green: true })
+    setItemStatus(repo, docs, 'review') // the drain does this; runStory's caller path
+    expect(statusOnDisk(docs)).toBe('review')
+  })
+
+  it('red cycles at most twice, then fails the run into needs-attention', async () => {
+    fake({ FAKE_VERDICT: 'red' })
+    add(docs)
+    const [state] = await startDrain(repo, base, 1, noEvents)
+    expect(state.status).toBe('Failed')
+    expect(reviewTitles(state)).toEqual([
+      'Review',
+      'Address review findings',
+      'Review',
+      'Address review findings',
+      'Review'
+    ])
+    expect(state.reviews?.map((r) => r.verdict)).toEqual(['red', 'red', 'red'])
+    expect(state.reviews?.[0].findings).toContain('no tests')
+    // aux tasks are accounted for like any other task
+    expect(state.tasks.filter((t) => t.aux).every((t) => t.attempts === 1)).toBe(true)
+    expect(state.tasks.filter((t) => t.aux).every((t) => t.costUsd === 0.01)).toBe(true)
+    expect(statusOnDisk(docs)).toBe('needs-attention')
+  })
+
+  it('a missing verdict is red without a checkCommand', async () => {
+    fake({ FAKE_VERDICT: 'none' })
+    const state = await runStory(repo, docs, base, noEvents)
+    expect(state.status).toBe('Failed')
+    expect(state.reviews?.[0]).toMatchObject({ verdict: 'unknown', green: false })
+  })
+
+  it('a passing checkCommand makes a missing verdict green', async () => {
+    fake({ FAKE_VERDICT: 'none' })
+    const state = await runStory(repo, docs, base, noEvents, {
+      settings: { checkCommand: 'exit 0' }
+    })
+    expect(state.status).toBe('Completed')
+    expect(state.reviews?.[0]).toMatchObject({ verdict: 'unknown', green: true })
+    expect(state.reviews?.[0].check).toMatchObject({ command: 'exit 0', ok: true })
+  })
+
+  it('a failing checkCommand is red however green the verdict text', async () => {
+    const state = await runStory(repo, docs, base, noEvents, {
+      settings: { checkCommand: 'echo nope >&2; exit 1' }
+    })
+    expect(state.status).toBe('Failed')
+    expect(state.reviews).toHaveLength(3)
+    expect(state.reviews?.[0]).toMatchObject({ verdict: 'green', green: false })
+    expect(state.reviews?.[0].findings).toContain('nope')
+    expect(statusOnDisk(docs)).toBe('needs-attention')
   })
 })
 
