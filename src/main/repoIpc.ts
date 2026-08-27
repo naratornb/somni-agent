@@ -109,7 +109,16 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
   })
 
   // Item CRUD (§4.1). The Backlog column's order is a bare id array.
-  ipcMain.handle('item:save', (_e, repo: string, item: store.Item) => store.saveItem(repo, item))
+  ipcMain.handle('item:save', (_e, repo: string, item: store.Item) => {
+    const created = !item.id
+    const saved = store.saveItem(repo, item)
+    // Create path only (TD ruling 3): a new Backlog item joins the column's
+    // ordering immediately, so backlog.json is never partial. An existing item
+    // dragged back to Backlog keeps whatever order it already had.
+    if (created && saved.status === 'backlog')
+      store.saveBacklog(repo, [...store.loadBacklog(repo), saved.id])
+    return saved
+  })
   ipcMain.handle('item:delete', (_e, repo: string, id: string) => {
     store.deleteItem(repo, id)
     store.saveBacklog(
@@ -199,12 +208,6 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
 
   ipcMain.handle('role:save', (_e, repo: string, role: store.Role) => store.saveRole(repo, role))
   ipcMain.handle('role:delete', (_e, repo: string, slug: string) => store.deleteRole(repo, slug))
-  ipcMain.handle('workflow:save', (_e, repo: string, wf: store.Workflow) =>
-    store.saveWorkflow(repo, wf)
-  )
-  ipcMain.handle('workflow:delete', (_e, repo: string, slug: string) =>
-    store.deleteWorkflow(repo, slug)
-  )
 
   // Draft with AI (§7). Read-only chat; `proposal:apply` is the only write out
   // of it, and it happens in main so definitions never round-trip the renderer.

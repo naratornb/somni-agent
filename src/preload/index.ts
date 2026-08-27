@@ -51,13 +51,7 @@ export type Item = {
   tasks: Task[]
 }
 export type IpcResult = { ok: boolean; error?: string }
-// `workflows` is always [] in v2 — see the note in src/main/store.ts.
-export type RepoData = {
-  roles: Role[]
-  items: Item[]
-  backlog: string[]
-  workflows: Workflow[]
-}
+export type RepoData = { roles: Role[]; items: Item[]; backlog: string[] }
 export type TaskStatus = 'Queued' | 'Running' | 'Completed' | 'Failed' | 'Skipped' | 'Cancelled'
 export type PipelineStatus = 'Running' | 'Paused' | 'Idle'
 export type DrainMode = 'manual' | 'nightly' | 'keep' | 'resume'
@@ -161,11 +155,6 @@ const somni = {
     ipcRenderer.invoke('pipeline:keepRunning', repo, on),
   setBacklog: (repo: string, ids: string[]): Promise<void> =>
     ipcRenderer.invoke('backlog:set', repo, ids),
-  // ponytail: v1 Backlog shims. WorkflowsView's parked-work section is dead in
-  // v2 (the loader returns no workflows, so no row can reach these); they go
-  // with that view when the Board replaces it.
-  park: (...args: unknown[]): Promise<void> => Promise.resolve(void args),
-  promote: (...args: unknown[]): Promise<void> => Promise.resolve(void args),
   orphanedRuns: (repo: string): Promise<RunState[]> => ipcRenderer.invoke('pipeline:orphan', repo),
   resumePipeline: (repo: string, runIds: string[]): Promise<void> =>
     ipcRenderer.invoke('pipeline:resume', repo, runIds),
@@ -221,10 +210,6 @@ const somni = {
   // Refused (with a reason) unless the Ready gate passes — main is the authority.
   setItemStatus: (repo: string, id: string, status: ItemStatus): Promise<IpcResult> =>
     ipcRenderer.invoke('item:setStatus', repo, id, status),
-  saveWorkflow: (repo: string, wf: Workflow): Promise<Workflow> =>
-    ipcRenderer.invoke('workflow:save', repo, wf),
-  deleteWorkflow: (repo: string, slug: string): Promise<void> =>
-    ipcRenderer.invoke('workflow:delete', repo, slug),
   loadChat: (repo: string, slug: string): Promise<{ messages: ChatMessage[]; busy: boolean }> =>
     ipcRenderer.invoke('chat:load', repo, slug),
   newChat: (repo: string, slug: string): Promise<void> =>

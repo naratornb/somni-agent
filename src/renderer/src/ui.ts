@@ -24,6 +24,14 @@ export const LABEL =
   'font-mono-label text-mono-label uppercase tracking-wide text-on-surface-variant'
 export const CHIP = `px-2 py-0.5 rounded-full bg-surface-variant text-on-surface-variant ${LABEL}`
 
+// Kind chip (M13-ui.md §0) — "Idea" stays the plain muted CHIP used everywhere
+// else for de-emphasized metadata; Story/Epic get a hint of the two colors the
+// app already reserves for structure (primary) vs grouping (tertiary), at the
+// STATUS_CHIP treatment. Declared after STATUS_CHIP_BASE below.
+// Small muted metadata pill for card footers — blockedBy, subtask counts.
+export const CHIP_SM =
+  'px-1.5 py-0.5 rounded bg-surface-container text-on-surface-variant text-[11px] font-mono-code'
+
 // Semantic status scale (DESIGN.md) in the runs_reports chip formula. Tailwind
 // needs whole class names in the source, so each row is spelled out.
 export const STATUS_CHIP_BASE = 'rounded-full border px-2.5 py-0.5 text-xs font-medium'
@@ -37,6 +45,12 @@ export const STATUS_CHIP: Record<string, string> = {
 }
 export const statusChip = (status = 'Queued'): string =>
   `${STATUS_CHIP_BASE} ${STATUS_CHIP[status] ?? STATUS_CHIP.Queued}`
+
+export const KIND_CHIP: Record<'idea' | 'story' | 'epic', string> = {
+  idea: CHIP,
+  story: `${STATUS_CHIP_BASE} bg-primary-container/10 text-primary border-primary-container/30`,
+  epic: `${STATUS_CHIP_BASE} bg-tertiary-container/10 text-tertiary border-tertiary-container/30`
+}
 
 // Unified chat bubbles (§6) — identical in the full-page Draft chat and the
 // 340px editor panel. Width caps are the caller's: the panel drops them.

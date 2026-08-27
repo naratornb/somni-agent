@@ -82,15 +82,7 @@ export type Item = {
   tasks: Task[] // stories only: the .tasks.json sidecar
 }
 
-export type RepoData = {
-  roles: Role[]
-  items: Item[]
-  backlog: string[]
-  // ponytail: v1 `workflows/` are ignored by the v2 loader (§4.1) — this always
-  // empty array only keeps the not-yet-replaced WorkflowsView compiling; it goes
-  // with that view in the Board stage.
-  workflows: Workflow[]
-}
+export type RepoData = { roles: Role[]; items: Item[]; backlog: string[] }
 
 export function slugify(name: string): string {
   return (
@@ -200,7 +192,7 @@ export function loadRepo(repo: string): RepoData {
     parseRole(f.replace(/\.md$/, ''), readFileSync(dir(repo, 'roles', f), 'utf8'))
   )
   // v1 `workflows/` are ignored without error (§4.1) — no migration.
-  return { roles, items: loadItems(repo), backlog: loadBacklog(repo), workflows: [] }
+  return { roles, items: loadItems(repo), backlog: loadBacklog(repo) }
 }
 
 // ponytail: the v1 workflow reader, kept only for `applyProposal` (chat.ts) —

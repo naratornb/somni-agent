@@ -125,6 +125,25 @@ describe('runs:switchBranch', () => {
   })
 })
 
+// v1 coexistence (M13.md §4.1): a run.json written before the item-store v2
+// migration carries a workflow *slug* (not a SOM-<n> id) in its frozen
+// `workflow` key, and there's no matching item in items/ at all. It must still
+// list and report cleanly — runs:list/runs:report don't resolve `workflow`
+// against the item store.
+describe('v1 run coexistence', () => {
+  it('lists and reports an old-shaped run.json with a slug workflow and no matching item', async () => {
+    writeRun('v1run', { workflow: 'old-workflow-slug', status: 'Completed' })
+    writeFileSync(
+      join(repo, '.somni', 'runs', 'v1run', 'report.md'),
+      '# Old report\n\nDid the old thing.\n'
+    )
+    const rows = await invoke<Array<{ runId: string; workflow: string }>>('runs:list', repo)
+    expect(rows.map((r) => r.runId)).toContain('v1run')
+    expect(rows.find((r) => r.runId === 'v1run')!.workflow).toBe('old-workflow-slug')
+    expect(await invoke('runs:report', repo, 'v1run')).toContain('Did the old thing.')
+  })
+})
+
 describe('runs:details', () => {
   it('returns the persisted stats untouched', async () => {
     const stats: RunStats = {
@@ -343,6 +362,21 @@ describe('item CRUD + the Ready gate', () => {
       const items = (await invoke<RepoData>('repo:load', repo)).items
       expect(items.find((i) => i.id === a.id)!.status).toBe('backlog')
     }
+  })
+
+  // TD ruling 3: the Backlog column's ordering is never partial.
+  it('appends a newly created backlog item to the ordering, but only on create', async () => {
+    const a = await story()
+    const b = await story({ name: 'Second' })
+    expect((await invoke<RepoData>('repo:load', repo)).backlog).toEqual([a.id, b.id])
+    // a non-backlog create stays out of the ordering
+    const c = await story({ name: 'Third', status: 'grooming' })
+    expect((await invoke<RepoData>('repo:load', repo)).backlog).toEqual([a.id, b.id])
+    // re-saving an existing item never re-appends or reorders
+    await invoke('backlog:set', repo, [b.id, a.id])
+    await invoke('item:save', repo, { ...a, spec: 'edited' })
+    await invoke('item:save', repo, { ...c, status: 'backlog' })
+    expect((await invoke<RepoData>('repo:load', repo)).backlog).toEqual([b.id, a.id])
   })
 
   it('refuses a status change for an item that is not there', async () => {

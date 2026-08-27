@@ -60,7 +60,7 @@ describe('store round-trips', () => {
     deleteRole(repo, 'x')
     const y = saveItem(repo, { name: 'Y', kind: 'story', tasks: [] })
     deleteItem(repo, y.id)
-    expect(loadRepo(repo)).toEqual({ roles: [], items: [], workflows: [], backlog: [] })
+    expect(loadRepo(repo)).toEqual({ roles: [], items: [], backlog: [] })
     expect(existsSync(join(repo, '.somni/roles/x.md'))).toBe(false)
   })
 
@@ -71,9 +71,8 @@ describe('store round-trips', () => {
     // a directory where a file should be: the read throws, the rest still loads
     mkdirSync(join(repo, '.somni/items/SOM-9-broken.md'))
     saveItem(repo, { name: 'Fine', kind: 'idea' })
-    const data = loadRepo(repo)
-    expect(data.workflows).toEqual([])
-    expect(data.items.map((i) => i.name)).toEqual(['Fine'])
+    // the v1 file is simply never read; a broken item doesn't take the rest down
+    expect(loadRepo(repo).items.map((i) => i.name)).toEqual(['Fine'])
   })
 })
 

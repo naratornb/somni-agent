@@ -28,6 +28,7 @@ import {
   Item,
   loadBacklog,
   loadItems,
+  readyBlocker,
   saveBacklog,
   saveItem,
   saveRole,
@@ -446,6 +447,55 @@ describe('crash resume', () => {
     cancelPipeline()
     await run
     expect(isRunning(feature)).toBe(false)
+  })
+})
+
+// End-to-end at module level (M13.md Goal 1-2 / Tester scope): the Ready gate
+// refuses an ungroomed idea and leaves its file untouched, authoring a spec +
+// subtask clears it, pipeline entry drains it to review with a report, and a
+// deliberately failing story lands in needs-attention with its own report.
+describe('end-to-end: idea -> gate refusal -> ready -> drain -> review/needs-attention', () => {
+  it('refuses the gate for a bare idea, leaves the file untouched, then drains after authoring', async () => {
+    const idea = saveItem(repo, { name: 'New Thing', kind: 'idea' })
+    const before = readFileSync(join(repo, '.somni/items', `${idea.id}-new-thing.md`), 'utf8')
+
+    // Gate refusal — wrong kind — via readyBlocker, the same function
+    // item:setStatus/pipeline:add call in main. Merely *checking* the gate
+    // must never touch the file on disk.
+    expect(readyBlocker(idea)).toMatch(/only a Story/)
+    const after = readFileSync(join(repo, '.somni/items', `${idea.id}-new-thing.md`), 'utf8')
+    expect(after).toBe(before)
+
+    // A hand-promoted-but-unauthored story is refused too, on empty-spec grounds.
+    const bareStory = saveItem(repo, { ...idea, kind: 'story' })
+    expect(readyBlocker(bareStory)).toMatch(/empty Spec/)
+
+    // Author the spec + a subtask (StoryPanel's job), then the gate clears.
+    const groomed = saveItem(repo, {
+      ...bareStory,
+      spec: 'Ship the new thing.',
+      tasks: [{ title: 'Do it', prompt: 'do it', role: 'dev', selected: true }]
+    })
+    expect(readyBlocker(groomed)).toBeNull()
+
+    // Ready, then "Add to pipeline" (status -> in-progress is the tick), drain.
+    setItemStatus(repo, groomed.id, 'ready')
+    setItemStatus(repo, groomed.id, 'in-progress')
+    const [result] = await startDrain(repo, base, 1, noEvents)
+    expect(result.status).toBe('Completed')
+    expect(statusOnDisk(groomed.id)).toBe('review')
+    expect(loadItems(repo).find((i) => i.id === groomed.id)!.status).toBe('review') // frontmatter on disk agrees with the drain result
+    expect(existsSync(join(repo, '.somni/runs', result.runId, 'run.json'))).toBe(true)
+    expect(existsSync(join(repo, '.somni/runs', result.runId, 'report.md'))).toBe(true)
+  })
+
+  it('a deliberately failing story lands needs-attention with a report', async () => {
+    fake({ FAKE_FAIL: '1' })
+    add(feature)
+    const [result] = await startDrain(repo, base, 1, noEvents)
+    expect(result.status).toBe('Failed')
+    expect(statusOnDisk(feature)).toBe('needs-attention')
+    expect(existsSync(join(repo, '.somni/runs', result.runId, 'report.md'))).toBe(true)
   })
 })
 

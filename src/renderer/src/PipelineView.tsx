@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import type { DrainState, RunState, Workflow } from '../../preload/index'
+import type { DrainState, RunState } from '../../preload/index'
 import { STATUS_CHIP, statusChip as chipClass } from './ui'
 
 export type LogLine = { taskIndex: number; text: string }
 
 type Props = {
-  workflows: Workflow[] // checkbox-selected ones
   runs: Record<string, RunState> // keyed by runId, this pipeline only
   logs: Record<string, LogLine[]>
   busy: boolean
@@ -29,7 +28,6 @@ const clock = (iso: string): string =>
 const DONE: string[] = ['Completed', 'Failed', 'Skipped', 'Cancelled']
 
 export function PipelineView({
-  workflows,
   runs,
   logs,
   busy,
@@ -50,28 +48,17 @@ export function PipelineView({
 
   const focusTask = focus ? runs[focus.runId]?.tasks[focus.taskIndex] : undefined
 
-  // One card per workflow: the latest run wins — history is Runs & Reports' job.
-  const byWorkflow = (slug: string): RunState | undefined =>
+  // One card per story: the latest run wins — history is Runs & Reports' job.
+  // Cards come from the runs themselves now that the Board owns what's queued.
+  const byStory = (id: string): RunState | undefined =>
     Object.values(runs)
-      .filter((r) => r.workflow === slug)
+      .filter((r) => r.workflow === id)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0]
-  // A resumed run's workflow may not be checkbox-selected — card it from the run itself.
-  const cards = [
-    ...workflows.map((w) => ({
-      key: w.slug,
-      name: w.name,
-      run: byWorkflow(w.slug),
-      tasks: w.tasks.filter((t) => t.selected !== false)
-    })),
-    ...Object.values(runs)
-      .filter((r) => !workflows.some((w) => w.slug === r.workflow))
-      .filter((r) => byWorkflow(r.workflow)?.runId === r.runId)
-      .map((r) => ({ key: r.workflow, name: r.name, run: r, tasks: r.tasks }))
-  ]
+  const cards = Object.values(runs)
+    .filter((r) => byStory(r.workflow)?.runId === r.runId)
+    .map((r) => ({ key: r.workflow, name: r.name, run: r, tasks: r.tasks }))
   const allTasks = Object.values(runs).flatMap((r) => r.tasks)
-  const total = Object.keys(runs).length
-    ? allTasks.length
-    : workflows.reduce((n, w) => n + w.tasks.filter((t) => t.selected !== false).length, 0)
+  const total = allTasks.length
   const done = allTasks.filter((t) => DONE.includes(t.status)).length
 
   const statusChip =
@@ -89,8 +76,7 @@ export function PipelineView({
   if (cards.length === 0)
     return (
       <p className="text-on-surface-variant">
-        Queue is empty — tick workflows in the Workflows view, or park them in the Backlog for
-        later.
+        Nothing running — add a Ready story to the pipeline from the Board.
       </p>
     )
 
