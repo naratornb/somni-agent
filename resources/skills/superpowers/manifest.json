@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "upstream": "obra/superpowers",
+  "skills": {
+    "brainstorming": "b36e0829c6d0140e93cfef2ca599b1b07d4a7797",
+    "writing-plans": "b36e0829c6d0140e93cfef2ca599b1b07d4a7797",
+    "executing-plans": "b36e0829c6d0140e93cfef2ca599b1b07d4a7797",
+    "subagent-driven-development": "b36e0829c6d0140e93cfef2ca599b1b07d4a7797",
+    "test-driven-development": "b36e0829c6d0140e93cfef2ca599b1b07d4a7797",
+    "systematic-debugging": "b36e0829c6d0140e93cfef2ca599b1b07d4a7797",
+    "verification-before-completion": "b36e0829c6d0140e93cfef2ca599b1b07d4a7797",
+    "requesting-code-review": "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
+  }
+}

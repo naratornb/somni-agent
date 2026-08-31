@@ -5,6 +5,7 @@ export type Effort = 'low' | 'medium' | 'high'
 export type ReportStyle = 'minimal' | 'compact' | 'full'
 export type RunnerName = 'claude' | 'antigravity'
 export type ViewMode = 'po' | 'engineer'
+export type Methodology = 'pocock' | 'superpowers'
 export type Settings = {
   concurrency: number
   timeoutMinutes: number
@@ -20,6 +21,8 @@ export type Settings = {
   viewMode: ViewMode
   // Repo-level only (.somni/config.json) — the closing review loop's signal.
   checkCommand?: string
+  // Resolved per repo at groom/run time (docs/adr/0002).
+  methodology?: Methodology
 }
 export type Role = {
   slug: string

@@ -658,6 +658,19 @@ describe('groomPreamble', () => {
     expect(p).not.toContain('The item being groomed')
   })
 
+  it('keeps the somni protocol and swaps only the charter under superpowers', () => {
+    const p = groomPreamble(['dev'], undefined, 'superpowers')
+    expect(p).toContain('somni-question')
+    expect(p).toContain('somni-groomed')
+    expect(p).toContain('ZERO-BASED INDEX')
+    expect(p).toContain('brainstorm')
+    expect(p).not.toContain('tracer bullet')
+    expect(groomPreamble(['dev'])).toContain('tracer bullet')
+    expect(turnArgs('hi', null, {}, ['dev'], { methodology: 'superpowers' })[1]).toContain(
+      'brainstorm'
+    )
+  })
+
   it('seeds turn-1 context with the item when grooming an existing item', () => {
     const p = groomPreamble(['dev'], '# Search\n\nMake it fast.')
     expect(p).toContain('The item being groomed')

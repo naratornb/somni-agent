@@ -15,6 +15,8 @@ import { join } from 'path'
 import {
   abandonRun,
   DISCIPLINE_PREAMBLE,
+  PLAN_TASK_TITLE,
+  storyPlanPrompt,
   subtaskPrompt,
   cancelPipeline,
   findOrphanedRuns,
@@ -950,6 +952,40 @@ describe('discipline preamble', () => {
     expect(subtaskPrompt('.somni/items/SOM-1-x.md', undefined, 'do it')).toBe(
       `${DISCIPLINE_PREAMBLE.replace('{SPEC}', '.somni/items/SOM-1-x.md')}\n\n---\n\ndo it`
     )
+  })
+})
+
+// ---- Superpowers methodology (adr/0002): the agent orchestrates ------------
+
+describe('superpowers methodology', () => {
+  it('runs the whole story as one plan-executing task', async () => {
+    const argv = join(root, 'argv')
+    fake({ FAKE_ARGV: argv })
+    const state = await runStory(repo, feature, base, noEvents, {
+      settings: { methodology: 'superpowers' }
+    })
+    expect(state.status).toBe('Completed')
+    expect(state.tasks.filter((t) => !t.aux).map((t) => t.title)).toEqual([PLAN_TASK_TITLE])
+    const [prompt, review] = readFileSync(argv, 'utf8').split('You are closing out')
+    expect(prompt).toContain('subagent-driven-development')
+    expect(prompt.indexOf('## Step 1: Design')).toBeLessThan(prompt.indexOf('## Step 2: Build'))
+    expect(prompt).not.toContain('skip me') // deselected stays out of the plan
+    expect(prompt).toContain('You are dev.') // role personas ride along as plan text
+    expect(review).toContain('requesting-code-review')
+  })
+
+  it('storyPlanPrompt opens with the discipline and keeps the steps ordered', () => {
+    const p = storyPlanPrompt(
+      '.somni/items/SOM-1-x.md',
+      [
+        { title: 'A', prompt: 'do a', role: '', selected: true },
+        { title: 'B', prompt: 'do b', role: '', selected: true }
+      ],
+      []
+    )
+    expect(p.indexOf('.somni/items/SOM-1-x.md')).toBeGreaterThanOrEqual(0)
+    expect(p.indexOf('executing-plans')).toBeLessThan(p.indexOf('## Step 1: A'))
+    expect(p.indexOf('do a')).toBeLessThan(p.indexOf('do b'))
   })
 })
 
