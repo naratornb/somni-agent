@@ -329,6 +329,12 @@ describe('item CRUD + the Ready gate', () => {
       ...over
     })
 
+  it('repo:load seeds the default SDLC roles on first open', async () => {
+    const { roles } = await invoke<RepoData>('repo:load', repo)
+    expect(roles.map((r) => r.slug)).toContain('developer')
+    expect(roles).toHaveLength(7)
+  })
+
   it('creates, reads back, reorders the backlog and deletes', async () => {
     const a = await story()
     expect(a.id).toBe('SOM-1')

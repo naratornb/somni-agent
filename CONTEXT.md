@@ -32,6 +32,7 @@ somni speaks two vocabularies on purpose: **work items** use the industry's Jira
 - **Nightly Window** — the single scheduled time that starts a drain which stops when no Story is left in progress: one night runs one night's consciously added work, then disarms.
 - **Keep Running** — the manual toggle that starts a drain which continues until switched off, so Stories added during the day keep flowing while the user is away from the screen.
 - **Run** — the persisted execution record of one Story within one Pipeline (statuses, attempts, costs, report).
+- **Turn** — one prompt→reply exchange with a Runner: exactly one attempt, always time-bounded, always cancellable. Every AI feature (Subtask execution, Grooming replies, Review/Fix, Reports, Refine) is made of Turns; how many Turns something deserves is Pipeline or Grooming policy, never the Turn's.
 - **Report** — the morning-review summary of a Run (Minimal / Compact / Full), read at Acceptance time.
 
 ## Grooming machinery

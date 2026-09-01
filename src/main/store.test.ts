@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   slugify,
+  DEFAULT_ROLES,
   ensureSomni,
   loadBacklog,
   loadRepo,
@@ -36,6 +37,36 @@ describe('store round-trips', () => {
   it('bootstraps .somni/.gitignore once', () => {
     ensureSomni(repo)
     expect(readFileSync(join(repo, '.somni/.gitignore'), 'utf8')).toContain('runs/*/logs/')
+  })
+
+  it('seeds the seven default SDLC roles into a fresh repo', () => {
+    ensureSomni(repo)
+    const roles = loadRepo(repo).roles
+    expect(roles.map((r) => r.slug).sort()).toEqual(
+      ['architect', 'developer', 'devops', 'reviewer', 'security', 'tech-writer', 'tester'].sort()
+    )
+    expect(roles).toHaveLength(DEFAULT_ROLES.length)
+    for (const role of roles) expect(role.preamble.length, role.slug).toBeGreaterThan(100)
+    // Only developer pins a runner (agy can't read .claude/skills/); the rest inherit.
+    expect(roles.find((r) => r.slug === 'developer')?.runner).toBe('claude')
+    expect(roles.filter((r) => r.runner).map((r) => r.slug)).toEqual(['developer'])
+    expect(roles.some((r) => r.model || r.effort)).toBe(false)
+  })
+
+  it('never resurrects deleted or edited default roles', () => {
+    ensureSomni(repo)
+    deleteRole(repo, 'tester')
+    const edited = saveRole(repo, { slug: 'devops', name: 'DevOps Engineer', preamble: 'Mine.' })
+    ensureSomni(repo) // repo re-opened
+    const roles = loadRepo(repo).roles
+    expect(roles.some((r) => r.slug === 'tester')).toBe(false)
+    expect(roles.find((r) => r.slug === 'devops')).toEqual(edited)
+  })
+
+  it('leaves a repo that already has a roles dir untouched', () => {
+    const mine = saveRole(repo, { slug: '', name: 'Mine', preamble: 'p' })
+    ensureSomni(repo)
+    expect(loadRepo(repo).roles).toEqual([mine])
   })
 
   it('saves and reloads roles and items', () => {
