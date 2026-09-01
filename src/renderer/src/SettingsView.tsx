@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react'
-import type { Effort, ReportStyle, RunnerName, Settings, SkillsStatus } from '../../preload/index'
+import type {
+  Effort,
+  Methodology,
+  ReportStyle,
+  RunnerName,
+  Settings,
+  SkillsStatus
+} from '../../preload/index'
 import { BTN_PRIMARY, CHECKBOX, CHIP, INPUT, LABEL, STATUS_CHIP, STATUS_CHIP_BASE } from './ui'
 
 /** Label + control row — the Settings/Roles form idiom (M10-ui.md §0). */
@@ -24,9 +31,13 @@ function RepoSection({ repo }: { repo: string }): React.JSX.Element {
   const [savedAt, setSavedAt] = useState(false)
   const [skills, setSkills] = useState<SkillsStatus | null>(null)
   const [busy, setBusy] = useState(false)
+  const [methodology, setMethodology] = useState('')
 
   useEffect(() => {
-    void window.somni.getRepoConfig(repo).then((c) => setCheck(c.checkCommand ?? ''))
+    void window.somni.getRepoConfig(repo).then((c) => {
+      setCheck(c.checkCommand ?? '')
+      setMethodology(c.methodology ?? '')
+    })
     void window.somni.skillsStatus(repo).then(setSkills)
   }, [repo])
 
@@ -36,10 +47,30 @@ function RepoSection({ repo }: { repo: string }): React.JSX.Element {
     setBusy(false)
   }
 
+  // Skills are methodology-keyed, so a change re-asks what this repo needs.
+  const setRepoMethodology = async (value: string): Promise<void> => {
+    setMethodology(value)
+    await window.somni.setRepoConfig(repo, { methodology: (value || undefined) as Methodology })
+    setSkills(await window.somni.skillsStatus(repo))
+  }
+
   return (
     <div className="mt-6">
       <h2 className={`mb-2 ${LABEL}`}>This repo</h2>
       <div className="flex flex-col divide-y divide-border-subtle rounded-xl border border-border-subtle bg-surface-elevated p-6">
+        <FieldRow label="Methodology">
+          <select
+            className={`${INPUT} flex-1`}
+            value={methodology}
+            onChange={(e) => void setRepoMethodology(e.target.value)}
+          >
+            <option value="">Global default</option>
+            <option value="pocock">Matt Pocock — grill, tracer bullets, TDD at seams</option>
+            <option value="superpowers">
+              Superpowers — brainstorm, plan, subagent-driven execution
+            </option>
+          </select>
+        </FieldRow>
         <FieldRow label="Check command">
           <input
             className={`${INPUT} flex-1 font-mono-code`}
@@ -124,6 +155,18 @@ export function SettingsView({ repo }: { repo: string | null }): React.JSX.Eleme
             value={s.timeoutMinutes}
             onChange={(e) => patch({ timeoutMinutes: Number(e.target.value) || 1 })}
           />
+        </FieldRow>
+        <FieldRow label="Methodology">
+          <select
+            className={`${INPUT} flex-1`}
+            value={s.methodology ?? 'pocock'}
+            onChange={(e) => patch({ methodology: e.target.value as Methodology })}
+          >
+            <option value="pocock">Matt Pocock — grill, tracer bullets, TDD at seams</option>
+            <option value="superpowers">
+              Superpowers — brainstorm, plan, subagent-driven execution
+            </option>
+          </select>
         </FieldRow>
         <FieldRow label="Report style">
           <select

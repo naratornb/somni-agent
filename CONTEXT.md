@@ -45,6 +45,8 @@ somni speaks two vocabularies on purpose: **work items** use the industry's Jira
 - **Refine** — an inline AI rewrite of one existing field (a Subtask prompt, a Role preamble) into a sharper version of itself; same Apply rule.
 - **Product Owner (PO) hat / Engineer hat** — the two working modes of the *same single user*. PO mode: capture, groom, accept. Engineer mode: full editing of definitions and settings. Modes are presentation only — same data, same person, no permissions.
 
+- **Methodology** — the selectable engineering discipline of a target repo (with a global default) that governs *how* Grooming shapes work and *how* the pipeline implements and reviews it. A Methodology never changes what an item is: the Ready gate, Statuses, and the Interview → Proposal → Apply flow hold under every Methodology, and the repo's current Methodology governs every Run regardless of which one groomed the Story.
+
 ## Boundaries worth remembering
 
 - An Idea is not a Story: Ideas are unshaped thoughts; Stories carry an approved Spec and Subtasks. Only Grooming crosses that line.

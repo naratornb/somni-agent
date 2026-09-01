@@ -17,6 +17,10 @@ export type ReportStyle = 'minimal' | 'compact' | 'full'
 export type RunnerName = 'claude' | 'antigravity'
 export const RUNNER_NAMES: RunnerName[] = ['claude', 'antigravity']
 export type ViewMode = 'po' | 'engineer'
+// The selectable engineering discipline (docs/adr/0002): governs the grooming
+// and run prompts plus which vendored skills are injected — never the item model.
+export type Methodology = 'pocock' | 'superpowers'
+export const METHODOLOGIES: Methodology[] = ['pocock', 'superpowers']
 export type Profile = { runner?: RunnerName; model?: string; effort?: Effort }
 export type Settings = Profile & {
   concurrency?: number
@@ -36,6 +40,8 @@ export type Settings = Profile & {
   // The deterministic green signal for the closing review loop (M16, §10).
   // Repo-level only: it lives in .somni/config.json, never in global settings.
   checkCommand?: string
+  // Resolved per repo at groom/run time (docs/adr/0002); items carry no copy.
+  methodology?: Methodology
 }
 
 export const SETTINGS_DEFAULTS = {
@@ -43,7 +49,8 @@ export const SETTINGS_DEFAULTS = {
   timeoutMinutes: 30,
   reportStyle: 'minimal' as ReportStyle,
   runner: 'claude' as RunnerName,
-  viewMode: 'engineer' as ViewMode
+  viewMode: 'engineer' as ViewMode,
+  methodology: 'pocock' as Methodology
 }
 
 export type Role = { slug: string; name: string; preamble: string } & Profile

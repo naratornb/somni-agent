@@ -7,7 +7,7 @@ import { dirname, join } from 'path'
 import { spawnRunner, SpawnHandle } from './runner'
 import { getRunner } from './runners'
 import * as store from './store'
-import type { Effort, Item, Profile, Role, RunnerName, Settings, Task } from './store'
+import type { Effort, Item, Methodology, Profile, Role, RunnerName, Settings, Task } from './store'
 
 // Reserved chat key for the one pre-Apply from-scratch groom (§7, Decision 1).
 export const DRAFT_KEY = '_draft'
@@ -44,11 +44,51 @@ export const PROPOSE_NOW =
   'Stop interviewing and propose the groomed result now, from my answers so far ' +
   'plus your own stated assumptions for anything still open.'
 
-export function groomPreamble(roleSlugs: string[], context?: string): string {
+// The methodology-flavored halves of the preamble (docs/adr/0002). The fences,
+// parsers and proposal schema below are somni's own protocol and never vary.
+const CHARTERS: Record<Methodology, { opener: string[]; charter: string[] }> = {
+  pocock: {
+    opener: [
+      'You are grooming a somni work item: turning intent into an approved Spec and',
+      'tracer-bullet Stories, each executed unattended by a coding agent in an',
+      'isolated git worktree of this repo. Grooming is the only path to Ready.'
+    ],
+    charter: [
+      'Grooming charter — decide the altitude first: a big intent becomes an Epic of',
+      'vertical-slice Stories, each a tracer bullet that ships end to end, with',
+      'blocking edges where one genuinely must land first; a small intent is one',
+      'Story. Every Spec states the problem, the approach, and verifiable success',
+      'criteria. Subtask prompts are goals to achieve, never diffs to apply.'
+    ]
+  },
+  superpowers: {
+    opener: [
+      'You are grooming a somni work item: turning intent into an approved Spec and',
+      'Stories, each executed unattended by an orchestrating agent that works',
+      'through the plan with fresh subagents in an isolated git worktree of this',
+      'repo. Grooming is the only path to Ready.'
+    ],
+    charter: [
+      'Grooming charter — brainstorm before you plan: probe the intent, surface',
+      'alternatives, and cut anything speculative (YAGNI) before committing to a',
+      'design. Then decide the altitude: a big intent becomes an Epic of Stories,',
+      'each a coherent slice that ships end to end, with blocking edges where one',
+      'genuinely must land first; a small intent is one Story. Every Spec is a',
+      'written plan: the problem, the approach, and exact verifiable success',
+      'criteria. Subtask prompts are bite-sized plan steps with clear done-ness —',
+      'goals to achieve, never diffs to apply.'
+    ]
+  }
+}
+
+export function groomPreamble(
+  roleSlugs: string[],
+  context?: string,
+  methodology: Methodology = 'pocock'
+): string {
+  const { opener, charter } = CHARTERS[methodology]
   return [
-    'You are grooming a somni work item: turning intent into an approved Spec and',
-    'tracer-bullet Stories, each executed unattended by a coding agent in an',
-    'isolated git worktree of this repo. Grooming is the only path to Ready.',
+    ...opener,
     '',
     'Interview discipline — ask exactly ONE question per reply, as a fenced',
     '```somni-question block containing JSON of the form:',
@@ -59,11 +99,7 @@ export function groomPreamble(roleSlugs: string[], context?: string): string {
     'and propose in the same reply. If I ask you to propose now, stop interviewing',
     'and propose immediately, stating your assumptions.',
     '',
-    'Grooming charter — decide the altitude first: a big intent becomes an Epic of',
-    'vertical-slice Stories, each a tracer bullet that ships end to end, with',
-    'blocking edges where one genuinely must land first; a small intent is one',
-    'Story. Every Spec states the problem, the approach, and verifiable success',
-    'criteria. Subtask prompts are goals to achieve, never diffs to apply.',
+    ...charter,
     '',
     'When you propose, end your reply with a fenced ```somni-groomed block',
     'containing JSON of the form:',
@@ -103,7 +139,7 @@ export function turnArgs(
   context?: string
 ): string[] {
   return chatRunner(profile, settings).buildArgs(
-    sessionId ? message : `${groomPreamble(roleSlugs, context)}\n${message}`,
+    sessionId ? message : `${groomPreamble(roleSlugs, context, settings.methodology)}\n${message}`,
     { ...profile, resumeSessionId: sessionId ?? undefined, readOnly: true }
   )
 }

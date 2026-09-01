@@ -18,11 +18,14 @@ import {
   ItemStatus,
   loadItems,
   loadRepo,
+  Methodology,
   resolveProfile,
+  Role,
   RunnerName,
   setItemStatus,
   Settings,
-  slugify
+  slugify,
+  Task
 } from './store'
 
 const git = promisify(execFile)
@@ -278,14 +281,54 @@ export function subtaskPrompt(
     .join('\n\n---\n\n')
 }
 
+// Superpowers mode (docs/adr/0002): the agent orchestrates. One process runs
+// the whole Story as a plan, subagent-driven; somni's engine sees exactly one
+// synthetic subtask, so retries and the review loop apply at Story level.
+export const PLAN_TASK_TITLE = 'Execute plan'
+
+export const PLAN_PREAMBLE = [
+  'You are working through somni, unattended, in an isolated git worktree.',
+  '',
+  'Discipline for this run — the superpowers workflow:',
+  '- Read the Story Spec at `{SPEC}` first. It is the contract for this whole run.',
+  '- The plan below lists the ordered steps. Execute it with the',
+  '  `executing-plans` and `subagent-driven-development` skills in `.claude/skills/`:',
+  '  work through the steps in order, dispatching a fresh subagent per step and',
+  '  reviewing its work before moving on.',
+  '- `test-driven-development` governs every change: a failing test first, the',
+  '  smallest change that passes it, then refactor. Verify each step honestly',
+  '  before calling it done (`verification-before-completion`).',
+  '- Stay strictly within the plan. Do not refactor code the Spec does not name,',
+  '  and do not add dependencies.',
+  '- If the Spec and a step disagree, follow the Spec and say so in your reply.'
+].join('\n')
+
+/** The whole Story as one prompt: discipline, then the ordered steps with their role personas. */
+export function storyPlanPrompt(specPath: string, defs: Task[], roles: Role[]): string {
+  const steps = defs.map((d, i) => {
+    const role = roles.find((r) => r.slug === d.role)
+    return [
+      `## Step ${i + 1}: ${taskTitle(d, i)}`,
+      ...(role?.preamble ? [`Work this step as ${role.name}:\n${role.preamble}`] : []),
+      d.prompt
+    ].join('\n\n')
+  })
+  return [PLAN_PREAMBLE.replace('{SPEC}', specPath), '# The plan', ...steps].join('\n\n---\n\n')
+}
+
 const MAX_FIX_CYCLES = 2 // Review → fix+Review → fix+Review → Failed
 
-const REVIEW_PROMPT = (base: string): string =>
+const REVIEW_SKILL: Record<Methodology, string> = {
+  pocock: '`code-review`',
+  superpowers: '`requesting-code-review`'
+}
+
+const REVIEW_PROMPT = (base: string, methodology: Methodology = 'pocock'): string =>
   [
     'You are closing out an unattended coding run in this worktree.',
     '',
     `1. Code-review the full diff against \`${base}\` (\`git diff ${base}\`) using the`,
-    '   `code-review` skill in `.claude/skills/`: correctness, scope creep, missing tests.',
+    `   ${REVIEW_SKILL[methodology]} skill in \`.claude/skills/\`: correctness, scope creep, missing tests.`,
     "2. Run this repo's test suite and report what it actually did.",
     '3. End your reply with exactly one fenced block, and nothing after it:',
     '',
@@ -298,13 +341,17 @@ const REVIEW_PROMPT = (base: string): string =>
     'generous: "green" means a human could merge this as-is.'
   ].join('\n')
 
-const FIX_PROMPT = (findings: string): string =>
+const FIX_PROMPT = (findings: string, methodology: Methodology = 'pocock'): string =>
   [
     'The closing review of this worktree came back red. Fix these findings, and only these:',
     '',
     findings,
     '',
-    'Keep the same TDD discipline: a failing test first where a test is the right proof.',
+    methodology === 'superpowers'
+      ? 'Debug systematically — find the root cause before fixing (`systematic-debugging`' +
+        '\nin `.claude/skills/`) — and keep the TDD discipline: a failing test first where' +
+        '\na test is the right proof.'
+      : 'Keep the same TDD discipline: a failing test first where a test is the right proof.',
     'Do not expand scope beyond the findings.'
   ].join('\n')
 
@@ -561,6 +608,18 @@ export function runStory(
   const runId = `${stamp}-${story.slug}` // slug keeps concurrent same-second runs unique
   mkdirSync(join(repo, '.somni', 'runs', runId, 'logs'), { recursive: true })
 
+  // Superpowers (adr/0002): the run is one plan-executing task, not one per
+  // subtask; execute() builds the same synthetic def so the state check holds.
+  const tasks: TaskRun[] =
+    (opts.settings?.methodology ?? 'pocock') === 'superpowers'
+      ? [{ title: PLAN_TASK_TITLE, role: '', status: 'Queued', log: 'logs/1-execute-plan.jsonl' }]
+      : defs.map((t, i) => ({
+          title: taskTitle(t, i),
+          role: t.role,
+          status: 'Queued',
+          log: `logs/${i + 1}-${slugify(t.title || 'task')}.jsonl`
+        }))
+
   return execute(
     repo,
     {
@@ -571,12 +630,7 @@ export function runStory(
       worktree: join(worktreeBase, runId),
       status: 'Running',
       startedAt: now().toISOString(),
-      tasks: defs.map((t, i) => ({
-        title: taskTitle(t, i),
-        role: t.role,
-        status: 'Queued',
-        log: `logs/${i + 1}-${slugify(t.title || 'task')}.jsonl`
-      }))
+      tasks
     },
     events,
     opts
@@ -606,8 +660,24 @@ async function execute(
 
   const { roles, items } = loadRepo(repo)
   const story = items.find((i: Item) => i.id === state.workflow)
-  const defs = (story?.tasks ?? []).filter((t) => t.selected !== false)
+  const storyDefs = (story?.tasks ?? []).filter((t) => t.selected !== false)
   const specPath = story ? join('.somni', 'items', `${story.id}-${story.slug}.md`) : ''
+  const methodology = settings.methodology ?? 'pocock'
+  // Superpowers: the whole Story is one plan-executing def, prompt included —
+  // so a resume rebuilds the plan from the items exactly like pocock rebuilds
+  // subtask prompts. A run started under the other methodology fails the
+  // "story changed" check below, which is the honest outcome.
+  const defs: Task[] =
+    methodology === 'superpowers' && storyDefs.length > 0
+      ? [
+          {
+            title: PLAN_TASK_TITLE,
+            prompt: storyPlanPrompt(specPath, storyDefs, roles),
+            role: '',
+            selected: true
+          }
+        ]
+      : storyDefs
 
   // ponytail: aux tasks are spawned directly rather than threaded through the
   // retry/gate loop below (report.ts's Report-task precedent) — one shot each,
@@ -649,7 +719,7 @@ async function execute(
       const check = await runCheckCommand(settings.checkCommand, state.worktree, timeoutMs)
       const text = await auxTask(
         'Review',
-        REVIEW_PROMPT(state.baseSha ?? 'HEAD'),
+        REVIEW_PROMPT(state.baseSha ?? 'HEAD', methodology),
         `review-${cycle + 1}.log`
       )
       const parsed = text ? parseVerdict(text) : null
@@ -667,7 +737,11 @@ async function execute(
       if (green) return true
       if (cycle >= MAX_FIX_CYCLES || ctrl.cancelled) return false
       events.onLog(state.runId, -1, `[somni] review red — fix cycle ${cycle + 1}`)
-      await auxTask('Address review findings', FIX_PROMPT(findings), `fix-${cycle + 1}.log`)
+      await auxTask(
+        'Address review findings',
+        FIX_PROMPT(findings, methodology),
+        `fix-${cycle + 1}.log`
+      )
     }
   }
 
@@ -707,7 +781,11 @@ async function execute(
       task.runner = profile.runner
       task.model = profile.model
       task.effort = profile.effort
-      const prompt = subtaskPrompt(specPath, role?.preamble, def.prompt)
+      // The superpowers plan def is already the complete prompt.
+      const prompt =
+        methodology === 'superpowers'
+          ? def.prompt
+          : subtaskPrompt(specPath, role?.preamble, def.prompt)
       const logPath = join(runDir, task.log)
       task.status = 'Running'
       task.attempts ??= 0

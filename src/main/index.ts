@@ -62,7 +62,7 @@ function createWindow(): void {
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
+  electronApp.setAppUserModelId('com.somni')
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
@@ -74,7 +74,7 @@ app.whenReady().then(() => {
   wireTaskIpc(ipcMain, () => BrowserWindow.getAllWindows()[0]?.webContents ?? null)
   wireRepoIpc(() => armNightly())
   wireVoiceIpc()
-  wireSkillsIpc()
+  wireSkillsIpc((repo) => repoSettings(repo).methodology)
 
   const wc = (): Electron.WebContents | undefined => BrowserWindow.getAllWindows()[0]?.webContents
 

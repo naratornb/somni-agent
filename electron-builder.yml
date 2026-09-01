@@ -1,4 +1,4 @@
-appId: com.electron.app
+appId: com.somni.app
 productName: somni
 directories:
   buildResources: build
@@ -11,8 +11,8 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
-# Vendored Pocock skills (M16): agents read them off disk, so they cannot live
-# in the asar — they ship beside it as <Resources>/skills.
+# Vendored methodology skills (M16/M17): agents read them off disk, so they
+# cannot live in the asar — they ship beside it as <Resources>/skills/<methodology>.
 extraResources:
   - from: resources/skills
     to: skills
@@ -38,7 +38,7 @@ linux:
     - AppImage
     - snap
     - deb
-  maintainer: electronjs.org
+  maintainer: f.luke.benj@gmail.com
   category: Utility
 appImage:
   artifactName: ${name}-${version}.${ext}
