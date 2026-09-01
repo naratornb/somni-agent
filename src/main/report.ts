@@ -174,7 +174,7 @@ export async function writeReport(
   repo: string,
   state: RunState,
   settings: Settings
-): Promise<void> {
+): Promise<RunStats> {
   const runDir = join(repo, '.somni', 'runs', state.runId)
   const stats = await collectStats(state).catch(() => ({
     diffStat: '(diff unavailable)',
@@ -228,10 +228,10 @@ export async function writeReport(
     body += text ? `\n## Summary\n\n${text}\n` : '\n_(report task failed — minimal report only)_\n'
   }
 
-  // Persisted on the state; the executor's final writeState() lands it in run.json.
-  // Computed last so a full-style Report task's cost is inside the totals.
+  // The caller owns persistence: the executor assigns state.stats and lands it
+  // in run.json. Computed last so a full-style Report task's cost is inside the
+  // totals.
   const files = await diffFiles(state.worktree, state.baseSha ?? 'HEAD').catch(() => [])
-  state.stats = runStats(state, files)
-
   atomicWrite(join(runDir, 'report.md'), body)
+  return runStats(state, files)
 }

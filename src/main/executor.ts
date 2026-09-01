@@ -8,7 +8,16 @@ import { execFile } from 'child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { promisify } from 'util'
+import { lockedGit } from './git'
 import { writeReport } from './report'
+import {
+  FIX_PROMPT,
+  PLAN_TASK_TITLE,
+  REVIEW_PROMPT,
+  storyPlanPrompt,
+  subtaskPrompt,
+  taskTitle
+} from './prompts'
 import { turn } from './turn'
 import type { RunStats } from './report'
 import {
@@ -17,9 +26,7 @@ import {
   ItemStatus,
   loadItems,
   loadRepo,
-  Methodology,
   resolveProfile,
-  Role,
   RunnerName,
   setItemStatus,
   Settings,
@@ -27,22 +34,11 @@ import {
   Task
 } from './store'
 
-const git = promisify(execFile)
-
 const TASK_TIMEOUT_MS = 30 * 60_000 // fallback; settings.timeoutMinutes wins
 const KILL_GRACE_MS = 5_000 // SIGTERM → SIGKILL grace
 const BACKOFF_START_MS = 60_000
 const BACKOFF_MAX_MS = 30 * 60_000
 const MAX_ATTEMPTS = 2 // one automatic retry; rate limits don't count (§3)
-
-// ponytail: concurrent `git worktree add` on one repo can race on .git locks —
-// serialize the mutating git calls; the task processes themselves run in parallel.
-let gitLock: Promise<unknown> = Promise.resolve()
-export function lockedGit(args: string[]): Promise<unknown> {
-  const p = gitLock.then(() => git('git', args))
-  gitLock = p.catch(() => {})
-  return p
-}
 
 export type TaskStatus = 'Queued' | 'Running' | 'Completed' | 'Failed' | 'Skipped' | 'Cancelled'
 export type PipelineStatus = 'Running' | 'Paused' | 'Idle'
@@ -253,109 +249,10 @@ export function msUntil(hhmm: string, now: Date): number {
 }
 
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err))
-const taskTitle = (t: { title?: string }, i: number): string => t.title || `task ${i + 1}`
-
-// The implement discipline (M16). Prompt text only — the runner adapters stay
-// runner-agnostic. Prepended to every subtask *alongside* the role preamble.
-export const DISCIPLINE_PREAMBLE = [
-  'You are working through somni, unattended, in an isolated git worktree.',
-  '',
-  'Discipline for this subtask:',
-  '- Read the Story Spec at `{SPEC}` first. It is the contract; the subtask below is one step of it.',
-  '- Work through the `implement` skill in `.claude/skills/` — TDD at the agreed seams:',
-  '  a failing test first, the smallest change that passes it, then refactor.',
-  '- Stay strictly within this subtask. Do not start the next one, do not refactor',
-  '  code the Spec does not name, and do not add dependencies.',
-  '- If the Spec and the subtask disagree, follow the Spec and say so in your reply.'
-].join('\n')
-
-/** Discipline preamble → role preamble → the subtask prompt (M16 §3). */
-export function subtaskPrompt(
-  specPath: string,
-  rolePreamble: string | undefined,
-  prompt: string
-): string {
-  return [DISCIPLINE_PREAMBLE.replace('{SPEC}', specPath), rolePreamble, prompt]
-    .filter(Boolean)
-    .join('\n\n---\n\n')
-}
-
-// Superpowers mode (docs/adr/0002): the agent orchestrates. One process runs
-// the whole Story as a plan, subagent-driven; somni's engine sees exactly one
-// synthetic subtask, so retries and the review loop apply at Story level.
-export const PLAN_TASK_TITLE = 'Execute plan'
-
-export const PLAN_PREAMBLE = [
-  'You are working through somni, unattended, in an isolated git worktree.',
-  '',
-  'Discipline for this run — the superpowers workflow:',
-  '- Read the Story Spec at `{SPEC}` first. It is the contract for this whole run.',
-  '- The plan below lists the ordered steps. Execute it with the',
-  '  `executing-plans` and `subagent-driven-development` skills in `.claude/skills/`:',
-  '  work through the steps in order, dispatching a fresh subagent per step and',
-  '  reviewing its work before moving on.',
-  '- `test-driven-development` governs every change: a failing test first, the',
-  '  smallest change that passes it, then refactor. Verify each step honestly',
-  '  before calling it done (`verification-before-completion`).',
-  '- Stay strictly within the plan. Do not refactor code the Spec does not name,',
-  '  and do not add dependencies.',
-  '- If the Spec and a step disagree, follow the Spec and say so in your reply.'
-].join('\n')
-
-/** The whole Story as one prompt: discipline, then the ordered steps with their role personas. */
-export function storyPlanPrompt(specPath: string, defs: Task[], roles: Role[]): string {
-  const steps = defs.map((d, i) => {
-    const role = roles.find((r) => r.slug === d.role)
-    return [
-      `## Step ${i + 1}: ${taskTitle(d, i)}`,
-      ...(role?.preamble ? [`Work this step as ${role.name}:\n${role.preamble}`] : []),
-      d.prompt
-    ].join('\n\n')
-  })
-  return [PLAN_PREAMBLE.replace('{SPEC}', specPath), '# The plan', ...steps].join('\n\n---\n\n')
-}
-
 const MAX_FIX_CYCLES = 2 // Review → fix+Review → fix+Review → Failed
 
-const REVIEW_SKILL: Record<Methodology, string> = {
-  pocock: '`code-review`',
-  superpowers: '`requesting-code-review`'
-}
-
-const REVIEW_PROMPT = (base: string, methodology: Methodology = 'pocock'): string =>
-  [
-    'You are closing out an unattended coding run in this worktree.',
-    '',
-    `1. Code-review the full diff against \`${base}\` (\`git diff ${base}\`) using the`,
-    `   ${REVIEW_SKILL[methodology]} skill in \`.claude/skills/\`: correctness, scope creep, missing tests.`,
-    "2. Run this repo's test suite and report what it actually did.",
-    '3. End your reply with exactly one fenced block, and nothing after it:',
-    '',
-    '```somni-verdict',
-    '{"verdict": "green", "findings": ""}',
-    '```',
-    '',
-    'Use "red" and put every blocking problem in `findings` (plain text, one per line)',
-    'if the tests fail or the review found something that must be fixed. Do not be',
-    'generous: "green" means a human could merge this as-is.'
-  ].join('\n')
-
-const FIX_PROMPT = (findings: string, methodology: Methodology = 'pocock'): string =>
-  [
-    'The closing review of this worktree came back red. Fix these findings, and only these:',
-    '',
-    findings,
-    '',
-    methodology === 'superpowers'
-      ? 'Debug systematically — find the root cause before fixing (`systematic-debugging`' +
-        '\nin `.claude/skills/`) — and keep the TDD discipline: a failing test first where' +
-        '\na test is the right proof.'
-      : 'Keep the same TDD discipline: a failing test first where a test is the right proof.',
-    'Do not expand scope beyond the findings.'
-  ].join('\n')
-
 /** Last ```somni-verdict block; null when absent or malformed (§10: that is red). */
-export function parseVerdict(text: string): { verdict: 'green' | 'red'; findings: string } | null {
+function parseVerdict(text: string): { verdict: 'green' | 'red'; findings: string } | null {
   const blocks = [...text.matchAll(/```somni-verdict[^\n]*\n([\s\S]*?)\n```/g)]
   const last = blocks[blocks.length - 1]
   if (!last) return null
@@ -371,7 +268,7 @@ export function parseVerdict(text: string): { verdict: 'green' | 'red'; findings
 const TAIL_CHARS = 4000
 
 /** The deterministic half of the green signal (§10). Undefined = not configured. */
-export async function runCheckCommand(
+async function runCheckCommand(
   command: string | undefined,
   cwd: string,
   timeoutMs: number
@@ -402,7 +299,7 @@ export async function runCheckCommand(
  * passing makes a missing/malformed verdict green. Without one, only an
  * explicit "green" is green.
  */
-export function isGreen(
+function isGreen(
   verdict: 'green' | 'red' | 'unknown',
   check: { ok: boolean } | undefined
 ): boolean {
@@ -535,39 +432,61 @@ export function startDrain(
   return drainLoop(next, maxConcurrency, events, opts, mode)
 }
 
-// Crash/quit recovery (§3): a run.json still marked Running on disk belongs to a
-// dead process. Callers should only ask when no pipeline is running in-process.
-export function findOrphanedRuns(repo: string): RunState[] {
+// ---- the Run record (M20): one place knows how run.json is read, written and
+// tolerated. A missing or corrupt run.json reads as null: listers skip it,
+// while entry points that need one specific run refuse loudly (mustLoadRun).
+
+export function loadRun(repo: string, runId: string): RunState | null {
+  try {
+    return JSON.parse(
+      readFileSync(join(repo, '.somni', 'runs', runId, 'run.json'), 'utf8')
+    ) as RunState
+  } catch {
+    return null
+  }
+}
+
+/** Every readable run, newest first. */
+export function loadRuns(repo: string): RunState[] {
   const dir = join(repo, '.somni', 'runs')
   if (!existsSync(dir)) return []
-  return readdirSync(dir).flatMap((runId) => {
-    try {
-      const state = JSON.parse(readFileSync(join(dir, runId, 'run.json'), 'utf8')) as RunState
-      return state.status === 'Running' ? [state] : []
-    } catch {
-      return []
-    }
-  })
+  return readdirSync(dir)
+    .flatMap((runId) => loadRun(repo, runId) ?? [])
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+}
+
+function saveRun(repo: string, state: RunState): void {
+  atomicWrite(
+    join(repo, '.somni', 'runs', state.runId, 'run.json'),
+    JSON.stringify(state, null, 2) + '\n'
+  )
+}
+
+function mustLoadRun(repo: string, runId: string): RunState {
+  const state = loadRun(repo, runId)
+  if (!state) throw new Error(`run ${runId} has no readable run.json`)
+  return state
+}
+
+// Crash/quit recovery (§3): a run.json still marked Running on disk belongs to a
+// dead process. Callers should only ask when no pipeline is running in-process.
+// Oldest first — a resume replays orphans in the order they were started.
+export function findOrphanedRuns(repo: string): RunState[] {
+  return loadRuns(repo)
+    .filter((state) => state.status === 'Running')
+    .reverse()
 }
 
 export function abandonRun(repo: string, runId: string): void {
-  const path = join(repo, '.somni', 'runs', runId, 'run.json')
-  const state = JSON.parse(readFileSync(path, 'utf8')) as RunState
+  const state = mustLoadRun(repo, runId)
   for (const t of state.tasks)
     if (t.status === 'Running' || t.status === 'Queued') t.status = 'Cancelled'
   state.status = 'Cancelled'
   state.finishedAt = new Date().toISOString()
-  atomicWrite(path, JSON.stringify(state, null, 2) + '\n')
+  saveRun(repo, state)
 }
 
-const runSlug = (repo: string, runId: string): string => {
-  try {
-    const path = join(repo, '.somni', 'runs', runId, 'run.json')
-    return (JSON.parse(readFileSync(path, 'utf8')) as RunState).workflow
-  } catch {
-    return runId
-  }
-}
+const runSlug = (repo: string, runId: string): string => loadRun(repo, runId)?.workflow ?? runId
 
 // Re-runs the not-yet-completed tasks of orphaned runs in their existing worktrees.
 export function resumePipeline(
@@ -581,11 +500,8 @@ export function resumePipeline(
   const queue: Job[] = runIds.map((runId) => ({
     id: runId,
     slug: runSlug(repo, runId),
-    run: (ctrl: Ctrl, gate: Gate) => {
-      const path = join(repo, '.somni', 'runs', runId, 'run.json')
-      const state = JSON.parse(readFileSync(path, 'utf8')) as RunState
-      return execute(repo, state, events, { ...opts, ctrl, gate })
-    }
+    run: (ctrl: Ctrl, gate: Gate) =>
+      execute(repo, mustLoadRun(repo, runId), events, { ...opts, ctrl, gate })
   }))
   return drainLoop(() => queue.shift(), maxConcurrency, events, opts, 'resume')
 }
@@ -653,7 +569,7 @@ async function execute(
   const graceMs = opts.graceMs ?? KILL_GRACE_MS
   const runDir = join(repo, '.somni', 'runs', state.runId)
   const writeState = (): void => {
-    atomicWrite(join(runDir, 'run.json'), JSON.stringify(state, null, 2) + '\n')
+    saveRun(repo, state)
     events.onState(state)
   }
 
@@ -881,10 +797,15 @@ async function execute(
     // run, not a Running orphan whose extra Report task fails the resume check.
     writeState()
     // A morning report is useful on failure too (§6); never let it fail the run.
-    if (state.status === 'Completed' || state.status === 'Failed')
-      await writeReport(repo, state, settings).catch((err) =>
+    if (state.status === 'Completed' || state.status === 'Failed') {
+      // Assigned only on success: a failed report must not clobber stats a
+      // previous (resumed) run already landed in run.json.
+      const stats = await writeReport(repo, state, settings).catch((err) => {
         events.onLog(state.runId, -1, `[somni] report failed: ${message(err)}`)
-      )
+        return undefined
+      })
+      if (stats) state.stats = stats
+    }
   } catch (err) {
     state.status = 'Failed'
     for (const t of state.tasks)

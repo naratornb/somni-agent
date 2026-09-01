@@ -2,9 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { groomPreamble } from './prompts'
 import {
   applyProposal,
-  groomPreamble,
   DRAFT_KEY,
   killChats,
   loadChat,

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import { existsSync, readdirSync, readFileSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import {
   applyProposal,
@@ -10,7 +10,8 @@ import {
   newChat,
   sendChat
 } from './chat'
-import { isRunning, lockedGit, RunState, wakeDrain } from './executor'
+import { isRunning, loadRuns, RunState, wakeDrain } from './executor'
+import { lockedGit } from './git'
 import { diffFiles, RunStats, runStats } from './report'
 import { getRunner } from './runners'
 import { turn } from './turn'
@@ -48,20 +49,8 @@ const branchExists = (repo: string, branch: string): Promise<boolean> =>
     () => false
   )
 
-function listRuns(repo: string): RunRow[] {
-  const dir = join(repo, '.somni', 'runs')
-  if (!existsSync(dir)) return []
-  return readdirSync(dir)
-    .flatMap((runId) => {
-      try {
-        const state = JSON.parse(readFileSync(join(dir, runId, 'run.json'), 'utf8')) as RunState
-        return [{ ...state, worktreeExists: existsSync(state.worktree) }]
-      } catch {
-        return []
-      }
-    })
-    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
-}
+const listRuns = (repo: string): RunRow[] =>
+  loadRuns(repo).map((state) => ({ ...state, worktreeExists: existsSync(state.worktree) }))
 
 // Refine with AI (M11 Decision 1): one read-only runner call, no interview, no
 // disk write — the renderer holds the result inert until the user Applies it.

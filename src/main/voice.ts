@@ -57,6 +57,8 @@ const hasBinary = (): Promise<boolean> =>
 let transcribing = false
 
 export type Transcription = { ok: boolean; text?: string; error?: string }
+export type VoiceStatus = { binary: boolean; model: boolean }
+export type ModelProgress = { received: number; total: number }
 
 export async function transcribe(samples: Float32Array): Promise<Transcription> {
   if (transcribing) return { ok: false, error: 'transcription already running' }
