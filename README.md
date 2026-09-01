@@ -55,7 +55,7 @@ Open the `.dmg` and drag somni to Applications. The build is unsigned/un-notariz
 ## Using somni
 
 1. **Choose a repo.** Top bar → *Choose repo…* and pick a git repository. somni creates `<repo>/.somni/` (with its own `.gitignore` for raw logs).
-2. **Create roles** (Roles view). A role is a name + persona preamble prepended to every task that uses it, e.g. *Senior Developer*: "You are a pragmatic senior developer…". A role can optionally pin a model and effort level.
+2. **Create roles** (Roles view). A role is a name + persona preamble prepended to every task that uses it, e.g. *Senior Developer*: "You are a pragmatic senior developer…". A role can optionally pin a model and effort level. somni seeds seven default SDLC roles (architect, developer, tester, reviewer, tech-writer, devops, security) the first time it opens a repo — edit or delete them freely; they never come back uninvited.
 3. **Create a workflow** (Workflows view). Ordered tasks, each with a title, a prompt (write it as a goal, not a diff — tasks may be retried or resumed), and a role. A good shape: Design → Implement → Test → Revise.
    - Or click **Draft with AI**: describe the goal in the side chat; the assistant inspects your repo read-only, asks a couple of questions, and proposes the task list. **Apply** writes it to the workflow; Dismiss discards. (Requires the workflow to be saved once first.)
 4. **Select and run** (Pipeline view). Tick the workflows to include, hit **▶ Run pipeline**. Each workflow gets a fresh worktree and `somni/<slug>-<date>` branch; tasks stream live — click a task chip to tail its output. Rate limits show as ⏸ Paused with the retry time; Cancel stops everything.
