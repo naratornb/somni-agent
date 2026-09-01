@@ -4,9 +4,9 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'fs'
 import { dirname, join } from 'path'
-import { spawnRunner, SpawnHandle } from './runner'
 import { getRunner } from './runners'
 import * as store from './store'
+import { turn } from './turn'
 import type { Effort, Item, Methodology, Profile, Role, RunnerName, Settings, Task } from './store'
 
 // Reserved chat key for the one pre-Apply from-scratch groom (§7, Decision 1).
@@ -123,13 +123,19 @@ export function groomPreamble(
   ].join('\n')
 }
 
-// Both agy and claude support multi-turn resume (`--conversation` / `--resume`,
-// both verified against the installed CLIs), so the §5 "chat falls back to
-// ClaudeRunner" escape hatch isn't needed — the chat uses the profile's runner.
-const chatRunner = (profile: Profile, settings: Settings): ReturnType<typeof getRunner> =>
-  getRunner(profile.runner, settings)
+// The message for one turn. First turn carries the preamble; later turns resume.
+const chatPrompt = (
+  message: string,
+  sessionId: string | null,
+  roleSlugs: string[],
+  settings: Settings,
+  context?: string
+): string =>
+  sessionId ? message : `${groomPreamble(roleSlugs, context, settings.methodology)}\n${message}`
 
-// Args for one turn. First turn carries the preamble; later turns resume.
+// ponytail: sendChat goes through turn() now; this survives only because
+// chat.test.ts pins the argv contract through it — delete when those tests
+// migrate to the Turn seam.
 export function turnArgs(
   message: string,
   sessionId: string | null,
@@ -138,8 +144,8 @@ export function turnArgs(
   settings: Settings = {},
   context?: string
 ): string[] {
-  return chatRunner(profile, settings).buildArgs(
-    sessionId ? message : `${groomPreamble(roleSlugs, context, settings.methodology)}\n${message}`,
+  return getRunner(profile.runner, settings).buildArgs(
+    chatPrompt(message, sessionId, roleSlugs, settings, context),
     { ...profile, resumeSessionId: sessionId ?? undefined, readOnly: true }
   )
 }
@@ -295,7 +301,7 @@ export function newChat(repo: string, slug: string): void {
   rmSync(chatPath(repo, slug), { force: true })
 }
 
-const inFlight = new Map<string, SpawnHandle>()
+const inFlight = new Map<string, AbortController>()
 
 export function sendChat(
   repo: string,
@@ -305,7 +311,6 @@ export function sendChat(
   roleSlugs: string[],
   onEvent: (ev: ChatEvent) => void
 ): { ok: boolean; error?: string } {
-  const profile: Profile = settings
   if (inFlight.has(slug)) return { ok: false, error: 'a chat turn is already in flight' }
   const lines = readLines(repo, slug)
   let sessionId = sessionOf(lines)
@@ -321,27 +326,32 @@ export function sendChat(
   }
 
   let reply = ''
-  const handle = spawnRunner(
-    chatRunner(profile, settings),
-    turnArgs(text, sessionId, profile, roleSlugs, settings, context),
-    repo,
-    (ev) => {
-      if (ev.kind === 'session' && ev.sessionId !== sessionId) {
-        sessionId = ev.sessionId
-        appendLine(repo, slug, { sessionId: ev.sessionId })
-      }
-      if (ev.kind === 'text') {
-        reply += ev.text
-        onEvent({ slug, kind: 'text', text: ev.text })
-      }
-      if (ev.kind === 'spawn-error') onEvent({ slug, kind: 'error', message: ev.message })
-    }
-  )
-  inFlight.set(slug, handle)
-  void handle.done.then(({ code }) => {
+  const ac = new AbortController()
+  inFlight.set(slug, ac)
+  void turn(
+    {
+      prompt: chatPrompt(text, sessionId, roleSlugs, settings, context),
+      settings, // runner/model/effort default from here — the chat is settings-profiled (§7)
+      cwd: repo,
+      resumeSessionId: sessionId ?? undefined,
+      readOnly: true,
+      onSession: (id) => {
+        if (id !== sessionId) {
+          sessionId = id
+          appendLine(repo, slug, { sessionId: id })
+        }
+      },
+      onText: (t) => {
+        reply += t
+        onEvent({ slug, kind: 'text', text: t })
+      },
+      onStderr: (m) => onEvent({ slug, kind: 'error', message: m })
+    },
+    { signal: ac.signal }
+  ).then((r) => {
     inFlight.delete(slug)
     if (!reply.trim()) {
-      onEvent({ slug, kind: 'error', message: `chat turn failed (exit ${code})` })
+      onEvent({ slug, kind: 'error', message: `chat turn failed (exit ${r.exitCode})` })
       return
     }
     const message: ChatMessage = { role: 'assistant', text: reply, ts: new Date().toISOString() }
@@ -413,5 +423,5 @@ export function applyProposal(
 }
 
 export function killChats(): void {
-  for (const handle of inFlight.values()) handle.kill()
+  for (const ac of inFlight.values()) ac.abort()
 }
