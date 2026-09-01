@@ -1,9 +1,5 @@
 import { spawn } from 'child_process'
-import { mkdtempSync } from 'fs'
-import { tmpdir } from 'os'
-import { join } from 'path'
-import type { WebContents } from 'electron'
-import { getRunner, Runner } from './runners'
+import { Runner } from './runners'
 import { feed, StreamEvent } from './stream'
 
 export type TaskEvent =
@@ -52,26 +48,4 @@ export function spawnRunner(
     })
   })
   return { done, kill: (signal = 'SIGTERM') => child.kill(signal) }
-}
-
-let playground: SpawnHandle | null = null
-
-export function runTask(prompt: string, send: (ev: TaskEvent) => void): void {
-  if (playground) return
-  const cwd = mkdtempSync(join(tmpdir(), 'somni-m0-'))
-  const runner = getRunner()
-  playground = spawnRunner(runner, runner.buildArgs(prompt, {}), cwd, send)
-  void playground.done.then(() => {
-    playground = null
-  })
-}
-
-export function killTask(): void {
-  playground?.kill()
-}
-
-export function wireTaskIpc(ipcMain: Electron.IpcMain, contents: () => WebContents | null): void {
-  ipcMain.handle('task:run', (_e, prompt: string) => {
-    runTask(String(prompt), (ev) => contents()?.send('task:event', ev))
-  })
 }

@@ -5,13 +5,12 @@
 // .somni/runs/<runId>/run.json before it is acted on.
 
 import { execFile } from 'child_process'
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { promisify } from 'util'
-import { runnerText, writeReport } from './report'
+import { writeReport } from './report'
+import { turn } from './turn'
 import type { RunStats } from './report'
-import { spawnRunner, SpawnHandle } from './runner'
-import { getRunner } from './runners'
 import {
   atomicWrite,
   Item,
@@ -109,7 +108,9 @@ export type RunEvents = {
 export type DrainMode = 'manual' | 'nightly' | 'keep' | 'resume'
 export type DrainState = { mode: DrainMode | null; status: PipelineStatus; resumeAt?: string }
 
-type Ctrl = { cancelled: boolean; handle: SpawnHandle | null }
+// Cancellation is one AbortController per run: aborting kills the current Turn
+// (subtask or aux Review/Fix) and pre-empts any Turn the run has not started yet.
+type Ctrl = { cancelled: boolean; ac: AbortController }
 
 // Pipeline-wide pause gate. Rate limits are account-wide, so one workflow
 // hitting one holds back every workflow's next attempt.
@@ -237,7 +238,7 @@ export function cancelPipeline(): void {
   pipeline.gate.abort()
   for (const c of pipeline.ctrls) {
     c.cancelled = true
-    c.handle?.kill()
+    c.ac.abort()
   }
   wakeDrain()
 }
@@ -253,8 +254,6 @@ export function msUntil(hhmm: string, now: Date): number {
 
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const taskTitle = (t: { title?: string }, i: number): string => t.title || `task ${i + 1}`
-const human = (ms: number): string =>
-  ms >= 60_000 ? `${Math.round(ms / 60_000)}m` : `${Math.round(ms / 1000)}s`
 
 // The implement discipline (M16). Prompt text only — the runner adapters stay
 // runner-agnostic. Prepended to every subtask *alongside* the role preamble.
@@ -452,7 +451,7 @@ async function drainLoop(
   const idles = (): boolean => keepRunning && mode !== 'resume'
 
   const launch = (job: Job): void => {
-    const ctrl: Ctrl = { cancelled: false, handle: null }
+    const ctrl: Ctrl = { cancelled: false, ac: new AbortController() }
     mine.ctrls.add(ctrl)
     activeSlugs.add(job.slug)
     emit('Running') // only ever on an actual launch
@@ -646,7 +645,7 @@ async function execute(
   opts: RunOpts
 ): Promise<RunState> {
   const now = opts.now ?? ((): Date => new Date())
-  const ctrl = opts.ctrl ?? { cancelled: false, handle: null }
+  const ctrl = opts.ctrl ?? { cancelled: false, ac: new AbortController() }
   const gate = opts.gate ?? makeGate(events, opts)
   const settings = opts.settings ?? {}
   const timeoutMs =
@@ -679,10 +678,11 @@ async function execute(
         ]
       : storyDefs
 
-  // ponytail: aux tasks are spawned directly rather than threaded through the
+  // ponytail: aux tasks are one Turn each rather than threaded through the
   // retry/gate loop below (report.ts's Report-task precedent) — one shot each,
   // and the review loop is itself the retry. They still record attempts/cost so
-  // run.json and the report treat them like any other task.
+  // run.json and the report treat them like any other task, and they share the
+  // run's AbortController, so cancel and the task timeout reach them too.
   const auxTask = async (title: string, prompt: string, log: string): Promise<string | null> => {
     const task: TaskRun = {
       title,
@@ -697,14 +697,20 @@ async function execute(
     }
     state.tasks.push(task)
     writeState()
-    const text = await runnerText(
-      settings,
-      prompt,
-      { autonomous: true },
-      state.worktree,
-      join(runDir, task.log),
-      (usage) => Object.assign(task, usage)
-    ).catch(() => null)
+    const r = await turn(
+      {
+        prompt,
+        settings,
+        cwd: state.worktree,
+        autonomous: true,
+        timeoutMs,
+        graceMs,
+        logPath: join(runDir, task.log)
+      },
+      { signal: ctrl.ac.signal }
+    )
+    Object.assign(task, r.usage)
+    const text = r.ok && r.text ? r.text : null
     task.status = text ? 'Completed' : 'Failed'
     if (!text) task.error = `${title.toLowerCase()} task produced no output`
     writeState()
@@ -774,10 +780,9 @@ async function execute(
       }
       const def = defs[i]
       const role = roles.find((r) => r.slug === def.role)
-      const profile = resolveProfile(role, settings)
       // Resolved once per task, outside the attempt loop: a retry always reuses
       // the same profile, so runners are never mixed within one task (§5).
-      const runner = getRunner(profile.runner, settings)
+      const profile = resolveProfile(role, settings)
       task.runner = profile.runner
       task.model = profile.model
       task.effort = profile.effort
@@ -801,66 +806,42 @@ async function execute(
         task.attempts = (task.attempts ?? 0) + 1
         writeState() // the attempt is on disk before it is made
 
-        const started = now().getTime()
-        let detail: string | undefined
-        let stderr: string | undefined
-        let resultMs: number | undefined
-        let timedOut = false
-        const handle = spawnRunner(
-          runner,
-          runner.buildArgs(prompt, { ...profile, autonomous: true }),
-          state.worktree,
-          (ev) => {
-            if (ev.kind === 'session') task.sessionId = ev.sessionId
-            if (ev.kind === 'text') events.onLog(state.runId, i, ev.text)
-            if (ev.kind === 'spawn-error') {
-              stderr = ev.message.split('\n').filter(Boolean).pop()
-              events.onLog(state.runId, i, `[stderr] ${ev.message}`)
-            }
-            if (ev.kind === 'result') {
-              task.costUsd = ev.costUsd
-              task.promptTokens = ev.promptTokens
-              task.completionTokens = ev.completionTokens
-              resultMs = ev.durationMs
-              detail = ev.detail
-            }
+        const r = await turn(
+          {
+            prompt,
+            settings,
+            cwd: state.worktree,
+            ...profile,
+            autonomous: true,
+            timeoutMs,
+            graceMs,
+            logPath,
+            onSession: (id) => (task.sessionId = id),
+            onText: (t) => events.onLog(state.runId, i, t),
+            onStderr: (m) => events.onLog(state.runId, i, `[stderr] ${m}`)
           },
-          (chunk) => appendFileSync(logPath, chunk)
+          { signal: ctrl.ac.signal }
         )
-        ctrl.handle = handle
-        let grace: NodeJS.Timeout | null = null
-        const killer = setTimeout(() => {
-          timedOut = true
-          handle.kill()
-          grace = setTimeout(() => handle.kill('SIGKILL'), graceMs)
-        }, timeoutMs)
-        const exit = await handle.done
-        clearTimeout(killer)
-        if (grace) clearTimeout(grace)
-        ctrl.handle = null
-        const ok = exit.ok && !timedOut
 
-        task.exitCode = exit.code
-        task.durationMs = resultMs ?? now().getTime() - started
+        task.costUsd = r.usage.costUsd
+        task.promptTokens = r.usage.promptTokens
+        task.completionTokens = r.usage.completionTokens
+        task.exitCode = r.exitCode
+        task.durationMs = r.usage.durationMs
         // Persist *why* it failed even when the CLI never produced a result event
         // (bad PATH, crash, timeout) — otherwise the morning shows "Failed", no reason.
-        task.error =
-          ok || ctrl.cancelled
-            ? undefined
-            : timedOut
-              ? `timed out after ${human(timeoutMs)}`
-              : (detail ?? stderr ?? `exited with code ${exit.code}`)
+        task.error = r.ok || ctrl.cancelled ? undefined : r.detail
 
         if (ctrl.cancelled) {
           task.status = 'Cancelled'
           break
         }
-        if (ok) {
+        if (r.ok) {
           gate.ok()
           task.status = 'Completed'
           break
         }
-        if (!timedOut && runner.isRateLimit(`${detail ?? ''} ${stderr ?? ''}`)) {
+        if (r.rateLimited) {
           // Rate limits pause the whole pipeline instead of burning the retry (§3).
           // ponytail: re-attempts are unbounded by design — the point is to outlast
           // a 5-hour usage window; cancel is the way out.

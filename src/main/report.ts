@@ -3,12 +3,10 @@
 // full appends a "Report" task run with full autonomy in the worktree.
 
 import { execFile } from 'child_process'
-import { appendFileSync } from 'fs'
 import { join } from 'path'
 import { promisify } from 'util'
-import { spawnRunner } from './runner'
-import { getRunner, RunnerOpts } from './runners'
 import { atomicWrite, Settings } from './store'
+import { turn } from './turn'
 import type { RunState, TaskRun } from './executor'
 
 const git = promisify(execFile)
@@ -168,44 +166,6 @@ async function collectStats(state: RunState): Promise<Stats> {
   return summarize(await run(['diff', '--name-status', base]), await run(['diff', '--stat', base]))
 }
 
-// One runner call, final text out (every adapter puts the full reply on the
-// result event). Resolves to null on any failure — a report must never be the
-// thing that fails a run. Second consumer: `field:refine` in repoIpc.ts (M11).
-export function runnerText(
-  settings: Settings,
-  prompt: string,
-  opts: RunnerOpts,
-  cwd: string,
-  logPath?: string,
-  // Lets a caller record the run's cost/usage on a TaskRun (M16's review loop).
-  onUsage?: (
-    usage: Pick<TaskRun, 'costUsd' | 'promptTokens' | 'completionTokens' | 'durationMs'>
-  ) => void
-): Promise<string | null> {
-  const runner = getRunner(settings.runner, settings)
-  let out = ''
-  const handle = spawnRunner(
-    runner,
-    runner.buildArgs(prompt, { model: settings.model, effort: settings.effort, ...opts }),
-    cwd,
-    (ev) => {
-      if (ev.kind === 'result') {
-        if (ev.detail) out = ev.detail
-        onUsage?.({
-          costUsd: ev.costUsd,
-          promptTokens: ev.promptTokens,
-          completionTokens: ev.completionTokens,
-          durationMs: ev.durationMs
-        })
-      }
-    },
-    (chunk) => {
-      if (logPath) appendFileSync(logPath, chunk)
-    }
-  )
-  return handle.done.then(({ ok }) => (ok && out.trim() ? out.trim() : null))
-}
-
 const REPORT_PROMPT =
   'Summarize what was done in this branch for a morning review: what changed, ' +
   'why, anything left unfinished or needing attention. Markdown, no preamble.'
@@ -235,10 +195,10 @@ export async function writeReport(
       'Diff stat:',
       stats.diffStat
     ].join('\n')
-    // Read-only: never an autonomous turn here (§7 chat rules).
-    const text = await runnerText(settings, prompt, { readOnly: true }, state.worktree).catch(
-      () => null
-    )
+    // Read-only: never an autonomous Turn here (§7 chat rules). A report must
+    // never be the thing that fails a run, so any failure degrades to null.
+    const r = await turn({ prompt, settings, cwd: state.worktree, readOnly: true })
+    const text = r.ok && r.text ? r.text : null
     body += text ? `\n## Summary\n\n${text}\n` : '\n_(summary call failed — minimal report only)_\n'
   }
 
@@ -255,13 +215,14 @@ export async function writeReport(
     }
     task.runner = settings.runner
     state.tasks.push(task)
-    const text = await runnerText(
+    const r = await turn({
+      prompt: REPORT_PROMPT,
       settings,
-      REPORT_PROMPT,
-      { autonomous: true },
-      state.worktree,
-      join(runDir, task.log)
-    ).catch(() => null)
+      cwd: state.worktree,
+      autonomous: true,
+      logPath: join(runDir, task.log)
+    })
+    const text = r.ok && r.text ? r.text : null
     task.status = text ? 'Completed' : 'Failed'
     if (!text) task.error = 'report task produced no output'
     body += text ? `\n## Summary\n\n${text}\n` : '\n_(report task failed — minimal report only)_\n'

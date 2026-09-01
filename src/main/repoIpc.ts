@@ -11,8 +11,9 @@ import {
   sendChat
 } from './chat'
 import { isRunning, lockedGit, RunState, wakeDrain } from './executor'
-import { diffFiles, runnerText, RunStats, runStats } from './report'
+import { diffFiles, RunStats, runStats } from './report'
 import { getRunner } from './runners'
+import { turn } from './turn'
 import * as store from './store'
 import { atomicWrite, RunnerName, Settings } from './store'
 
@@ -239,13 +240,15 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
   ipcMain.handle('field:refine', async (_e, repo: string, kind: 'task' | 'role', text: string) => {
     if (!text.trim()) return { ok: false, error: 'nothing to refine' }
     const settings = readSettings()
-    const out = await runnerText(
+    const r = await turn({
+      prompt: `${REFINE_PROMPTS[kind]}\n\n---\n${text}`,
       settings,
-      `${REFINE_PROMPTS[kind]}\n\n---\n${text}`,
-      { readOnly: true },
-      repo
-    )
-    return out ? { ok: true, text: out } : { ok: false, error: 'refine failed — no reply' }
+      cwd: repo,
+      readOnly: true
+    })
+    return r.ok && r.text
+      ? { ok: true, text: r.text }
+      : { ok: false, error: 'refine failed — no reply' }
   })
 
   // Model suggestions for the combo boxes. The inherit case (role editor sends
