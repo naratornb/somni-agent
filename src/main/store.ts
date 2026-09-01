@@ -44,6 +44,11 @@ export type Settings = Profile & {
   methodology?: Methodology
 }
 
+// What settings:get / resolveSettings hand out: every defaulted field present.
+// Plain Settings (all-optional) is the shape of the stored fragments —
+// userData/settings.json and .somni/config.json.
+export type ResolvedSettings = Settings & typeof SETTINGS_DEFAULTS
+
 export const SETTINGS_DEFAULTS = {
   concurrency: 2,
   timeoutMinutes: 30,

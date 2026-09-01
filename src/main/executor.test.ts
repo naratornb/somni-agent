@@ -12,12 +12,9 @@ import {
 } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { PLAN_TASK_TITLE, storyPlanPrompt } from './prompts'
 import {
   abandonRun,
-  DISCIPLINE_PREAMBLE,
-  PLAN_TASK_TITLE,
-  storyPlanPrompt,
-  subtaskPrompt,
   cancelPipeline,
   findOrphanedRuns,
   isRunning,
@@ -946,12 +943,6 @@ describe('discipline preamble', () => {
     expect(specAt).toBeGreaterThan(disciplineAt)
     expect(roleAt).toBeGreaterThan(specAt)
     expect(taskAt).toBeGreaterThan(roleAt)
-  })
-
-  it('keeps the role preamble optional and the order stable', () => {
-    expect(subtaskPrompt('.somni/items/SOM-1-x.md', undefined, 'do it')).toBe(
-      `${DISCIPLINE_PREAMBLE.replace('{SPEC}', '.somni/items/SOM-1-x.md')}\n\n---\n\ndo it`
-    )
   })
 })
 

@@ -1,138 +1,53 @@
 import { contextBridge, ipcRenderer } from 'electron'
+// Shared shapes are single-sourced from the main modules (M20). Type-only
+// imports/re-exports are erased at build time, so none of main's runtime
+// (fs, electron main APIs) ever crosses into the preload bundle.
+import type { ChatEvent, ChatMessage, ChatProposal } from '../main/chat'
+import type { DrainMode, DrainState, PipelineStatus, RunState } from '../main/executor'
+import type { IpcResult, RunDetails, RunRow } from '../main/repoIpc'
+import type { SkillsStatus } from '../main/skills'
+import type {
+  Item,
+  ItemStatus,
+  RepoData,
+  ResolvedSettings,
+  Role,
+  RunnerName,
+  Settings
+} from '../main/store'
+import type { ModelProgress, Transcription, VoiceStatus } from '../main/voice'
 
-// Shared shapes (duplicated from src/main/store.ts types; keep in sync)
-export type Effort = 'low' | 'medium' | 'high'
-export type ReportStyle = 'minimal' | 'compact' | 'full'
-export type RunnerName = 'claude' | 'antigravity'
-export type ViewMode = 'po' | 'engineer'
-export type Methodology = 'pocock' | 'superpowers'
-export type Settings = {
-  concurrency: number
-  timeoutMinutes: number
-  reportStyle: ReportStyle
-  runner: RunnerName
-  claudeBinary?: string
-  antigravityBinary?: string
-  whisperBinary?: string
-  model?: string
-  effort?: Effort
-  nightlyTime?: string
-  nightlyArmed?: boolean
-  viewMode: ViewMode
-  // Repo-level only (.somni/config.json) — the closing review loop's signal.
-  checkCommand?: string
-  // Resolved per repo at groom/run time (docs/adr/0002).
-  methodology?: Methodology
-}
-export type Role = {
-  slug: string
-  name: string
-  preamble: string
-  runner?: RunnerName
-  model?: string
-  effort?: Effort
-}
-export type Task = { title: string; prompt: string; role: string; selected: boolean }
-export type ItemKind = 'idea' | 'epic' | 'story'
-export type ItemStatus =
-  'backlog' | 'grooming' | 'ready' | 'in-progress' | 'needs-attention' | 'review' | 'done'
-export type Item = {
-  id: string
-  slug: string
-  kind: ItemKind
-  status: ItemStatus
-  name: string
-  spec: string
-  created: string
-  epic?: string
-  blockedBy?: string[]
-  tasks: Task[]
-}
-export type IpcResult = { ok: boolean; error?: string }
-export type SkillsStatus = { bundledVersion: number; repoVersion: number | null }
-export type ReviewCycle = {
-  cycle: number
-  verdict: 'green' | 'red' | 'unknown'
-  findings: string
-  check?: { command: string; ok: boolean; output: string }
-  green: boolean
-}
-export type RepoData = { roles: Role[]; items: Item[]; backlog: string[] }
-export type TaskStatus = 'Queued' | 'Running' | 'Completed' | 'Failed' | 'Skipped' | 'Cancelled'
-export type PipelineStatus = 'Running' | 'Paused' | 'Idle'
-export type DrainMode = 'manual' | 'nightly' | 'keep' | 'resume'
-export type DrainState = { mode: DrainMode | null; status: PipelineStatus; resumeAt?: string }
+export type { ChatEvent, ChatMessage, ChatProposal, ChatQuestion, GroomedStory } from '../main/chat'
+export type {
+  DrainMode,
+  DrainState,
+  PipelineStatus,
+  ReviewCycle,
+  RunState,
+  TaskRun,
+  TaskStatus
+} from '../main/executor'
+export type { FileChange, RunStats } from '../main/report'
+export type { IpcResult, RunDetails, RunRow } from '../main/repoIpc'
+export type { SkillsStatus } from '../main/skills'
+export type {
+  Effort,
+  Item,
+  ItemKind,
+  ItemStatus,
+  Methodology,
+  RepoData,
+  ReportStyle,
+  ResolvedSettings,
+  Role,
+  RunnerName,
+  Settings,
+  Task,
+  ViewMode
+} from '../main/store'
+export type { ModelProgress, Transcription, VoiceStatus } from '../main/voice'
+
 export type PipelinePush = { status: PipelineStatus; resumeAt?: string; mode?: DrainMode | null }
-export type TaskRun = {
-  title: string
-  role: string
-  aux?: true
-  status: TaskStatus
-  attempts?: number
-  sessionId?: string
-  exitCode?: number | null
-  costUsd?: number
-  durationMs?: number
-  promptTokens?: number
-  completionTokens?: number
-  error?: string
-  runner?: RunnerName
-  model?: string
-  effort?: string
-  log: string
-}
-export type RunState = {
-  runId: string
-  workflow: string
-  name: string
-  branch: string
-  worktree: string
-  baseSha?: string
-  status: TaskStatus
-  startedAt: string
-  finishedAt?: string
-  tasks: TaskRun[]
-  reviews?: ReviewCycle[]
-  stats?: RunStats
-}
-export type FileChange = { path: string; kind: 'A' | 'M' | 'D'; lines: number }
-export type RunStats = {
-  files: FileChange[]
-  created: number
-  modified: number
-  totalCostUsd?: number
-  promptTokens?: number
-  completionTokens?: number
-}
-
-export type RunRow = RunState & { worktreeExists: boolean }
-export type RunDetails = { stats: RunStats | null; branchExists: boolean }
-
-export type VoiceStatus = { binary: boolean; model: boolean }
-export type Transcription = { ok: boolean; text?: string; error?: string }
-export type ModelProgress = { received: number; total: number }
-
-export type ChatMessage = { role: 'user' | 'assistant'; text: string; ts: string }
-export type GroomedStory = { name: string; spec: string; tasks: Task[]; blockedBy: number[] }
-export type ChatProposal = {
-  kind: 'epic' | 'story'
-  name: string
-  spec: string
-  stories: GroomedStory[]
-  tasks: Task[]
-  roles: Role[]
-}
-export type ChatQuestion = { question: string; options: string[]; recommended: string }
-export type ChatEvent =
-  | { slug: string; kind: 'text'; text: string }
-  | {
-      slug: string
-      kind: 'done'
-      message: ChatMessage
-      proposal: ChatProposal | null
-      question: ChatQuestion | null
-    }
-  | { slug: string; kind: 'error'; message: string }
 
 function on(channel: string, cb: (payload: unknown) => void): () => void {
   const listener = (_e: Electron.IpcRendererEvent, payload: unknown): void => cb(payload)
@@ -176,7 +91,8 @@ const somni = {
     on('run:state', (p) => cb(p as RunState)),
   onRunLog: (cb: (log: { runId: string; taskIndex: number; text: string }) => void): (() => void) =>
     on('run:log', (p) => cb(p as { runId: string; taskIndex: number; text: string })),
-  getSettings: (): Promise<Settings> => ipcRenderer.invoke('settings:get'),
+  // settings:get spreads SETTINGS_DEFAULTS, so every defaulted field is present.
+  getSettings: (): Promise<ResolvedSettings> => ipcRenderer.invoke('settings:get'),
   // Repo-level .somni/config.json (M16: checkCommand). Never global.
   getRepoConfig: (repo: string): Promise<Partial<Settings>> =>
     ipcRenderer.invoke('config:get', repo),
