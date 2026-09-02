@@ -54,6 +54,8 @@ function App(): React.JSX.Element {
   // Vendored skills (M16): the offer banner. Dismissal is per-session.
   const [skills, setSkills] = useState<SkillsStatus | null>(null)
   const [skillsHidden, setSkillsHidden] = useState(false)
+  // Missing Runner CLI (M22): the binary name when unresolvable, else null.
+  const [runnerMissing, setRunnerMissing] = useState<string | null>(null)
 
   const refresh = useCallback(
     (path = repo): void => {
@@ -118,6 +120,12 @@ function App(): React.JSX.Element {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [repo])
+
+  // Probe on mount and on every navigation — cheap async spawn, and it means
+  // fixing the path in Settings clears the banner on the way out, no restart.
+  useEffect(() => {
+    void window.somni.runnerStatus().then((h) => setRunnerMissing(h.ok ? null : h.binary))
+  }, [view])
 
   const choose = async (): Promise<void> => {
     const path = await window.somni.chooseRepo()
@@ -293,6 +301,15 @@ function App(): React.JSX.Element {
               </div>
             </div>
           ))}
+          {/* M22: the Runner CLI is the app's engine — say so when it's missing. */}
+          {runnerMissing && (
+            <div className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface-elevated p-card-padding">
+              <span>
+                Runner CLI <b>{runnerMissing}</b> not found — somni can&apos;t execute stories
+                without it. Install it, or set its path in Settings.
+              </span>
+            </div>
+          )}
           {/* M16: the one-time skills offer. Silent once set up or dismissed. */}
           {repo && skills && !skillsHidden && skills.repoVersion !== skills.bundledVersion && (
             <div className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface-elevated p-card-padding">

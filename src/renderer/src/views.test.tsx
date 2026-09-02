@@ -266,6 +266,14 @@ test('MicButton renders disabled with the checking placeholder before voice:stat
   expect(html).toContain('…')
 })
 
+// M22: no-binary must stay clickable so the install hint can surface on click —
+// a disabled control with a hover-only tooltip reads as "voice is broken".
+test('MicButton stays enabled in the no-binary state', () => {
+  const html = renderToStaticMarkup(<MicButton onText={() => {}} initialState="no-binary" />)
+  expect(html).not.toContain('disabled=""')
+  expect(html).toContain('Voice')
+})
+
 // M11 Decision 8/9: mode gates the sidebar nav. SSR skips effects, so `mode`
 // never leaves its useState seed ('engineer') — the App case above only ever
 // exercises the engineer branch of the nav filter. Assert that branch

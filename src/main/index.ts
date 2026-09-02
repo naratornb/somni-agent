@@ -3,6 +3,8 @@ import { existsSync } from 'fs'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { shellPath } from './env'
+import { runnerStatus } from './runners'
 import { killTask, wireTaskIpc } from './turn'
 import { killChats } from './chat'
 import { patchSettings, readSettings, repoSettings, wireRepoIpc } from './repoIpc'
@@ -24,6 +26,10 @@ import {
   startDrain,
   wakeDrain
 } from './executor'
+
+// Must run before any binary probe or spawn (voice, runner). Dev inherits the
+// terminal's PATH already — only the Finder-launched build needs the fixup.
+if (app.isPackaged) process.env.PATH = shellPath()
 
 function createWindow(): void {
   // Create the browser window.
@@ -174,6 +180,7 @@ app.whenReady().then(() => {
     void resumePipeline(repo, runIds, settings.concurrency, events, { settings })
   })
   ipcMain.handle('pipeline:abandon', (_e, repo: string, runId: string) => abandonRun(repo, runId))
+  ipcMain.handle('runner:status', () => runnerStatus(readSettings()))
 
   createWindow()
 

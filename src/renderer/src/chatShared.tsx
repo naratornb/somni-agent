@@ -260,12 +260,16 @@ const NO_BINARY_HINT = 'Install whisper.cpp (brew install whisper-cpp) or set th
 /** Mic button beside an AI-adjacent text field. `onText` appends to the field. */
 export function MicButton({
   onText,
-  disabled
+  disabled,
+  initialState = 'checking'
 }: {
   onText: (text: string) => void
   disabled?: boolean
+  // Static-markup tests can't run the voice:status effect; this is their only
+  // way to observe a post-probe state. Runtime always starts at 'checking'.
+  initialState?: MicState
 }): React.JSX.Element {
-  const [state, setState] = useState<MicState>('checking')
+  const [state, setState] = useState<MicState>(initialState)
   const [pct, setPct] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const capture = useRef<Capture | null>(null)
@@ -288,6 +292,9 @@ export function MicButton({
 
   const click = async (): Promise<void> => {
     setError(null)
+    // The button stays clickable so the missing-binary state can explain
+    // itself — a disabled control with a hover-only tooltip reads as broken.
+    if (state === 'no-binary') return setError(NO_BINARY_HINT)
     // Download before recording: the reverse would waste the user's speech.
     if (state === 'no-model') {
       setState('downloading')
@@ -335,11 +342,7 @@ export function MicButton({
         }`}
         title={state === 'no-binary' ? NO_BINARY_HINT : 'Voice input'}
         disabled={
-          disabled ||
-          state === 'checking' ||
-          state === 'no-binary' ||
-          state === 'downloading' ||
-          state === 'busy'
+          disabled || state === 'checking' || state === 'downloading' || state === 'busy'
         }
         onClick={() => void click()}
       >
