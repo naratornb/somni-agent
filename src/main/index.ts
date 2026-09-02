@@ -28,10 +28,14 @@ import {
 function createWindow(): void {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
+    title: 'somni',
     width: 900,
     height: 670,
+    minWidth: 720,
+    minHeight: 480,
     show: false,
     autoHideMenuBar: true,
+    backgroundColor: '#131315',
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -63,6 +67,15 @@ function createWindow(): void {
 app.whenReady().then(() => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.somni')
+
+  if (process.platform === 'darwin') {
+    app.setAboutPanelOptions({
+      applicationName: 'somni',
+      applicationVersion: app.getVersion(),
+      copyright: `© ${new Date().getFullYear()} Luke <f.luke.benj@gmail.com>`,
+      credits: 'Overnight AI agent workflow orchestrator for macOS'
+    })
+  }
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
