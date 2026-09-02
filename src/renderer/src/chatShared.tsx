@@ -341,9 +341,7 @@ export function MicButton({
           state === 'recording' ? `${STATUS_CHIP_BASE} ${STATUS_CHIP.Running}` : ''
         }`}
         title={state === 'no-binary' ? NO_BINARY_HINT : 'Voice input'}
-        disabled={
-          disabled || state === 'checking' || state === 'downloading' || state === 'busy'
-        }
+        disabled={disabled || state === 'checking' || state === 'downloading' || state === 'busy'}
         onClick={() => void click()}
       >
         <span className="material-symbols-outlined text-[16px]">mic</span>

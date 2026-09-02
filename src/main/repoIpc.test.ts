@@ -415,3 +415,17 @@ describe('chat:send guard', () => {
     runningId = null
   })
 })
+
+// M22: the runner health probe through the same IPC seam voice:status uses.
+// Fresh per call is the contract — fixing the path in Settings must flip the
+// answer without an app restart.
+describe('runner:status', () => {
+  it('reports the configured binary missing, then ok once the path is fixed', async () => {
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ claudeBinary: '/nope/claude' }))
+    await expect(invoke('runner:status')).resolves.toEqual({ ok: false, binary: '/nope/claude' })
+    const bin = join(mkdtempSync(join(tmpdir(), 'somni-cli-')), 'claude')
+    writeFileSync(bin, '#!/bin/sh\necho 1.0.0\n', { mode: 0o755 })
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ claudeBinary: bin }))
+    await expect(invoke('runner:status')).resolves.toEqual({ ok: true, binary: bin })
+  })
+})

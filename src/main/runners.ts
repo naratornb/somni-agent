@@ -201,6 +201,9 @@ export type RunnerHealth = { ok: boolean; binary: string }
 // Health probe for the configured runner (the voice:status idiom): the app's
 // core purpose dies silently when the CLI isn't resolvable, so main answers
 // the question on demand — no cache, a Settings fix clears it without restart.
+// ponytail: probes only the *global* runner and assumes every runner answers
+// `--version` — a role pinning the other runner isn't covered; probe per
+// resolved profile (and lift the probe args onto Runner) if that ever bites.
 export async function runnerStatus(settings: Settings = {}): Promise<RunnerHealth> {
   const { binary } = getRunner(settings.runner, settings)
   try {

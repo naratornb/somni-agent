@@ -22,7 +22,7 @@ export function shellPath(
       timeout: 3000,
       encoding: 'utf8'
     })
-    const found = out.match(/__PATH__([^\n]*)/)?.[1]
+    const found = out.match(new RegExp(`${MARKER}([^\n]*)`))?.[1]
     return found || fallback
   } catch {
     return fallback

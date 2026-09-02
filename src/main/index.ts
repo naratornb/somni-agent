@@ -4,7 +4,6 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { shellPath } from './env'
-import { runnerStatus } from './runners'
 import { killTask, wireTaskIpc } from './turn'
 import { killChats } from './chat'
 import { patchSettings, readSettings, repoSettings, wireRepoIpc } from './repoIpc'
@@ -180,7 +179,6 @@ app.whenReady().then(() => {
     void resumePipeline(repo, runIds, settings.concurrency, events, { settings })
   })
   ipcMain.handle('pipeline:abandon', (_e, repo: string, runId: string) => abandonRun(repo, runId))
-  ipcMain.handle('runner:status', () => runnerStatus(readSettings()))
 
   createWindow()
 
