@@ -3,10 +3,12 @@ import type {
   Effort,
   Methodology,
   ReportStyle,
+  Role,
   RunnerName,
   Settings,
   SkillsStatus
 } from '../../preload/index'
+import { RolesView } from './RolesView'
 import { BTN_PRIMARY, CHECKBOX, CHIP, INPUT, LABEL, STATUS_CHIP, STATUS_CHIP_BASE } from './ui'
 
 /** Label + control row — the Settings/Roles form idiom (M10-ui.md §0). */
@@ -109,7 +111,15 @@ function RepoSection({ repo }: { repo: string }): React.JSX.Element {
   )
 }
 
-export function SettingsView({ repo }: { repo: string | null }): React.JSX.Element {
+export function SettingsView({
+  repo,
+  roles = [],
+  refresh = () => {}
+}: {
+  repo: string | null
+  roles?: Role[]
+  refresh?: () => void
+}): React.JSX.Element {
   const [s, setS] = useState<Settings | null>(null)
   const [saved, setSaved] = useState(false)
   const [models, setModels] = useState<string[]>([])
@@ -123,7 +133,22 @@ export function SettingsView({ repo }: { repo: string | null }): React.JSX.Eleme
     void window.somni.listModels(s?.runner).then(setModels)
   }, [s?.runner])
 
-  if (!s) return <p className="text-on-surface-variant">Loading…</p>
+  // Roles live here now (M23): configuration, not a destination. Independent
+  // of the settings fetch, so it renders in the loading state too.
+  const rolesSection = repo && (
+    <div className="mt-8 border-t border-border-subtle pt-6">
+      <h2 className={`mb-4 ${LABEL}`}>Roles</h2>
+      <RolesView repo={repo} roles={roles} refresh={refresh} />
+    </div>
+  )
+
+  if (!s)
+    return (
+      <div>
+        <p className="text-on-surface-variant">Loading…</p>
+        {rolesSection}
+      </div>
+    )
 
   const patch = (p: Partial<Settings>): void => {
     setS({ ...s, ...p })
@@ -277,6 +302,7 @@ export function SettingsView({ repo }: { repo: string | null }): React.JSX.Eleme
         runner/model/effort in its frontmatter.
       </p>
       {repo && <RepoSection repo={repo} />}
+      {rolesSection}
     </div>
   )
 }

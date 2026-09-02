@@ -18,6 +18,11 @@ type Props = {
   roles: Role[]
   // The item being groomed, or null to groom from scratch under DRAFT_KEY.
   itemId?: string | null
+  // Home quick-start (M23): sent as the first message when the transcript is
+  // empty, so the Interview starts from what the user already typed.
+  seed?: string
+  // "Apply & run" on the auto-run path; default elsewhere.
+  applyLabel?: string
   onApplied: (item: Item) => void
 }
 
@@ -28,7 +33,14 @@ const EMPTY =
 const USER = `max-w-[80%] ${BUBBLE_USER}`
 const AI = `max-w-[80%] ${BUBBLE_AI}`
 
-export function GroomView({ repo, roles, itemId, onApplied }: Props): React.JSX.Element {
+export function GroomView({
+  repo,
+  roles,
+  itemId,
+  seed,
+  applyLabel = 'Apply',
+  onApplied
+}: Props): React.JSX.Element {
   const slug = itemId ?? window.somni.draftKey
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState<string | null>(null)
@@ -42,12 +54,6 @@ export function GroomView({ repo, roles, itemId, onApplied }: Props): React.JSX.
   const listRef = useRef<HTMLDivElement>(null)
 
   const sending = streaming !== null
-
-  useEffect(() => {
-    if (loaded.current) return
-    loaded.current = true
-    void window.somni.loadChat(repo, slug).then((c) => setMessages(c.messages))
-  }, [repo, slug])
 
   useEffect(() => {
     const off = window.somni.onChatEvent((ev: ChatEvent) => {
@@ -84,6 +90,18 @@ export function GroomView({ repo, roles, itemId, onApplied }: Props): React.JSX.
       setError(res.error ?? 'chat failed')
     }
   }
+
+  // Below `send` so the seed call isn't a use-before-declaration.
+  useEffect(() => {
+    if (loaded.current) return
+    loaded.current = true
+    void window.somni.loadChat(repo, slug).then((c) => {
+      setMessages(c.messages)
+      // Seed only a fresh transcript — reopening a groom must not re-send.
+      if (seed && c.messages.length === 0) void send(seed)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per slug
+  }, [repo, slug])
 
   const apply = async (): Promise<void> => {
     if (!proposal) return
@@ -157,7 +175,7 @@ export function GroomView({ repo, roles, itemId, onApplied }: Props): React.JSX.
         <ProposalPreview
           proposal={proposal}
           roles={roles}
-          applyLabel={applying ? 'Applying…' : 'Apply'}
+          applyLabel={applying ? 'Applying…' : applyLabel}
           disabled={applying}
           onApply={() => void apply()}
           onDismiss={() => setProposal(null)}

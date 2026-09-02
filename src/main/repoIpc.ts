@@ -92,6 +92,36 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
     return store.loadRepo(repo)
   })
 
+  // Home quick-start chips (M23): cheap local git signals, no AI calls. [] on
+  // any failure — the renderer owns the static fallback.
+  ipcMain.handle('repo:suggestions', async (_e, repo: string): Promise<string[]> => {
+    try {
+      const chips: string[] = []
+      // git grep exits 1 on zero matches — that's "no chip", not a failure.
+      const grep = (await lockedGit([
+        '-C',
+        repo,
+        'grep',
+        '-c',
+        '-E',
+        'TODO|FIXME',
+        '--',
+        '.'
+      ]).catch(() => ({ stdout: '' }))) as { stdout: string }
+      const todos = grep.stdout
+        .split('\n')
+        .filter(Boolean)
+        .reduce((n, l) => n + (Number(l.slice(l.lastIndexOf(':') + 1)) || 0), 0)
+      if (todos > 0) chips.push(`Clean up TODOs (${todos} in the repo)`)
+      const log = (await lockedGit(['-C', repo, 'log', '-2', '--format=%s'])) as { stdout: string }
+      for (const subject of log.stdout.split('\n').filter(Boolean))
+        chips.push(`Follow up on "${subject}"`)
+      return chips.slice(0, 4)
+    } catch {
+      return []
+    }
+  })
+
   // Repo-level overrides (.somni/config.json). Only checkCommand is edited from
   // the UI today (M16); the file may hold any Settings key by hand.
   ipcMain.handle('config:get', (_e, repo: string) => store.loadConfig(repo))
