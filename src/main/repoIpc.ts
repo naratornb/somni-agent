@@ -113,7 +113,7 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
         .filter(Boolean)
         .reduce((n, l) => n + (Number(l.slice(l.lastIndexOf(':') + 1)) || 0), 0)
       if (todos > 0) chips.push(`Clean up TODOs (${todos} in the repo)`)
-      const log = (await lockedGit(['-C', repo, 'log', '-2', '--format=%s'])) as { stdout: string }
+      const log = (await lockedGit(['-C', repo, 'log', '-3', '--format=%s'])) as { stdout: string }
       for (const subject of log.stdout.split('\n').filter(Boolean))
         chips.push(`Follow up on "${subject}"`)
       return chips.slice(0, 4)

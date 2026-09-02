@@ -8,7 +8,7 @@ import { BoardView } from './BoardView'
 import { GroomView } from './GroomView'
 import { HomeView } from './HomeView'
 import { CaptureModal, CommandPalette } from './capture'
-import { saveCapture, type PaletteResult } from './ui'
+import { BTN_PRIMARY, saveCapture, type PaletteResult } from './ui'
 
 // Material Symbols glyph per routable view. Home reuses the freed `speed`
 // glyph — the icon font is a subset (main.css), so new ligatures render as
@@ -306,10 +306,7 @@ function App(): React.JSX.Element {
               <p className="leading-relaxed text-on-surface-variant">
                 Pick a repository — somni grooms your ideas into stories and runs them overnight.
               </p>
-              <button
-                className="rounded-lg bg-primary-container px-5 py-2.5 font-semibold text-on-primary-container transition-opacity hover:opacity-90"
-                onClick={() => void choose()}
-              >
+              <button className={BTN_PRIMARY} onClick={() => void choose()}>
                 Choose repo
               </button>
             </div>

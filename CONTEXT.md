@@ -15,8 +15,11 @@ somni speaks two vocabularies on purpose: **work items** use the industry's Jira
 - **Backlog** — the ordered first column: every captured Idea and every not-yet-groomed or not-yet-ready item, prioritized by the user. The Backlog is the inbox; there is no separate inbox.
 - **Grooming** — the interactive shaping of an item with the AI: the Interview sharpens intent into a Spec, then breaks it into Stories and Subtasks with blocked-by edges. Grooming is the only path to Ready. Entry at Epic altitude for big intents, or a single Story for small ones.
 - **Ready gate** — the hard rule that an item enters the pipeline only as a Story with an approved Spec and at least one Subtask. There is no bypass; the gate is what makes unattended runs safe.
-- **Status** — where an item stands, shown as the Board's columns: `Backlog → Grooming → Ready → In Progress → Needs Attention / Review → Done`.
-- **Board** — the kanban home view: one column per Status, cards are items. All planning activity starts here.
+- **Status** — where an item stands: `Backlog → Grooming → Ready → In Progress → Needs Attention / Review → Done`. Statuses are the truth; the Board's columns group them for display.
+- **Board** — the kanban work-item view: four columns grouping the Statuses — **Ideas** (Backlog + Grooming), **Ready**, **In Progress** (In Progress + Needs Attention), **Done** (Review + Done). Columns are presentation only; cards keep their Status, and a drop writes one Status per column (Done drops land in Review — Acceptance stays the only path to Done).
+- **Home** — the front door and default view: the Quick Start box, Suggestion chips, and the live Pipeline activity. Choosing a repo is Home's only ask when none is set.
+- **Quick Start** — the one-box golden path: describe a task on Home, Groom it seeded with that text, and **Apply & run** — the Story passes the Ready gate and is queued in one act. A deliberate act, like Add to pipeline; the gate never bends for it.
+- **Suggestion chips** — repo-derived task ideas on Home (TODO counts, recent commit subjects — never AI-generated), falling back to static examples. Clicking fills the Quick Start box; it never submits.
 - **Capture** — the friction-free act of writing (or dictating) an Idea into the Backlog from anywhere in the app. Capture never grooms, never runs — it only saves the thought.
 - **Acceptance** — the user's deliberate act, in the Product-Owner hat, that moves a green Story from Review to Done. Work is never Done by itself.
 - **Needs Attention** — where a Story lands when its run failed or its review stayed red after the bounded retries: parked for the user's ruling (re-run, re-groom, or drop).
@@ -43,7 +46,7 @@ somni speaks two vocabularies on purpose: **work items** use the industry's Jira
 - **Proposal** — AI-drafted Grooming output: the Spec, the Stories and Subtasks it breaks into, *and any new Roles they need*. Inert until Applied.
 - **Apply** — the single user-triggered act that writes a Proposal into items. Nothing about a Proposal touches disk before Apply; there is no other mutation path from Grooming.
 - **Refine** — an inline AI rewrite of one existing field (a Subtask prompt, a Role preamble) into a sharper version of itself; same Apply rule.
-- **Product Owner (PO) hat / Engineer hat** — the two working modes of the *same single user*. PO mode: capture, groom, accept. Engineer mode: full editing of definitions and settings. Modes are presentation only — same data, same person, no permissions.
+- **Product Owner (PO) hat / Engineer hat** — the two *conceptual* roles of the same single user: the PO hat captures, grooms and accepts; the Engineer hat edits definitions and settings. Since M23 the hats are prose only — the UI mode switch is gone, one view set serves both.
 
 - **Methodology** — the selectable engineering discipline of a target repo (with a global default) that governs *how* Grooming shapes work and *how* the pipeline implements and reviews it. A Methodology never changes what an item is: the Ready gate, Statuses, and the Interview → Proposal → Apply flow hold under every Methodology, and the repo's current Methodology governs every Run regardless of which one groomed the Story.
 

@@ -113,12 +113,12 @@ function RepoSection({ repo }: { repo: string }): React.JSX.Element {
 
 export function SettingsView({
   repo,
-  roles = [],
-  refresh = () => {}
+  roles,
+  refresh
 }: {
   repo: string | null
-  roles?: Role[]
-  refresh?: () => void
+  roles: Role[]
+  refresh: () => void
 }): React.JSX.Element {
   const [s, setS] = useState<Settings | null>(null)
   const [saved, setSaved] = useState(false)

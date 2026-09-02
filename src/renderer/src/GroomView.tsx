@@ -96,9 +96,14 @@ export function GroomView({
     if (loaded.current) return
     loaded.current = true
     void window.somni.loadChat(repo, slug).then((c) => {
+      // A seed means quick-start, and quick-start means a fresh groom: an
+      // abandoned _draft transcript must not swallow the typed text (#26).
+      if (seed && c.messages.length > 0) {
+        void window.somni.newChat(repo, slug).then(() => send(seed))
+        return
+      }
       setMessages(c.messages)
-      // Seed only a fresh transcript — reopening a groom must not re-send.
-      if (seed && c.messages.length === 0) void send(seed)
+      if (seed) void send(seed)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per slug
   }, [repo, slug])
@@ -175,7 +180,9 @@ export function GroomView({
         <ProposalPreview
           proposal={proposal}
           roles={roles}
-          applyLabel={applying ? 'Applying…' : applyLabel}
+          // An Epic Apply lands in Backlog and runs nothing — never promise
+          // "& run" on it (#26 story 8).
+          applyLabel={applying ? 'Applying…' : proposal.kind === 'epic' ? 'Apply' : applyLabel}
           disabled={applying}
           onApply={() => void apply()}
           onDismiss={() => setProposal(null)}

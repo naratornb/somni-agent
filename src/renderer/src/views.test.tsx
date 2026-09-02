@@ -205,7 +205,7 @@ const views: [string, React.JSX.Element][] = [
     />
   ],
   ['Roles', <RolesView key="ro" repo="/repo" roles={roles} refresh={() => {}} />],
-  ['Settings', <SettingsView key="s" repo="/repo" />],
+  ['Settings', <SettingsView key="s" repo="/repo" roles={roles} refresh={() => {}} />],
   ['Playground', <Playground key="pl" />],
   ['Groom', <GroomView key="g" repo="/repo" roles={roles} onApplied={() => {}} />],
   [
@@ -298,8 +298,8 @@ test('Board renders four grouped columns with grouped counts and empty copy', ()
       onGroom={() => {}}
     />
   )
-  for (const label of ['IDEAS', 'READY', 'RUNNING', 'DONE']) expect(empty).toContain(label)
-  for (const gone of ['BACKLOG', 'GROOMING', 'IN PROGRESS', 'NEEDS ATTENTION', 'REVIEW'])
+  for (const label of ['IDEAS', 'READY', 'IN PROGRESS', 'DONE']) expect(empty).toContain(label)
+  for (const gone of ['BACKLOG', 'GROOMING', 'NEEDS ATTENTION', 'REVIEW', 'RUNNING'])
     expect(empty).not.toContain(gone)
   expect(empty).toContain('Nothing yet — New Story to get started.')
   expect(empty).toContain('Nothing shipped yet.')
@@ -657,4 +657,21 @@ test('SettingsView with a repo renders the Roles section', () => {
   const html = renderToStaticMarkup(<SettingsView repo="/repo" roles={roles} refresh={() => {}} />)
   expect(html).toContain('Roles')
   expect(html).toContain('Developer')
+})
+
+// M23 #31: the auto-run path's promise — the Apply button reads "Apply & run"
+// when a run will start. Label plumbing is ProposalPreview's; GroomView guards
+// the Epic case (Epics land in Backlog and run nothing) before passing it.
+test('ProposalPreview renders a custom apply label', () => {
+  const html = renderToStaticMarkup(
+    <ProposalPreview
+      proposal={{ ...proposal, kind: 'story' as const, stories: [], tasks: workflow.tasks }}
+      roles={roles}
+      applyLabel="Apply & run"
+      disabled={false}
+      onApply={() => {}}
+      onDismiss={() => {}}
+    />
+  )
+  expect(html).toContain('Apply &amp; run')
 })

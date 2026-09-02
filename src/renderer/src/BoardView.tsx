@@ -55,11 +55,14 @@ const COLUMNS: {
     empty: 'No stories ready — groom one, then drag it here.'
   },
   {
-    key: 'running',
-    label: 'Running',
+    // "In Progress", not "Running": Running is a Run status, and the two
+    // vocabularies never mix (AGENTS.md). Needs Attention parks here too —
+    // the card's chip and red border carry the distinction.
+    key: 'progress',
+    label: 'In Progress',
     statuses: ['in-progress', 'needs-attention'],
     drop: 'in-progress',
-    empty: 'Nothing running.'
+    empty: 'Nothing in progress.'
   },
   {
     key: 'done',
