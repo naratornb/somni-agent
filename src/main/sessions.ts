@@ -1,0 +1,132 @@
+// Background work units (M25.5): the session manager. A Handoff sends one
+// grooming session into `working` — one Turn that finishes the interview alone
+// — and holds the rest `queued`. The queue is derived state; the frontmatter
+// written before each spawn is the truth (architecture.md §4).
+//
+// ponytail: own cap, own list — not the executor's drain loop. A work unit is
+// one Turn with no retries, review cycle or worktree, so the loop would be all
+// machinery and no policy.
+
+import { chatBusy, type ChatEvent } from './chat'
+import * as store from './store'
+
+// Not settings.concurrency: that budgets unattended coding runs, which cost
+// far more than one grooming Turn.
+export const WORK_UNIT_CAP = 3
+
+type Job = { repo: string; id: string; run: () => Promise<void>; emit: (ev: ChatEvent) => void }
+
+// '\n', not a NUL byte: a literal NUL in the source makes this file binary to
+// git, and no path or id can contain a newline either.
+const key = (repo: string, id: string): string => `${repo}\n${id}`
+const active = new Map<string, Job>()
+const queue: Job[] = []
+
+/** Sessions waiting for a slot, oldest first. The UI reads the order off the
+ *  persisted `lastActivity` stamp instead — this is main's own view, for tests
+ *  and for `interruptSessions`. */
+export const queuedIds = (): string[] => queue.map((j) => j.id)
+
+/**
+ * The user reclaimed a queued session by typing into it: its job must never
+ * run, or a second Turn would interleave the transcript later. Called from the
+ * send path — `startNext` re-checks anyway, this just frees the slot early.
+ */
+export function cancelQueued(repo: string, id: string): void {
+  const k = key(repo, id)
+  const at = queue.findIndex((j) => key(j.repo, j.id) === k)
+  if (at !== -1) queue.splice(at, 1)
+}
+
+export function handoff(
+  repo: string,
+  id: string,
+  job: Omit<Job, 'repo' | 'id'>
+): { ok: boolean; error?: string } {
+  // Its own chat turn is mid-flight: the user is still in the conversation, and
+  // two Turns on one session would interleave in the same transcript.
+  if (chatBusy(id)) return { ok: false, error: 'a chat turn is already in flight' }
+  const k = key(repo, id)
+  if (active.has(k) || queue.some((j) => key(j.repo, j.id) === k))
+    return { ok: false, error: 'this session is already working in the background' }
+  const full: Job = { repo, id, ...job }
+  if (active.size >= WORK_UNIT_CAP) {
+    transition(full, 'queued')
+    queue.push(full)
+  } else {
+    start(full)
+  }
+  return { ok: true }
+}
+
+function transition(job: Job, state: store.GroomState): void {
+  // lastActivity moves with every transition, so a queued session's stamp is
+  // when it joined the queue — the Sessions page reads FIFO order off it.
+  store.updateItem(job.repo, job.id, {
+    groomState: state,
+    lastActivity: new Date().toISOString()
+  }) // persisted BEFORE acting
+  job.emit({ slug: job.id, kind: 'state', state })
+}
+
+function start(job: Job): void {
+  try {
+    transition(job, 'working')
+  } catch {
+    return startNext() // item deleted while queued — the slot goes to the next
+  }
+  const k = key(job.repo, job.id)
+  active.set(k, job)
+  void job
+    .run()
+    .catch(() => {}) // the work unit parks its own failure in the transcript
+    .then(() => {
+      active.delete(k)
+      startNext()
+    })
+}
+
+/**
+ * A queued job is only still valid at dequeue time if nothing overtook it: the
+ * user may have typed into the session (which clears `groomState` and puts a
+ * chat turn in flight) while it waited. Main re-checks here, not just at
+ * enqueue — otherwise a reclaimed session gets a second, interleaving Turn.
+ */
+function claimable(job: Job): boolean {
+  if (chatBusy(job.id)) return false
+  const state = store.loadItems(job.repo).find((i) => i.id === job.id)?.groomState
+  return state === 'working' || state === 'queued'
+}
+
+function startNext(): void {
+  for (let next = queue.shift(); next; next = queue.shift()) if (claimable(next)) return start(next)
+}
+
+/**
+ * Quit while work units are in flight (M25.6): the app is about to abort those
+ * Turns, so every working/queued session is parked `interrupted` — synchronously,
+ * on the before-quit path, BEFORE the abort, because there is no "after" once
+ * the process is gone. The CLI session survives the kill and `--resume` picks
+ * the same conversation back up (design/research/…-cli-and-notifications.md),
+ * so Resume is a plain re-handoff.
+ *
+ * ponytail: quit-path only — no orphan scan, no mid-turn crash recovery. A hard
+ * crash leaves the session `working`; the user retypes or re-hands-off.
+ */
+export function interruptSessions(): void {
+  for (const job of [...active.values(), ...queue]) {
+    try {
+      store.updateItem(job.repo, job.id, { groomState: 'interrupted' })
+    } catch {
+      /* item deleted — nothing to park */
+    }
+  }
+  active.clear()
+  queue.length = 0
+}
+
+/** Test hook — the module-level queue outlives a single test otherwise. */
+export function resetSessions(): void {
+  active.clear()
+  queue.length = 0
+}

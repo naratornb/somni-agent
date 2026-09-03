@@ -1,23 +1,28 @@
-// Grooming (§7): the full-page grill interview, keyed by the item being groomed
-// or the reserved _draft key from scratch. Apply is a main-process call; this
-// view only renders and hands off.
+// Grooming (§7): the full-page grill interview, always keyed by the item being
+// groomed — every Groom is an Item from birth (M25.1). Apply is a main-process
+// call; this view only renders and hands off.
 import { useEffect, useRef, useState } from 'react'
 import type {
   ChatEvent,
   ChatMessage,
   ChatProposal,
   ChatQuestion,
+  GroomState,
   Item,
   Role
 } from '../../preload/index'
-import { MicButton, ProposalPreview, QuestionCard } from './chatShared'
+import { MicButton, ProposalPreview, QuestionCard, StreamingBubble } from './chatShared'
 import { appendText, BTN_GHOST, BTN_PRIMARY, BUBBLE_AI, BUBBLE_USER, ERROR_BANNER } from './ui'
 
 type Props = {
   repo: string
   roles: Role[]
-  // The item being groomed, or null to groom from scratch under DRAFT_KEY.
-  itemId?: string | null
+  // The item being groomed — created by the door before this view mounts.
+  itemId: string
+  // Its name at mount; the AI auto-title and manual rename update it in place.
+  itemName: string
+  // Its session state at mount (M25.5); transitions arrive as chat events.
+  groomState?: GroomState
   // Home quick-start (M23): sent as the first message when the transcript is
   // empty, so the Interview starts from what the user already typed.
   seed?: string
@@ -37,11 +42,15 @@ export function GroomView({
   repo,
   roles,
   itemId,
+  itemName,
+  groomState,
   seed,
   applyLabel = 'Apply',
   onApplied
 }: Props): React.JSX.Element {
-  const slug = itemId ?? window.somni.draftKey
+  const slug = itemId
+  const [name, setName] = useState(itemName)
+  const [state, setState] = useState<GroomState | null>(groomState ?? null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -53,7 +62,10 @@ export function GroomView({
   const loaded = useRef(false)
   const listRef = useRef<HTMLDivElement>(null)
 
-  const sending = streaming !== null
+  // A background work unit owns the session: the composer is closed until the
+  // draft lands (M25.5).
+  const background = state === 'working' || state === 'queued'
+  const sending = streaming !== null || background
 
   useEffect(() => {
     const off = window.somni.onChatEvent((ev: ChatEvent) => {
@@ -63,6 +75,8 @@ export function GroomView({
         setStreaming(null)
         setError(ev.message)
       }
+      if (ev.kind === 'title') setName(ev.name)
+      if (ev.kind === 'state') setState(ev.state)
       if (ev.kind === 'done') {
         setStreaming(null)
         setMessages((m) => [...m, ev.message])
@@ -84,6 +98,7 @@ export function GroomView({
     setLastUser(text)
     setMessages((m) => [...m, { role: 'user', text, ts: new Date().toISOString() }])
     setStreaming('')
+    setState(null) // main clears the session state on every send (M25.3)
     const res = await window.somni.sendChat(repo, slug, text)
     if (!res.ok) {
       setStreaming(null)
@@ -96,14 +111,14 @@ export function GroomView({
     if (loaded.current) return
     loaded.current = true
     void window.somni.loadChat(repo, slug).then((c) => {
-      // A seed means quick-start, and quick-start means a fresh groom: an
-      // abandoned _draft transcript must not swallow the typed text (#26).
-      if (seed && c.messages.length > 0) {
-        void window.somni.newChat(repo, slug).then(() => send(seed))
-        return
-      }
       setMessages(c.messages)
-      if (seed) void send(seed)
+      // A Turn still in flight (M25.2): main replays what it has streamed so
+      // far, so re-entering the view shows the partial reply, not an idle one.
+      if (c.busy) setStreaming(c.partial)
+      // The seed is the quick-start's first message. Each groom owns its own
+      // transcript now, so a fresh one is always empty — but never re-send into
+      // a transcript that already has turns.
+      if (seed && c.messages.length === 0) void send(seed)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per slug
   }, [repo, slug])
@@ -120,6 +135,14 @@ export function GroomView({
     onApplied(res.item)
   }
 
+  // Manual override of the AI auto-title. `prompt` matches the view's existing
+  // `confirm` idiom — no modal component for one string.
+  const rename = (): void => {
+    const next = prompt('Rename this groom', name)?.trim()
+    if (!next || next === name) return
+    void window.somni.renameItem(repo, itemId, next).then((i) => setName(i.name))
+  }
+
   const newGroom = async (): Promise<void> => {
     if (messages.length && !confirm('Start a new groom? The current transcript is discarded.'))
       return
@@ -132,6 +155,26 @@ export function GroomView({
     setInput('')
   }
 
+  const handoff = async (): Promise<void> => {
+    setError(null)
+    const res = await window.somni.handoffSession(repo, slug)
+    if (!res.ok) setError(res.error ?? 'handoff failed')
+  }
+
+  const resume = async (): Promise<void> => {
+    setError(null)
+    const res = await window.somni.resumeSession(repo, slug)
+    if (!res.ok) setError(res.error ?? 'resume failed')
+  }
+
+  // Dismissing the Proposal returns the session to plain conversation — the
+  // needs-review flag is main's, so clear it there too (M25.5).
+  const dismiss = (): void => {
+    setProposal(null)
+    setState(null)
+    void window.somni.reopenSession(repo, slug)
+  }
+
   const submit = (): void => {
     const text = input
     setInput('')
@@ -141,9 +184,12 @@ export function GroomView({
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-stack-gap">
       <div className="flex shrink-0 items-center gap-4 border-b border-border-subtle pb-4">
-        <h2 className="font-headline-md text-headline-md font-bold">
-          {itemId ? `Groom ${itemId}` : 'Groom'}
+        <h2 className="truncate font-headline-md text-headline-md font-bold">
+          {itemId} — {name}
         </h2>
+        <button className={BTN_GHOST} onClick={rename}>
+          Rename
+        </button>
         <button className={BTN_GHOST} onClick={newGroom} disabled={sending}>
           New groom
         </button>
@@ -159,11 +205,7 @@ export function GroomView({
             <div className={m.role === 'user' ? USER : AI}>{m.text}</div>
           </div>
         ))}
-        {streaming !== null && (
-          <div className="flex w-full">
-            <div className={AI}>{streaming + '▌'}</div>
-          </div>
-        )}
+        {streaming !== null && <StreamingBubble text={streaming} />}
         {question && !proposal && (
           <QuestionCard q={question} disabled={sending} onAnswer={(t) => void send(t)} />
         )}
@@ -185,8 +227,25 @@ export function GroomView({
           applyLabel={applying ? 'Applying…' : proposal.kind === 'epic' ? 'Apply' : applyLabel}
           disabled={applying}
           onApply={() => void apply()}
-          onDismiss={() => setProposal(null)}
+          onDismiss={dismiss}
         />
+      )}
+      {background && (
+        <p className="shrink-0 rounded-lg bg-surface-container px-4 py-3 text-on-surface-variant">
+          {state === 'working'
+            ? 'Drafting in the background — resolving the open questions and writing a Proposal. You can leave this session.'
+            : 'Queued — three sessions are already drafting; this one starts when a slot frees.'}
+        </p>
+      )}
+      {/* Quit interrupted the background draft (M25.6); resuming continues the
+          same conversation, so nothing said so far is lost. */}
+      {state === 'interrupted' && (
+        <p className="flex shrink-0 items-center gap-3 rounded-lg bg-surface-container px-4 py-3 text-on-surface-variant">
+          Interrupted when somni quit — the conversation is intact.
+          <button className={BTN_GHOST} onClick={() => void resume()}>
+            Resume
+          </button>
+        </p>
       )}
       <div className="flex shrink-0 items-end gap-2 border-t border-border-subtle pt-3">
         <textarea
@@ -206,13 +265,15 @@ export function GroomView({
           <button className={BTN_PRIMARY} disabled={sending || !input.trim()} onClick={submit}>
             Send
           </button>
-          {/* _draft is never blocked by a running pipeline (Decision 9). */}
           <button
             className={BTN_GHOST}
             onClick={() => void send(window.somni.proposeNow)}
             disabled={sending}
           >
             Propose Now
+          </button>
+          <button className={BTN_GHOST} onClick={() => void handoff()} disabled={sending}>
+            Draft in background
           </button>
           <MicButton
             disabled={sending}

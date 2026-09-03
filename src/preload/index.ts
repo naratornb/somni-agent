@@ -33,6 +33,7 @@ export type { IpcResult, RunDetails, RunRow } from '../main/repoIpc'
 export type { SkillsStatus } from '../main/skills'
 export type {
   Effort,
+  GroomState,
   Item,
   ItemKind,
   ItemStatus,
@@ -55,16 +56,12 @@ function on(channel: string, cb: (payload: unknown) => void): () => void {
   return () => ipcRenderer.removeListener(channel, listener)
 }
 
-// Reserved chat key for the one pre-Apply from-scratch groom (keep in sync with
-// DRAFT_KEY in src/main/chat.ts).
-export const DRAFT_KEY = '_draft'
 // The fixed Propose Now message (keep in sync with PROPOSE_NOW in chat.ts).
 export const PROPOSE_NOW =
   'Stop interviewing and propose the groomed result now, from my answers so far ' +
   'plus your own stated assumptions for anything still open.'
 
 const somni = {
-  draftKey: DRAFT_KEY,
   proposeNow: PROPOSE_NOW,
   runTask: (prompt: string): Promise<void> => ipcRenderer.invoke('task:run', prompt),
   onTaskEvent: (cb: (ev: unknown) => void): (() => void) => on('task:event', cb),
@@ -143,20 +140,41 @@ const somni = {
     ipcRenderer.invoke('role:delete', repo, slug),
   saveItem: (repo: string, item: Partial<Item> & { name: string }): Promise<Item> =>
     ipcRenderer.invoke('item:save', repo, item),
+  renameItem: (repo: string, id: string, name: string): Promise<Item> =>
+    ipcRenderer.invoke('item:rename', repo, id, name),
   deleteItem: (repo: string, id: string): Promise<void> =>
     ipcRenderer.invoke('item:delete', repo, id),
   // Refused (with a reason) unless the Ready gate passes — main is the authority.
   setItemStatus: (repo: string, id: string, status: ItemStatus): Promise<IpcResult> =>
     ipcRenderer.invoke('item:setStatus', repo, id, status),
-  loadChat: (repo: string, slug: string): Promise<{ messages: ChatMessage[]; busy: boolean }> =>
+  // Opens a from-scratch Groom: main creates the Item first (M25.1) and the
+  // conversation is keyed on its real id.
+  startGroom: (repo: string): Promise<Item> => ipcRenderer.invoke('groom:start', repo),
+  // Archived session → plain active conversation again (M25.3). The same clear
+  // backs dismissing a needs-review Proposal (M25.5).
+  reopenSession: (repo: string, id: string): Promise<Item> =>
+    ipcRenderer.invoke('session:reopen', repo, id),
+  // Draft this session in the background (M25.5) — refused mid-turn, queued
+  // when three work units are already running.
+  handoffSession: (repo: string, id: string): Promise<IpcResult> =>
+    ipcRenderer.invoke('session:handoff', repo, id),
+  // Pick an interrupted session back up (M25.6) — the same work-unit path,
+  // resuming the CLI conversation the quit cut short.
+  resumeSession: (repo: string, id: string): Promise<IpcResult> =>
+    ipcRenderer.invoke('session:resume', repo, id),
+  // `partial` is the reply streamed so far when `busy` — a Groom re-entered
+  // mid-Turn renders it under the streaming cursor (M25.2).
+  loadChat: (
+    repo: string,
+    slug: string
+  ): Promise<{ messages: ChatMessage[]; busy: boolean; partial: string }> =>
     ipcRenderer.invoke('chat:load', repo, slug),
   newChat: (repo: string, slug: string): Promise<void> =>
     ipcRenderer.invoke('chat:new', repo, slug),
   sendChat: (repo: string, slug: string, text: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('chat:send', repo, slug, text),
-  // Apply — the only write out of a groom. `key` is DRAFT_KEY (creates the
-  // item(s), renames the transcript) or the groomed item's id (converted in
-  // place, keeping its id).
+  // Apply — the only write out of a groom. `key` is the groomed item's id; it
+  // converts in place, keeping its id, and child Stories are created beside it.
   applyProposal: (
     repo: string,
     key: string,
@@ -164,7 +182,10 @@ const somni = {
   ): Promise<{ ok: true; item: Item } | { ok: false; error: string }> =>
     ipcRenderer.invoke('proposal:apply', repo, key, proposal),
   onChatEvent: (cb: (ev: ChatEvent) => void): (() => void) =>
-    on('chat:event', (p) => cb(p as ChatEvent))
+    on('chat:event', (p) => cb(p as ChatEvent)),
+  // A clicked native notification (M25.6): focus the window and open that Groom.
+  onOpenSession: (cb: (slug: string) => void): (() => void) =>
+    on('session:open', (p) => cb(p as string))
 }
 
 export type SomniApi = typeof somni

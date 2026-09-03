@@ -1,11 +1,12 @@
-import { app, shell, BrowserWindow, ipcMain, powerSaveBlocker } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Notification, powerSaveBlocker } from 'electron'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { shellPath } from './env'
 import { killTask, wireTaskIpc } from './turn'
-import { killChats } from './chat'
+import { killChats, setNotifier } from './chat'
+import { interruptSessions } from './sessions'
 import { patchSettings, readSettings, repoSettings, wireRepoIpc } from './repoIpc'
 import { wireVoiceIpc } from './voice'
 import { wireSkillsIpc } from './skills'
@@ -95,6 +96,29 @@ app.whenReady().then(() => {
   wireSkillsIpc((repo) => repoSettings(repo).methodology)
 
   const wc = (): Electron.WebContents | undefined => BrowserWindow.getAllWindows()[0]?.webContents
+
+  // The only place Electron's Notification is touched (M25.6) — main decides
+  // when to notify, this decides how.
+  // Caveats from design/research/grooming-sessions-cli-and-notifications.md:
+  // macOS notifications silently show nothing in unsigned dev builds (the
+  // packaged, signed app is the real test — documented, not fought), and
+  // `isSupported()` can be false, in which case we simply don't notify.
+  setNotifier({
+    isFocused: () => BrowserWindow.getAllWindows().some((w) => w.isFocused()),
+    notify: ({ title, body, slug }) => {
+      if (!Notification.isSupported()) return
+      const n = new Notification({ title, body })
+      n.on('click', () => {
+        const win = BrowserWindow.getAllWindows()[0]
+        if (!win) return
+        if (win.isMinimized()) win.restore()
+        win.show()
+        win.focus()
+        win.webContents.send('session:open', slug)
+      })
+      n.show()
+    }
+  })
 
   // Keep the Mac awake while a drain has work, and let it sleep while a
   // keep-running drain idles (Decision 9; lid-closed sleep still needs user
@@ -212,6 +236,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  interruptSessions() // park working/queued sessions BEFORE their Turns are aborted
   killTask()
   killChats()
 })

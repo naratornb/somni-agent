@@ -1,7 +1,7 @@
 // Shared UI atoms — M10-ui.md §0. Class strings, not components: the design
 // system is Tailwind utilities, and a wrapper component per button would hide
 // the exact strings the mocks are the source of truth for.
-import type { Item } from '../../preload/index'
+import type { GroomState, Item } from '../../preload/index'
 
 const DISABLED = 'disabled:opacity-40 disabled:pointer-events-none'
 
@@ -97,6 +97,123 @@ export const reorderBacklog = (order: string[], dragId: string, targetId: string
   const without = order.filter((id) => id !== dragId)
   const at = without.indexOf(targetId)
   return at === -1 ? [...without, dragId] : [...without.slice(0, at), dragId, ...without.slice(at)]
+}
+
+// ── Sessions page (M25.3) ────────────────────────────────────────────────────
+// Grooming sessions are Items with session state in their frontmatter; the page
+// is a pure projection of the repo:load payload, so no session index exists.
+
+// Session-state chip, in the STATUS_CHIP formula but on the session vocabulary
+// — a session state is never an Item Status, so it never reuses those labels.
+// 'active' is the absent-state fallback: a plain conversation with no session
+// state of its own.
+export type SessionState = GroomState | 'active'
+export const SESSION_CHIP: Record<SessionState, { label: string; cls: string }> = {
+  'needs-review': { label: 'Needs review', cls: STATUS_CHIP.Running },
+  working: { label: 'Working', cls: STATUS_CHIP.Running },
+  queued: { label: 'Queued', cls: STATUS_CHIP.Queued },
+  interrupted: { label: 'Interrupted', cls: STATUS_CHIP.Cancelled },
+  done: { label: 'Done', cls: STATUS_CHIP.Completed },
+  archived: { label: 'Archived', cls: STATUS_CHIP.Skipped },
+  active: { label: 'Active', cls: STATUS_CHIP.Queued }
+}
+export const sessionChip = (state?: GroomState): { label: string; cls: string } => {
+  const c = SESSION_CHIP[state ?? 'active'] ?? SESSION_CHIP.active
+  return { label: c.label, cls: `${STATUS_CHIP_BASE} ${c.cls}` }
+}
+
+export type SessionSort = 'activity' | 'created' | 'title'
+export type SessionGroup = { key: string; label: string; items: Item[] }
+
+/** Human date for a session timestamp — '—' when it has never happened. */
+export const stamp = (iso: string): string => (iso ? new Date(iso).toLocaleString() : '—')
+
+/** Last time anything happened in the session — the default sort key. */
+export const sessionActivity = (i: Item): string => i.lastActivity || i.created || ''
+
+// `interrupted` is its own group (M25.6): it wants a Resume, not a review.
+const GROUPS: { key: string; label: string; states: (GroomState | undefined)[] }[] = [
+  { key: 'needs-review', label: 'Needs your review', states: ['needs-review'] },
+  { key: 'interrupted', label: 'Interrupted', states: ['interrupted'] },
+  { key: 'working', label: 'Working', states: ['working'] },
+  { key: 'queued', label: 'Queued', states: ['queued'] },
+  { key: 'talking', label: 'In conversation', states: [undefined] },
+  { key: 'done', label: 'Recently done', states: ['done'] },
+  { key: 'archived', label: 'Archived', states: ['archived'] }
+]
+
+/** An item is a grooming session once it is being groomed or carries a state. */
+export const isSession = (i: Item): boolean => i.status === 'grooming' || i.groomState != null
+
+/**
+ * The Sessions page's grouped, filtered, sorted rows. Pure so the ordering and
+ * the empty groups (which still render, with their heading) are testable.
+ */
+export const sessionGroups = (
+  items: Item[],
+  opts: {
+    sort?: SessionSort
+    query?: string
+    kind?: string
+    state?: string
+    archived?: boolean
+  } = {}
+): SessionGroup[] => {
+  const q = (opts.query ?? '').trim().toLowerCase()
+  const matches = items.filter(
+    (i) =>
+      isSession(i) &&
+      (!q || i.name.toLowerCase().includes(q) || i.id.toLowerCase().includes(q)) &&
+      (!opts.kind || i.kind === opts.kind) &&
+      (!opts.state || (i.groomState ?? 'active') === opts.state)
+  )
+  const sorted = [...matches].sort((a, b) =>
+    opts.sort === 'title'
+      ? a.name.localeCompare(b.name)
+      : opts.sort === 'created'
+        ? (b.created || '').localeCompare(a.created || '')
+        : sessionActivity(b).localeCompare(sessionActivity(a))
+  )
+  return GROUPS.filter(
+    (g) =>
+      (g.key !== 'archived' || opts.archived) &&
+      // A state filter shows that one group, not six empty headings.
+      (!opts.state ||
+        g.states.includes(opts.state === 'active' ? undefined : (opts.state as GroomState)))
+  ).map((g) => {
+    const items = sorted.filter((i) => g.states.includes(i.groomState))
+    // The queue is served FIFO, so it reads oldest-first whatever the sort —
+    // every other group is a worklist and keeps the chosen ordering.
+    if (g.key === 'queued')
+      items.sort((a, b) => sessionActivity(a).localeCompare(sessionActivity(b)))
+    return { key: g.key, label: g.label, items }
+  })
+}
+
+// ── Home session rail (M25.4) ────────────────────────────────────────────────
+
+const RAIL_RANK = ['needs-review', 'interrupted', 'working', 'queued']
+export const RAIL_COMPACT_CAP = 6
+
+/**
+ * The Home rail: the most recently active non-archived session gets the head
+ * card, the rest are compact rows ordered needs-review → working → queued →
+ * everything else by last activity. `overflow` is what the cap hid.
+ */
+export const railOrder = (
+  items: Item[],
+  cap = RAIL_COMPACT_CAP
+): { focused?: Item; compact: Item[]; overflow: number } => {
+  const live = items
+    .filter((i) => isSession(i) && i.groomState !== 'archived')
+    .sort((a, b) => sessionActivity(b).localeCompare(sessionActivity(a)))
+  const [focused, ...rest] = live
+  const rank = (i: Item): number => {
+    const n = RAIL_RANK.indexOf(i.groomState ?? '')
+    return n === -1 ? RAIL_RANK.length : n
+  }
+  const ordered = rest.sort((a, b) => rank(a) - rank(b)) // stable: ties keep activity order
+  return { focused, compact: ordered.slice(0, cap), overflow: Math.max(0, ordered.length - cap) }
 }
 
 export type PaletteResult =

@@ -5,11 +5,13 @@ import {
   applyProposal,
   ChatEvent,
   ChatProposal,
-  DRAFT_KEY,
   loadChat,
   newChat,
-  sendChat
+  sendChat,
+  startGroom,
+  workUnitTurn
 } from './chat'
+import { handoff } from './sessions'
 import { isRunning, loadRuns, RunState, wakeDrain } from './executor'
 import { lockedGit } from './git'
 import { diffFiles, RunStats, runStats } from './report'
@@ -89,8 +91,33 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
 
   ipcMain.handle('repo:load', (_e, repo: string) => {
     store.ensureSomni(repo)
+    // Done sessions age out here rather than on a timer (M25.3).
+    store.archiveStaleSessions(repo)
     return store.loadRepo(repo)
   })
+
+  // Back to a plain active conversation: reopening an archived session (M25.3)
+  // and dismissing a needs-review Proposal (M25.5) are the same clear.
+  ipcMain.handle('session:reopen', (_e, repo: string, id: string) => store.reopenSession(repo, id))
+
+  // Handoff (M25.5): draft this session in the background. The session manager
+  // persists working/queued before anything spawns and caps concurrency at 3.
+  const startWorkUnit = (repo: string, id: string): IpcResult => {
+    if (isRunning(id)) return { ok: false, error: 'this story is currently running' }
+    const settings = repoSettings(repo)
+    const roleSlugs = store.loadRepo(repo).roles.map((r) => r.slug)
+    const emit = (ev: ChatEvent): void =>
+      BrowserWindow.getAllWindows()[0]?.webContents.send('chat:event', ev)
+    return handoff(repo, id, {
+      emit,
+      run: () => workUnitTurn(repo, id, settings, roleSlugs, emit)
+    })
+  }
+  ipcMain.handle('session:handoff', (_e, repo: string, id: string) => startWorkUnit(repo, id))
+  // Resume an interrupted session (M25.6): the same work-unit path. The CLI
+  // session outlived the quit, so `--resume` continues the same conversation —
+  // ponytail: no separate resume machinery, a re-handoff *is* the resume.
+  ipcMain.handle('session:resume', (_e, repo: string, id: string) => startWorkUnit(repo, id))
 
   // Home quick-start chips (M23): cheap local git signals, no AI calls. [] on
   // any failure — the renderer owns the static fallback.
@@ -141,6 +168,10 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
   })
 
   // Item CRUD (§4.1). The Backlog column's order is a bare id array.
+  // Manual rename from the Groom header (M25.1) — name + file slug only.
+  ipcMain.handle('item:rename', (_e, repo: string, id: string, name: string) =>
+    store.renameItem(repo, id, name)
+  )
   ipcMain.handle('item:save', (_e, repo: string, item: store.Item) => {
     const created = !item.id
     const saved = store.saveItem(repo, item)
@@ -245,11 +276,12 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
   // it, and it happens in main so definitions never round-trip the renderer.
   ipcMain.handle('chat:load', (_e, repo: string, slug: string) => loadChat(repo, slug))
   ipcMain.handle('chat:new', (_e, repo: string, slug: string) => newChat(repo, slug))
+  // Every Groom is an Item from birth (M25.1): the door creates it, main-side.
+  ipcMain.handle('groom:start', (_e, repo: string) => startGroom(repo))
   ipcMain.handle('chat:send', (_e, repo: string, slug: string, text: string) => {
-    // Only a story currently executing is refused; a from-scratch groom and
-    // unrelated items stay usable during a pipeline (Decision 9).
-    if (slug !== DRAFT_KEY && isRunning(slug))
-      return { ok: false, error: 'this story is currently running' }
+    // Only a story currently executing is refused; a fresh groom and unrelated
+    // items stay usable during a pipeline (Decision 9).
+    if (isRunning(slug)) return { ok: false, error: 'this story is currently running' }
     const settings = repoSettings(repo)
     const roleSlugs = store.loadRepo(repo).roles.map((r) => r.slug)
     return sendChat(repo, slug, text, settings, roleSlugs, (ev: ChatEvent) =>

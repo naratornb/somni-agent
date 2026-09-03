@@ -16,16 +16,29 @@ import { StoryPanel } from './StoryPanel'
 import { Playground } from './Playground'
 import { RolesView } from './RolesView'
 import { RunDetailsPanel, RunsView } from './RunsView'
+import { SessionsView } from './SessionsView'
 import { SettingsView } from './SettingsView'
-import { MicButton, ProposalPreview, QuestionCard, RefineControl } from './chatShared'
+import {
+  MicButton,
+  ProposalPreview,
+  QuestionCard,
+  RefineControl,
+  StreamingBubble
+} from './chatShared'
 import { CaptureModal, CommandPalette, QuickAdd } from './capture'
-import { captureItem, paletteResults, reorderBacklog, saveCapture } from './ui'
+import {
+  captureItem,
+  paletteResults,
+  railOrder,
+  reorderBacklog,
+  saveCapture,
+  sessionGroups
+} from './ui'
 
-// Every somni.* call is a noop; draftKey/proposeNow are read during render.
-const somni = new Proxy(
-  { draftKey: '_draft', proposeNow: 'PROPOSE_NOW' } as Record<string, unknown>,
-  { get: (t, k) => (k in t ? t[k as string] : () => Promise.resolve(undefined)) }
-)
+// Every somni.* call is a noop; proposeNow is read during render.
+const somni = new Proxy({ proposeNow: 'PROPOSE_NOW' } as Record<string, unknown>, {
+  get: (t, k) => (k in t ? t[k as string] : () => Promise.resolve(undefined))
+})
 Object.assign(globalThis, { window: { somni } })
 
 const roles = [{ slug: 'dev', name: 'Developer', preamble: 'You write code.' }]
@@ -207,10 +220,16 @@ const views: [string, React.JSX.Element][] = [
   ['Roles', <RolesView key="ro" repo="/repo" roles={roles} refresh={() => {}} />],
   ['Settings', <SettingsView key="s" repo="/repo" roles={roles} refresh={() => {}} />],
   ['Playground', <Playground key="pl" />],
-  ['Groom', <GroomView key="g" repo="/repo" roles={roles} onApplied={() => {}} />],
   [
-    'GroomView on an item',
-    <GroomView key="gi" repo="/repo" roles={roles} itemId="SOM-1" onApplied={() => {}} />
+    'Groom',
+    <GroomView
+      key="g"
+      repo="/repo"
+      roles={roles}
+      itemId="SOM-1"
+      itemName="New groom"
+      onApplied={() => {}}
+    />
   ],
   [
     'QuestionCard',
@@ -237,6 +256,7 @@ const views: [string, React.JSX.Element][] = [
     <RefineControl key="rc" repo="/repo" kind="task" text="Add hello" onApply={() => {}} />
   ],
   ['MicButton', <MicButton key="mb" onText={() => {}} />],
+  ['StreamingBubble', <StreamingBubble key="sb" text="half a reply" />],
   [
     'CaptureModal',
     <CaptureModal key="cm" repo="/repo" onClose={() => {}} onGroom={() => {}} onSaved={() => {}} />
@@ -261,6 +281,15 @@ test.each(views)('%s renders', (_name, el) => {
 // the accepted state — SSR never runs effects, so this is the only state the
 // static-markup harness can ever observe for MicButton. Assert it for real
 // (disabled + the "…" label), not just "rendered something".
+// M25.2: a Groom re-entered mid-Turn must look alive. Before the first token
+// the busy bubble says so in words; once text is streaming it carries the cursor.
+test('StreamingBubble shows the thinking state empty and the cursor once text arrives', () => {
+  expect(renderToStaticMarkup(<StreamingBubble text="" />)).toContain('Thinking')
+  const streaming = renderToStaticMarkup(<StreamingBubble text="half a reply" />)
+  expect(streaming).toContain('half a reply')
+  expect(streaming).toContain('\u258c')
+})
+
 test('MicButton renders disabled with the checking placeholder before voice:status resolves', () => {
   const html = renderToStaticMarkup(<MicButton onText={() => {}} />)
   expect(html).toContain('disabled=""')
@@ -281,7 +310,7 @@ test('MicButton stays enabled in the no-binary state', () => {
 // is what the body shows.
 test('App nav lists exactly the destinations; retired entries and the mode toggle are gone', () => {
   const html = renderToStaticMarkup(<App />)
-  for (const v of ['Home', 'Board', 'Runs', 'Settings', 'Playground']) {
+  for (const v of ['Home', 'Board', 'Sessions', 'Runs', 'Settings', 'Playground']) {
     expect(html).toContain(`>${v}</button>`)
   }
   for (const gone of ['>Groom</button>', '>Pipeline</button>', '>Roles</button>', '>Engineer<']) {
@@ -699,4 +728,249 @@ test('HomeView renders a mic beside the quick-start box', () => {
 test('QuickAdd renders its mic without requiring field focus', () => {
   const html = renderToStaticMarkup(<QuickAdd repo="/repo" refresh={() => {}} />)
   expect(html).toContain('material-symbols-outlined text-[16px]">mic')
+})
+
+// M25.3: the Sessions page. Sessions are Items with session state in
+// frontmatter — the page is a pure projection of the loaded items.
+const sessions: Item[] = [
+  {
+    id: 'SOM-10',
+    slug: 'a',
+    kind: 'idea',
+    status: 'grooming',
+    name: 'Alpha talk',
+    spec: '',
+    created: '2026-09-01T00:00:00.000Z',
+    lastActivity: '2026-09-03T10:00:00.000Z',
+    tasks: []
+  },
+  {
+    id: 'SOM-11',
+    slug: 'b',
+    kind: 'story',
+    status: 'grooming',
+    name: 'Beta review',
+    spec: '',
+    created: '2026-09-02T00:00:00.000Z',
+    lastActivity: '2026-09-03T12:00:00.000Z',
+    groomState: 'needs-review',
+    tasks: []
+  },
+  {
+    id: 'SOM-12',
+    slug: 'c',
+    kind: 'story',
+    status: 'ready',
+    name: 'Gamma applied',
+    spec: '',
+    created: '2026-08-01T00:00:00.000Z',
+    groomState: 'done',
+    doneAt: '2026-09-02T00:00:00.000Z',
+    tasks: []
+  },
+  {
+    id: 'SOM-13',
+    slug: 'd',
+    kind: 'story',
+    status: 'ready',
+    name: 'Delta old',
+    spec: '',
+    created: '2026-07-01T00:00:00.000Z',
+    groomState: 'archived',
+    tasks: []
+  }
+]
+
+test('sessionGroups groups, hides archived, sorts and filters', () => {
+  const groups = sessionGroups(sessions)
+  expect(groups.map((g) => g.key)).toEqual([
+    'needs-review',
+    'interrupted', // M25.6: its own group — it wants a Resume, not a review
+    'working',
+    'queued',
+    'talking',
+    'done'
+  ])
+  expect(groups[0].items.map((i) => i.id)).toEqual(['SOM-11'])
+  expect(groups[2].items).toEqual([])
+  expect(groups[4].items.map((i) => i.id)).toEqual(['SOM-10'])
+  expect(groups[5].items.map((i) => i.id)).toEqual(['SOM-12'])
+  // only grooming/stateful items are sessions — the Board fixture has one
+  expect(sessionGroups(items).flatMap((g) => g.items.map((i) => i.id))).toEqual(['SOM-2'])
+
+  const withArchived = sessionGroups(sessions, { archived: true })
+  expect(withArchived.at(-1)).toMatchObject({ key: 'archived' })
+  expect(withArchived.at(-1)!.items.map((i) => i.id)).toEqual(['SOM-13'])
+
+  // default sort is last activity (falling back to created), newest first
+  const all = (opts = {}): string[] =>
+    sessionGroups([...sessions].reverse(), { archived: true, ...opts }).flatMap((g) =>
+      g.items.map((i) => i.id)
+    )
+  expect(all({ sort: 'title' })).toEqual(['SOM-11', 'SOM-10', 'SOM-12', 'SOM-13'])
+  expect(all({ query: 'beta' })).toEqual(['SOM-11'])
+  expect(all({ query: 'som-12' })).toEqual(['SOM-12'])
+  expect(all({ kind: 'idea' })).toEqual(['SOM-10'])
+  expect(all({ kind: 'story' })).toEqual(['SOM-11', 'SOM-12', 'SOM-13'])
+})
+
+// Issue #41: the state filter narrows to that one group, headings and all.
+test('sessionGroups filters by session state', () => {
+  const only = (state: string): string[] =>
+    sessionGroups(sessions, { state, archived: true }).flatMap((g) => g.items.map((i) => i.id))
+  expect(sessionGroups(sessions, { state: 'done' }).map((g) => g.key)).toEqual(['done'])
+  expect(only('done')).toEqual(['SOM-12'])
+  expect(only('needs-review')).toEqual(['SOM-11'])
+  expect(only('archived')).toEqual(['SOM-13'])
+  expect(only('active')).toEqual(['SOM-10']) // no state = plain conversation
+  expect(only('working')).toEqual([])
+})
+
+// Issue #43: the queue is served oldest-first, so it must read that way — the
+// other groups stay newest-first worklists.
+test('sessionGroups orders the queued group FIFO', () => {
+  const queued = (id: string, lastActivity: string): Item => ({
+    ...sessions[0],
+    id,
+    groomState: 'queued',
+    lastActivity
+  })
+  const rows = sessionGroups([
+    queued('SOM-3', '2026-09-03T03:00:00.000Z'),
+    queued('SOM-1', '2026-09-03T01:00:00.000Z'),
+    queued('SOM-2', '2026-09-03T02:00:00.000Z')
+  ])
+  expect(rows.find((g) => g.key === 'queued')!.items.map((i) => i.id)).toEqual([
+    'SOM-1',
+    'SOM-2',
+    'SOM-3'
+  ])
+  // ...and the recency order elsewhere is untouched.
+  expect(
+    sessionGroups(sessions)
+      .find((g) => g.key === 'talking')!
+      .items.map((i) => i.id)
+  ).toEqual(['SOM-10'])
+})
+
+test('SessionsView renders every group heading, its rows and the empty state', () => {
+  const html = renderToStaticMarkup(
+    <SessionsView repo="/repo" items={sessions} onOpen={() => {}} refresh={() => {}} />
+  )
+  for (const label of [
+    'Needs your review',
+    'Working',
+    'Queued',
+    'In conversation',
+    'Recently done'
+  ])
+    expect(html).toContain(label)
+  expect(html).toContain('Beta review')
+  expect(html).toContain('SOM-11')
+  expect(html).toContain('Needs review')
+  expect(html).toContain('Nothing here.') // Working/Queued are empty for now
+  expect(html).not.toContain('Delta old') // archived is behind the toggle
+
+  const empty = renderToStaticMarkup(
+    <SessionsView repo="/repo" items={[]} onOpen={() => {}} refresh={() => {}} />
+  )
+  expect(empty).toContain('No grooming sessions yet for this repo.')
+})
+
+// M25.6: quit parked this session — the Sessions row and the Groom state line
+// both offer the Resume that picks the same conversation back up.
+test('interrupted sessions get their own group and a Resume affordance', () => {
+  const interrupted: Item = { ...sessions[1], id: 'SOM-14', name: 'Cut short' }
+  interrupted.groomState = 'interrupted'
+  const html = renderToStaticMarkup(
+    <SessionsView
+      repo="/repo"
+      items={[...sessions, interrupted]}
+      onOpen={() => {}}
+      refresh={() => {}}
+    />
+  )
+  expect(html).toContain('Interrupted')
+  expect(html).toContain('Cut short')
+  expect(html).toContain('Resume')
+
+  const groom = renderToStaticMarkup(
+    <GroomView
+      repo="/repo"
+      roles={[]}
+      itemId="SOM-14"
+      itemName="Cut short"
+      groomState="interrupted"
+      onApplied={() => {}}
+    />
+  )
+  expect(groom).toContain('Interrupted when somni quit')
+  expect(groom).toContain('Resume')
+})
+
+// M25.4: the Home rail. railOrder picks the focused session by last activity
+// and ranks the rest by what they want from the user.
+test('railOrder focuses the freshest session and ranks the rest', () => {
+  const r = railOrder(sessions)
+  expect(r.focused?.id).toBe('SOM-11') // newest activity, needs review
+  expect(r.compact.map((i) => i.id)).toEqual(['SOM-10', 'SOM-12']) // archived excluded
+  expect(r.overflow).toBe(0)
+  expect(railOrder([]).focused).toBeUndefined()
+
+  // needs-review/working/queued float above plain conversations, and the cap bites
+  const many: Item[] = Array.from({ length: 9 }, (_, n) => ({
+    ...sessions[0],
+    id: `SOM-${100 + n}`,
+    groomState: n === 8 ? 'working' : undefined,
+    lastActivity: `2026-09-0${9 - Math.min(n, 8)}T00:00:00.000Z`
+  }))
+  const big = railOrder(many)
+  expect(big.focused?.id).toBe('SOM-100')
+  expect(big.compact).toHaveLength(6)
+  expect(big.compact[0].id).toBe('SOM-108') // working outranks the chatter
+  expect(big.overflow).toBe(2)
+})
+
+test('HomeView renders the session rail, capped, and omits it when empty', () => {
+  const html = renderToStaticMarkup(
+    <HomeView repo="/repo" items={sessions} onStart={() => {}}>
+      <p>ACTIVITY</p>
+    </HomeView>
+  )
+  expect(html).toContain('Beta review') // focused card
+  expect(html).toContain('Review') // needs-review affordance
+  expect(html).toContain('Alpha talk') // compact row
+  expect(html).not.toContain('Delta old') // archived never reaches the rail
+
+  const bare = renderToStaticMarkup(
+    <HomeView repo="/repo" items={[]} onStart={() => {}}>
+      <p>ACTIVITY</p>
+    </HomeView>
+  )
+  expect(bare).not.toContain('Sessions')
+})
+
+// M25.5: a session handed off to a background work unit closes its composer and
+// says why; the queued case names the cap.
+test('GroomView renders the working and queued state lines', () => {
+  const view = (groomState: 'working' | 'queued'): string =>
+    renderToStaticMarkup(
+      <GroomView
+        repo="/repo"
+        roles={roles}
+        itemId="SOM-1"
+        itemName="Search is slow"
+        groomState={groomState}
+        onApplied={() => {}}
+      />
+    )
+  expect(view('working')).toContain('Drafting in the background')
+  expect(view('queued')).toContain('Queued')
+  expect(view('working')).toContain('disabled')
+  // The affordance itself is always present in a plain conversation.
+  expect(
+    renderToStaticMarkup(
+      <GroomView repo="/repo" roles={roles} itemId="SOM-1" itemName="x" onApplied={() => {}} />
+    )
+  ).toContain('Draft in background')
 })

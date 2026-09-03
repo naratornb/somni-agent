@@ -4,6 +4,7 @@ import type { DrainState, RepoData, RunState, SkillsStatus } from '../../preload
 import { Playground } from './Playground'
 import { LogLine, PipelineView } from './PipelineView'
 import { RunsView } from './RunsView'
+import { SessionsView } from './SessionsView'
 import { SettingsView } from './SettingsView'
 import { BoardView } from './BoardView'
 import { GroomView } from './GroomView'
@@ -17,6 +18,9 @@ import { BTN_PRIMARY, saveCapture, type PaletteResult } from './ui'
 const VIEWS = {
   Home: 'speed',
   Board: 'account_tree',
+  // Sessions and Groom share the chat glyph — Groom is not a nav destination,
+  // so nothing is ambiguous and the icon subset stays as it is.
+  Sessions: 'chat_bubble',
   Groom: 'chat_bubble',
   Runs: 'history',
   Settings: 'settings',
@@ -24,9 +28,9 @@ const VIEWS = {
 } as const
 type View = keyof typeof VIEWS
 
-// The four destinations (M23). Groom is a flow step, not a place; Playground
-// is a dev surface only.
-const NAV: View[] = ['Home', 'Board', 'Runs', 'Settings']
+// The nav destinations (M23, + Sessions in M25.3). Groom is a flow step, not a
+// place; Playground is a dev surface only.
+const NAV: View[] = ['Home', 'Board', 'Sessions', 'Runs', 'Settings']
 if (import.meta.env.DEV) NAV.push('Playground')
 
 const timeAgo = (iso: string): string => {
@@ -38,8 +42,8 @@ function App(): React.JSX.Element {
   const [repo, setRepo] = useState<string | null>(null)
   const [data, setData] = useState<RepoData>({ roles: [], items: [], backlog: [] })
   const [view, setView] = useState<View>('Home')
-  // Which item the Groom view is grooming; null = from scratch (_draft).
-  const [groomId, setGroomId] = useState<string | null>(null)
+  // The item the Groom view is grooming — every door creates it first (M25.1).
+  const [groom, setGroom] = useState<{ id: string; name: string } | null>(null)
   // Home quick-start (M23): the typed task seeds the groom, and Apply of a
   // Ready story auto-queues it. Board/Capture grooms never set these.
   const [groomSeed, setGroomSeed] = useState<string | null>(null)
@@ -63,6 +67,19 @@ function App(): React.JSX.Element {
   // Dismissal is per-session, like the skills banner.
   const [runnerMissing, setRunnerMissing] = useState<string | null>(null)
   const [runnerHidden, setRunnerHidden] = useState(false)
+  // A Groom that finished while the user was elsewhere (M25.2).
+  // The finished Groom to announce, and whether a background work unit did it.
+  const [groomDone, setGroomDone] = useState<{ slug: string; workUnit: boolean } | null>(null)
+
+  // Every door into a Groom (Board, Sessions, Home, Capture, the toast, a
+  // clicked notification) opens it the same way: plain conversation, no seed,
+  // no auto-run. Quick-start is the one exception and sets those itself.
+  const openGroom = useCallback((item: { id: string; name: string }): void => {
+    setGroom({ id: item.id, name: item.name })
+    setGroomSeed(null)
+    setAutoRun(false)
+    setView('Groom')
+  }, [])
 
   const refresh = useCallback(
     (path = repo): void => {
@@ -103,6 +120,34 @@ function App(): React.JSX.Element {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, [])
+
+  // Chat events are global (M25.2): a Turn that finishes for a Groom the user
+  // isn't looking at announces itself here. GroomView keeps its own listener
+  // for the open session — these two never render the same thing.
+  useEffect(() => {
+    return window.somni.onChatEvent((ev) => {
+      // A session transition (M25.5): Sessions/Home are projections of the repo
+      // load, so a refresh is the whole re-render.
+      if (ev.kind === 'state') return void refresh()
+      if (ev.kind !== 'done') return
+      if (view === 'Groom' && groom?.id === ev.slug) return
+      setGroomDone({ slug: ev.slug, workUnit: !!ev.workUnit })
+    })
+  }, [view, groom?.id, refresh])
+
+  // A clicked native notification (M25.6): the window is already focused by
+  // main — this is the navigation half.
+  useEffect(() => {
+    return window.somni.onOpenSession((slug) => {
+      openGroom({ id: slug, name: data.items.find((i) => i.id === slug)?.name ?? slug })
+    })
+  }, [data.items, openGroom])
+
+  useEffect(() => {
+    if (!groomDone) return
+    const t = setTimeout(() => setGroomDone(null), 8000)
+    return () => clearTimeout(t)
+  }, [groomDone])
 
   // Cmd+N / Cmd+K fire regardless of focus — the overlays guard themselves.
   // No OS-level global shortcut (deferred to Settings).
@@ -175,10 +220,13 @@ function App(): React.JSX.Element {
 
   // Home quick-start → groom seeded with the typed task; Apply auto-queues.
   const quickStart = (text: string): void => {
-    setGroomId(null)
-    setGroomSeed(text)
-    setAutoRun(true)
-    setView('Groom')
+    if (!repo) return
+    void window.somni.startGroom(repo).then((item) => {
+      setGroom({ id: item.id, name: item.name })
+      setGroomSeed(text)
+      setAutoRun(true)
+      setView('Groom')
+    })
   }
 
   // The palette is a second surface for actions that already exist — never a
@@ -274,10 +322,7 @@ function App(): React.JSX.Element {
                 finished.
               </span>
               <div className="flex items-center gap-2">
-                <button
-                  className="rounded-full bg-primary-container px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-inverse-primary"
-                  onClick={() => resumeRun(r.runId)}
-                >
+                <button className={BTN_PRIMARY} onClick={() => resumeRun(r.runId)}>
                   Resume run
                 </button>
                 <button
@@ -316,7 +361,7 @@ function App(): React.JSX.Element {
               </span>
               <div className="flex items-center gap-2">
                 <button
-                  className="rounded-full bg-primary-container px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-inverse-primary"
+                  className={BTN_PRIMARY}
                   onClick={() => void window.somni.injectSkills(repo).then(setSkills)}
                 >
                   {skills.repoVersion == null ? 'Set up skills' : 'Upgrade skills'}
@@ -346,7 +391,15 @@ function App(): React.JSX.Element {
               </button>
             </div>
           ) : view === 'Home' ? (
-            <HomeView repo={repo} onStart={quickStart}>
+            <HomeView
+              repo={repo}
+              items={data.items}
+              onStart={quickStart}
+              onGroom={(item) => {
+                openGroom(item)
+              }}
+              onViewAll={() => setView('Sessions')}
+            >
               <PipelineView
                 runs={runs}
                 logs={logs}
@@ -358,13 +411,24 @@ function App(): React.JSX.Element {
                 onCancel={() => void window.somni.cancelPipeline()}
               />
             </HomeView>
+          ) : view === 'Sessions' ? (
+            <SessionsView
+              repo={repo}
+              items={data.items}
+              refresh={refresh}
+              onOpen={(item) => {
+                openGroom(item)
+              }}
+            />
           ) : view === 'Runs' ? (
             <RunsView repo={repo} />
-          ) : view === 'Groom' ? (
+          ) : view === 'Groom' && groom ? (
             <GroomView
               repo={repo}
               roles={data.roles}
-              itemId={groomId}
+              itemId={groom.id}
+              itemName={groom.name}
+              groomState={data.items.find((i) => i.id === groom.id)?.groomState}
               seed={groomSeed ?? undefined}
               applyLabel={autoRun ? 'Apply & run' : undefined}
               onApplied={(item) => {
@@ -388,11 +452,8 @@ function App(): React.JSX.Element {
               refresh={refresh}
               openId={openId}
               onClosePanel={() => setOpenId(null)}
-              onGroom={(id) => {
-                setGroomId(id)
-                setGroomSeed(null)
-                setAutoRun(false)
-                setView('Groom')
+              onGroom={(item) => {
+                openGroom(item)
               }}
             />
           )}
@@ -403,14 +464,37 @@ function App(): React.JSX.Element {
           repo={repo}
           onClose={() => setCapturing(false)}
           onSaved={() => refresh()}
-          onGroom={(id) => {
+          onGroom={(item) => {
             setCapturing(false)
-            setGroomId(id)
-            setGroomSeed(null)
-            setAutoRun(false)
-            setView('Groom')
+            openGroom(item)
           }}
         />
+      )}
+      {/* M25.2: the off-screen Groom's reply is ready. Dismissible, and it
+          auto-dismisses — a toast, never a queue of banners. */}
+      {groomDone && (
+        <div className="fixed bottom-6 right-6 z-30 flex items-center gap-3 rounded-lg border border-border-subtle bg-surface-elevated px-4 py-3 shadow-lg">
+          <span>
+            Groom <b>{groomDone.slug}</b>{' '}
+            {groomDone.workUnit ? 'finished its background draft — needs review.' : 'has a reply.'}
+          </span>
+          <button
+            className={BTN_PRIMARY}
+            onClick={() => {
+              const item = data.items.find((i) => i.id === groomDone.slug)
+              openGroom({ id: groomDone.slug, name: item?.name ?? groomDone.slug })
+              setGroomDone(null)
+            }}
+          >
+            Open
+          </button>
+          <button
+            className="rounded border border-border-subtle bg-surface-container px-3 py-1.5 text-sm text-on-surface transition-colors hover:bg-surface-bright"
+            onClick={() => setGroomDone(null)}
+          >
+            Dismiss
+          </button>
+        </div>
       )}
       {palette && (
         <CommandPalette

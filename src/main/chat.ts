@@ -2,16 +2,19 @@
 // claude spawn path as task execution; the chat never writes definitions —
 // `applyProposal` below is the one user-triggered mutation.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'fs'
 import { dirname, join } from 'path'
 import { getRunner } from './runners'
-import { groomPreamble } from './prompts'
+import { groomPreamble, WORK_UNIT_PROMPT } from './prompts'
+import { cancelQueued } from './sessions'
 import * as store from './store'
 import { turn } from './turn'
-import type { Effort, Item, Profile, Role, RunnerName, Settings, Task } from './store'
+import type { Effort, GroomState, Item, Profile, Role, RunnerName, Settings, Task } from './store'
 
-// Reserved chat key for the one pre-Apply from-scratch groom (§7, Decision 1).
-export const DRAFT_KEY = '_draft'
+// Every Groom is an Item from its first message (M25.1) — there is no draft
+// slot. A from-scratch groom starts as an Idea under this placeholder name,
+// which the AI replaces with a real title after the first exchange.
+export const NEW_GROOM_NAME = 'New groom'
 
 export type ChatMessage = { role: 'user' | 'assistant'; text: string; ts: string }
 // One proposed child Story. `blockedBy` holds *indices* of earlier entries in
@@ -34,8 +37,15 @@ export type ChatEvent =
       message: ChatMessage
       proposal: ChatProposal | null
       question: ChatQuestion | null
+      // The reply came from a background work unit (M25.5) — the toast says so.
+      workUnit?: boolean
     }
+  // A session transition (M25.5). `state` null = plain conversation again.
+  // Views re-render off it; Sessions is a projection, so App just refreshes.
+  | { slug: string; kind: 'state'; state: GroomState | null }
   | { slug: string; kind: 'error'; message: string }
+  // The AI auto-title landed on the item (M25.1) — the view renders the name.
+  | { slug: string; kind: 'title'; name: string }
 
 const chatPath = (repo: string, slug: string): string =>
   join(repo, '.somni', 'chats', slug + '.jsonl')
@@ -44,6 +54,13 @@ const chatPath = (repo: string, slug: string): string =>
 export const PROPOSE_NOW =
   'Stop interviewing and propose the groomed result now, from my answers so far ' +
   'plus your own stated assumptions for anything still open.'
+
+// Opening a from-scratch Groom (M25.1): the Item exists before the first
+// message, so the conversation is keyed on a real id and two parallel grooms
+// can never share a transcript.
+export function startGroom(repo: string): Item {
+  return store.saveItem(repo, { kind: 'idea', status: 'grooming', name: NEW_GROOM_NAME })
+}
 
 // The message for one turn. First turn carries the preamble; later turns resume.
 const chatPrompt = (
@@ -214,16 +231,39 @@ const sessionOf = (lines: Line[]): string | null => {
   return null
 }
 
-export function loadChat(repo: string, slug: string): { messages: ChatMessage[]; busy: boolean } {
+export function loadChat(
+  repo: string,
+  slug: string
+): { messages: ChatMessage[]; busy: boolean; partial: string } {
   const messages = readLines(repo, slug).filter((l): l is ChatMessage => 'role' in l)
-  return { messages, busy: inFlight.has(slug) }
+  // Streamed text is buffered here (M25.2) so a view re-entered mid-Turn shows
+  // the reply so far instead of an idle transcript.
+  return { messages, busy: inFlight.has(slug), partial: partials.get(slug) ?? '' }
 }
 
 export function newChat(repo: string, slug: string): void {
   rmSync(chatPath(repo, slug), { force: true })
 }
 
+// Native notifications (M25.6) at an injected seam: main decides *when* to
+// notify, the wiring in index.ts owns Electron's Notification/BrowserWindow, so
+// nothing here needs Electron under test.
+export type Notifier = {
+  /** Ask the platform to show a banner. Best effort — it may show nothing. */
+  notify: (n: { title: string; body: string; slug: string }) => void
+  /** True while any app window has focus — the user is already looking. */
+  isFocused: () => boolean
+}
+let notifier: Notifier | null = null
+export const setNotifier = (n: Notifier | null): void => {
+  notifier = n
+}
+
 const inFlight = new Map<string, AbortController>()
+// Reply text streamed so far, per in-flight slug — replayed by `loadChat`.
+const partials = new Map<string, string>()
+
+export const chatBusy = (slug: string): boolean => inFlight.has(slug)
 
 export function sendChat(
   repo: string,
@@ -234,25 +274,79 @@ export function sendChat(
   onEvent: (ev: ChatEvent) => void
 ): { ok: boolean; error?: string } {
   if (inFlight.has(slug)) return { ok: false, error: 'a chat turn is already in flight' }
+  void runTurn(repo, slug, text, settings, roleSlugs, onEvent, false)
+  return { ok: true }
+}
+
+// The message a Handoff writes into the transcript, so the background draft has
+// a visible cause (the PROPOSE_NOW precedent).
+export const HANDOFF_MESSAGE =
+  'Draft this in the background: finish the interview yourself, assume what you ' +
+  'must, and propose when you have it.'
+
+// One background work unit (M25.5) = one Turn on the same session, driven by
+// the assume-and-continue preamble. The session manager owns the queue and the
+// working/queued transitions; this only runs the Turn and parks the result.
+export function workUnitTurn(
+  repo: string,
+  slug: string,
+  settings: Settings,
+  roleSlugs: string[],
+  onEvent: (ev: ChatEvent) => void
+): Promise<void> {
+  return runTurn(repo, slug, HANDOFF_MESSAGE, settings, roleSlugs, onEvent, true)
+}
+
+function runTurn(
+  repo: string,
+  slug: string,
+  text: string,
+  settings: Settings,
+  roleSlugs: string[],
+  onEvent: (ev: ChatEvent) => void,
+  workUnit: boolean
+): Promise<void> {
+  // One Turn per session, whichever path asked for it — a second would
+  // interleave the same transcript. Claimed synchronously, before any write:
+  // sendChat reports the refusal, a work unit simply does not run.
+  if (inFlight.has(slug)) return Promise.resolve()
+  const ac = new AbortController()
+  inFlight.set(slug, ac)
   const lines = readLines(repo, slug)
   let sessionId = sessionOf(lines)
   appendLine(repo, slug, { role: 'user', text, ts: new Date().toISOString() })
-  // An item-keyed groom seeds turn-1 context with the item as it stands, and
-  // the first turn moves it into Grooming (§7). A from-scratch groom has no
-  // item to seed or flip — it creates nothing until Apply.
-  const item = slug === DRAFT_KEY ? undefined : store.loadItems(repo).find((i) => i.id === slug)
+  // Every groom is keyed on a real item (M25.1): turn 1 is seeded with the item
+  // as it stands, and each turn flips it into Grooming and stamps its last
+  // activity. Nothing else is written until Apply.
+  const item = store.loadItems(repo).find((i) => i.id === slug)
   let context: string | undefined
   if (item) {
-    context = `# ${item.name}\n\n${item.spec}`.trim()
-    if (item.status !== 'grooming') store.setItemStatus(repo, item.id, 'grooming')
+    // A brand-new groom has nothing worth seeding — don't feed the placeholder.
+    if (item.name !== NEW_GROOM_NAME || item.spec.trim())
+      context = `# ${item.name}\n\n${item.spec}`.trim()
+    // Sending clears the session state: the user is back in the conversation,
+    // so a reviewed/done/archived session is plainly active again (M25.3). A
+    // work unit is the opposite — it runs *because* the session is `working`.
+    store.updateItem(repo, item.id, {
+      status: 'grooming',
+      lastActivity: new Date().toISOString(),
+      ...(workUnit ? {} : { groomState: undefined, doneAt: undefined })
+    })
+    if (!workUnit) cancelQueued(repo, item.id) // reclaimed: its queued job never runs
+    if (!workUnit && item.groomState) onEvent({ slug, kind: 'state', state: null })
   }
 
   let reply = ''
-  const ac = new AbortController()
-  inFlight.set(slug, ac)
-  void turn(
+  // A work unit resumes the same session with the assume-and-continue rules on
+  // top; a handoff before the first turn still needs the grooming contract.
+  const prompt = workUnit
+    ? [sessionId ? '' : groomPreamble(roleSlugs, context, settings.methodology), WORK_UNIT_PROMPT]
+        .filter(Boolean)
+        .join('\n')
+    : chatPrompt(text, sessionId, roleSlugs, settings, context)
+  return turn(
     {
-      prompt: chatPrompt(text, sessionId, roleSlugs, settings, context),
+      prompt,
       settings, // runner/model/effort default from here — the chat is settings-profiled (§7)
       cwd: repo,
       resumeSessionId: sessionId ?? undefined,
@@ -265,6 +359,7 @@ export function sendChat(
       },
       onText: (t) => {
         reply += t
+        partials.set(slug, reply)
         onEvent({ slug, kind: 'text', text: t })
       },
       onStderr: (m) => onEvent({ slug, kind: 'error', message: m })
@@ -272,48 +367,118 @@ export function sendChat(
     { signal: ac.signal }
   ).then((r) => {
     inFlight.delete(slug)
-    if (!reply.trim()) {
+    partials.delete(slug) // the reply is about to be a real transcript line
+    // A work unit that produced nothing still owes the user an explanation, and
+    // it still parks for review — the transcript carries the failure.
+    const finalText =
+      reply.trim() || (workUnit ? `Background draft failed (exit ${r.exitCode}).` : '')
+    if (!finalText) {
       onEvent({ slug, kind: 'error', message: `chat turn failed (exit ${r.exitCode})` })
       return
     }
-    const message: ChatMessage = { role: 'assistant', text: reply, ts: new Date().toISOString() }
+    const message: ChatMessage = {
+      role: 'assistant',
+      text: finalText,
+      ts: new Date().toISOString()
+    }
     appendLine(repo, slug, message)
+    // A pending Proposal is what "needs your review" means (M25.3). A work unit
+    // always parks there — with or without a proposal, the user must look.
+    if (item && (workUnit || parseProposal(finalText))) {
+      try {
+        store.updateItem(repo, item.id, { groomState: 'needs-review' })
+        onEvent({ slug, kind: 'state', state: 'needs-review' })
+        // Only when the user isn't already watching: a banner over the window
+        // they are staring at is noise (M25.6).
+        if (notifier && !notifier.isFocused())
+          notifier.notify({
+            title: item.name || slug,
+            body: 'Grooming session needs your review.',
+            slug
+          })
+      } catch {
+        /* item deleted mid-groom */
+      }
+    }
     onEvent({
       slug,
       kind: 'done',
       message,
-      proposal: parseProposal(reply),
-      question: parseQuestion(reply)
+      proposal: parseProposal(finalText),
+      question: workUnit ? null : parseQuestion(finalText),
+      ...(workUnit ? { workUnit: true } : {})
     })
+    if (!workUnit && item?.name === NEW_GROOM_NAME)
+      void autoTitle(repo, slug, text, reply, settings, onEvent)
   })
-  return { ok: true }
+}
+
+const TITLE_PROMPT =
+  'Title this grooming conversation as a work-item name: a specific noun phrase ' +
+  'of at most 8 words. Reply with the title alone — no quotes, no punctuation at ' +
+  'the end, no preamble.'
+
+// After the first exchange the placeholder name is replaced by an AI title
+// (M25.1). One read-only Turn, the report.ts compact-summary precedent: any
+// failure degrades to keeping the placeholder, and the groom is unaffected.
+async function autoTitle(
+  repo: string,
+  id: string,
+  question: string,
+  reply: string,
+  settings: Settings,
+  onEvent: (ev: ChatEvent) => void
+): Promise<void> {
+  const r = await turn({
+    prompt: `${TITLE_PROMPT}\n\n---\n${question}\n\n---\n${reply}`,
+    settings,
+    cwd: repo,
+    readOnly: true
+  })
+  const name = r.ok
+    ? r.text
+        .trim()
+        .split('\n')[0]
+        .replace(/^["'#\s]+|["'\s]+$/g, '')
+    : ''
+  if (!name) return
+  try {
+    // Re-read guards the race with a manual rename mid-turn: only the
+    // placeholder is ever overwritten.
+    if (store.loadItems(repo).find((i) => i.id === id)?.name !== NEW_GROOM_NAME) return
+    onEvent({ slug: id, kind: 'title', name: store.renameItem(repo, id, name).name })
+  } catch {
+    /* item deleted mid-groom — nothing to title */
+  }
 }
 
 // Apply — the only mutation out of a groom, and it lives here so every write
 // stays in main (§7). The groomed item converts in place, keeping its id;
 // child Stories are created ready with their blockedBy indices resolved to real
-// ids. From-scratch (`key` = _draft) it creates the item(s) and renames the
-// transcript onto the root item's id.
+// ids. Every groom is item-keyed now (M25.1) — there is no from-scratch case.
 export function applyProposal(
   repo: string,
   key: string,
   proposal: ChatProposal
 ): { ok: true; item: Item } | { ok: false; error: string } {
-  // Applying mid-turn would rename the transcript out from under the reply
+  // Applying mid-turn would move the item's file out from under the reply
   // still being appended to it.
   if (inFlight.has(key)) return { ok: false, error: 'a chat turn is already in flight' }
-  const scratch = key === DRAFT_KEY
   const { roles, items } = store.loadRepo(repo)
-  const existing = scratch ? undefined : items.find((i) => i.id === key)
-  if (!scratch && !existing) return { ok: false, error: `item not found: ${key}` }
+  const existing = items.find((i) => i.id === key)
+  if (!existing) return { ok: false, error: `item not found: ${key}` }
   const roleSlugs = new Set(roles.map((r) => r.slug))
   for (const role of proposal.roles) {
     if (!roleSlugs.has(role.slug)) store.saveRole(repo, role) // existing role always wins
   }
   // An Epic never executes, so it lands back in Backlog; a groomed Story is
   // Ready by definition — the Spec and its Subtasks just got approved.
+  // Apply is what `done` means for a session (M25.3) — doneAt starts the
+  // 14-day auto-archive clock.
   const root = store.saveItem(repo, {
     ...existing,
+    groomState: 'done',
+    doneAt: new Date().toISOString(),
     slug: store.slugify(proposal.name), // a renamed item moves file, keeping its id
     kind: proposal.kind,
     status: proposal.kind === 'epic' ? 'backlog' : 'ready',
@@ -334,13 +499,10 @@ export function applyProposal(
     })
     childIds.push(child.id)
   }
-  if (scratch) {
-    // Mirrors `item:save`: a new Backlog item joins the column's ordering.
-    if (root.status === 'backlog') store.saveBacklog(repo, [...store.loadBacklog(repo), root.id])
-    mkdirSync(dirname(chatPath(repo, root.id)), { recursive: true })
-    if (existsSync(chatPath(repo, DRAFT_KEY)))
-      renameSync(chatPath(repo, DRAFT_KEY), chatPath(repo, root.id))
-  }
+  // Mirrors `item:save`: an item landing in Backlog joins the column's ordering.
+  const backlog = store.loadBacklog(repo)
+  if (root.status === 'backlog' && !backlog.includes(root.id))
+    store.saveBacklog(repo, [...backlog, root.id])
   return { ok: true, item: root }
 }
 
