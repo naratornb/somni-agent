@@ -656,6 +656,32 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     expect(otherEvents.some((e) => e.kind === 'done')).toBe(true)
   })
 
+  // M25.2: re-entering a mid-Turn Groom must show the reply so far, so main
+  // buffers streamed text per slug and replays it on load.
+  it('loadChat replays the partial reply mid-turn and the full one after done', async () => {
+    fake({ FAKE_TEXT: 'partial words' })
+    const slug = nextSlug()
+    let midTurn: ReturnType<typeof loadChat> | null = null
+    const done = new Promise<void>((resolve) => {
+      sendChat(repo, slug, 'hi', {}, ['dev'], (ev) => {
+        if (ev.kind === 'text') midTurn = loadChat(repo, slug)
+        if (ev.kind === 'done' || ev.kind === 'error') resolve()
+      })
+    })
+    pending.push(done)
+    await done
+
+    expect(midTurn).toEqual({
+      messages: [expect.objectContaining({ role: 'user', text: 'hi' })],
+      busy: true,
+      partial: 'partial words'
+    })
+    const after = loadChat(repo, slug)
+    expect(after.busy).toBe(false)
+    expect(after.partial).toBe('')
+    expect(after.messages.map((m) => m.text)).toEqual(['hi', 'partial words'])
+  })
+
   // ---- M25.1: every Groom is an Item from birth --------------------------
 
   // Resolves on the title event, which lands after `done` — the auto-title

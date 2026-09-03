@@ -225,9 +225,14 @@ const sessionOf = (lines: Line[]): string | null => {
   return null
 }
 
-export function loadChat(repo: string, slug: string): { messages: ChatMessage[]; busy: boolean } {
+export function loadChat(
+  repo: string,
+  slug: string
+): { messages: ChatMessage[]; busy: boolean; partial: string } {
   const messages = readLines(repo, slug).filter((l): l is ChatMessage => 'role' in l)
-  return { messages, busy: inFlight.has(slug) }
+  // Streamed text is buffered here (M25.2) so a view re-entered mid-Turn shows
+  // the reply so far instead of an idle transcript.
+  return { messages, busy: inFlight.has(slug), partial: partials.get(slug) ?? '' }
 }
 
 export function newChat(repo: string, slug: string): void {
@@ -235,6 +240,8 @@ export function newChat(repo: string, slug: string): void {
 }
 
 const inFlight = new Map<string, AbortController>()
+// Reply text streamed so far, per in-flight slug — replayed by `loadChat`.
+const partials = new Map<string, string>()
 
 export function sendChat(
   repo: string,
@@ -281,6 +288,7 @@ export function sendChat(
       },
       onText: (t) => {
         reply += t
+        partials.set(slug, reply)
         onEvent({ slug, kind: 'text', text: t })
       },
       onStderr: (m) => onEvent({ slug, kind: 'error', message: m })
@@ -288,6 +296,7 @@ export function sendChat(
     { signal: ac.signal }
   ).then((r) => {
     inFlight.delete(slug)
+    partials.delete(slug) // the reply is about to be a real transcript line
     if (!reply.trim()) {
       onEvent({ slug, kind: 'error', message: `chat turn failed (exit ${r.exitCode})` })
       return

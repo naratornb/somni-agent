@@ -10,7 +10,7 @@ import type {
   Item,
   Role
 } from '../../preload/index'
-import { MicButton, ProposalPreview, QuestionCard } from './chatShared'
+import { MicButton, ProposalPreview, QuestionCard, StreamingBubble } from './chatShared'
 import { appendText, BTN_GHOST, BTN_PRIMARY, BUBBLE_AI, BUBBLE_USER, ERROR_BANNER } from './ui'
 
 type Props = {
@@ -102,6 +102,9 @@ export function GroomView({
     loaded.current = true
     void window.somni.loadChat(repo, slug).then((c) => {
       setMessages(c.messages)
+      // A Turn still in flight (M25.2): main replays what it has streamed so
+      // far, so re-entering the view shows the partial reply, not an idle one.
+      if (c.busy) setStreaming(c.partial)
       // The seed is the quick-start's first message. Each groom owns its own
       // transcript now, so a fresh one is always empty — but never re-send into
       // a transcript that already has turns.
@@ -172,11 +175,7 @@ export function GroomView({
             <div className={m.role === 'user' ? USER : AI}>{m.text}</div>
           </div>
         ))}
-        {streaming !== null && (
-          <div className="flex w-full">
-            <div className={AI}>{streaming + '▌'}</div>
-          </div>
-        )}
+        {streaming !== null && <StreamingBubble text={streaming} />}
         {question && !proposal && (
           <QuestionCard q={question} disabled={sending} onAnswer={(t) => void send(t)} />
         )}

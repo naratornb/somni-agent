@@ -63,6 +63,8 @@ function App(): React.JSX.Element {
   // Dismissal is per-session, like the skills banner.
   const [runnerMissing, setRunnerMissing] = useState<string | null>(null)
   const [runnerHidden, setRunnerHidden] = useState(false)
+  // A Groom that finished while the user was elsewhere (M25.2).
+  const [groomDone, setGroomDone] = useState<string | null>(null)
 
   const refresh = useCallback(
     (path = repo): void => {
@@ -103,6 +105,23 @@ function App(): React.JSX.Element {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, [])
+
+  // Chat events are global (M25.2): a Turn that finishes for a Groom the user
+  // isn't looking at announces itself here. GroomView keeps its own listener
+  // for the open session — these two never render the same thing.
+  useEffect(() => {
+    return window.somni.onChatEvent((ev) => {
+      if (ev.kind !== 'done') return
+      if (view === 'Groom' && groom?.id === ev.slug) return
+      setGroomDone(ev.slug)
+    })
+  }, [view, groom?.id])
+
+  useEffect(() => {
+    if (!groomDone) return
+    const t = setTimeout(() => setGroomDone(null), 8000)
+    return () => clearTimeout(t)
+  }, [groomDone])
 
   // Cmd+N / Cmd+K fire regardless of focus — the overlays guard themselves.
   // No OS-level global shortcut (deferred to Settings).
@@ -415,6 +434,34 @@ function App(): React.JSX.Element {
             setView('Groom')
           }}
         />
+      )}
+      {/* M25.2: the off-screen Groom's reply is ready. Dismissible, and it
+          auto-dismisses — a toast, never a queue of banners. */}
+      {groomDone && (
+        <div className="fixed bottom-6 right-6 z-30 flex items-center gap-3 rounded-lg border border-border-subtle bg-surface-elevated px-4 py-3 shadow-lg">
+          <span>
+            Groom <b>{groomDone}</b> has a reply.
+          </span>
+          <button
+            className="rounded-full bg-primary-container px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-inverse-primary"
+            onClick={() => {
+              const item = data.items.find((i) => i.id === groomDone)
+              setGroom({ id: groomDone, name: item?.name ?? groomDone })
+              setGroomSeed(null)
+              setAutoRun(false)
+              setView('Groom')
+              setGroomDone(null)
+            }}
+          >
+            Open
+          </button>
+          <button
+            className="rounded border border-border-subtle bg-surface-container px-3 py-1.5 text-sm text-on-surface transition-colors hover:bg-surface-bright"
+            onClick={() => setGroomDone(null)}
+          >
+            Dismiss
+          </button>
+        </div>
       )}
       {palette && (
         <CommandPalette

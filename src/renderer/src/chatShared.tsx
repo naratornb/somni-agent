@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChatProposal, ChatQuestion, Role } from '../../preload/index'
 import {
+  BUBBLE_AI,
   BTN_GHOST,
   BTN_GHOST_SM,
   BTN_PRIMARY,
@@ -16,6 +17,19 @@ import {
 // "the AI's turn", not a widget bolted onto the chat (M10-ui.md §4).
 const CARD =
   'bg-surface-container-lowest border border-border-subtle rounded-xl p-4 flex flex-col gap-3 max-w-3xl'
+
+// The in-flight assistant bubble (M25.2): the streaming cursor once text is
+// arriving, and an honest "Thinking…" before the first token — a Groom
+// re-entered mid-Turn must never look idle.
+export function StreamingBubble({ text }: { text: string }): React.JSX.Element {
+  return (
+    <div className="flex w-full">
+      <div className={`max-w-[80%] ${BUBBLE_AI}`}>
+        {text ? text + '▌' : <span className="italic opacity-70">Thinking…</span>}
+      </div>
+    </div>
+  )
+}
 
 export function QuestionCard({
   q,

@@ -17,7 +17,13 @@ import { Playground } from './Playground'
 import { RolesView } from './RolesView'
 import { RunDetailsPanel, RunsView } from './RunsView'
 import { SettingsView } from './SettingsView'
-import { MicButton, ProposalPreview, QuestionCard, RefineControl } from './chatShared'
+import {
+  MicButton,
+  ProposalPreview,
+  QuestionCard,
+  RefineControl,
+  StreamingBubble
+} from './chatShared'
 import { CaptureModal, CommandPalette, QuickAdd } from './capture'
 import { captureItem, paletteResults, reorderBacklog, saveCapture } from './ui'
 
@@ -242,6 +248,7 @@ const views: [string, React.JSX.Element][] = [
     <RefineControl key="rc" repo="/repo" kind="task" text="Add hello" onApply={() => {}} />
   ],
   ['MicButton', <MicButton key="mb" onText={() => {}} />],
+  ['StreamingBubble', <StreamingBubble key="sb" text="half a reply" />],
   [
     'CaptureModal',
     <CaptureModal key="cm" repo="/repo" onClose={() => {}} onGroom={() => {}} onSaved={() => {}} />
@@ -266,6 +273,15 @@ test.each(views)('%s renders', (_name, el) => {
 // the accepted state — SSR never runs effects, so this is the only state the
 // static-markup harness can ever observe for MicButton. Assert it for real
 // (disabled + the "…" label), not just "rendered something".
+// M25.2: a Groom re-entered mid-Turn must look alive. Before the first token
+// the busy bubble says so in words; once text is streaming it carries the cursor.
+test('StreamingBubble shows the thinking state empty and the cursor once text arrives', () => {
+  expect(renderToStaticMarkup(<StreamingBubble text="" />)).toContain('Thinking')
+  const streaming = renderToStaticMarkup(<StreamingBubble text="half a reply" />)
+  expect(streaming).toContain('half a reply')
+  expect(streaming).toContain('\u258c')
+})
+
 test('MicButton renders disabled with the checking placeholder before voice:status resolves', () => {
   const html = renderToStaticMarkup(<MicButton onText={() => {}} />)
   expect(html).toContain('disabled=""')

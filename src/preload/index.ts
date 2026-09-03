@@ -149,7 +149,12 @@ const somni = {
   // Opens a from-scratch Groom: main creates the Item first (M25.1) and the
   // conversation is keyed on its real id.
   startGroom: (repo: string): Promise<Item> => ipcRenderer.invoke('groom:start', repo),
-  loadChat: (repo: string, slug: string): Promise<{ messages: ChatMessage[]; busy: boolean }> =>
+  // `partial` is the reply streamed so far when `busy` — a Groom re-entered
+  // mid-Turn renders it under the streaming cursor (M25.2).
+  loadChat: (
+    repo: string,
+    slug: string
+  ): Promise<{ messages: ChatMessage[]; busy: boolean; partial: string }> =>
     ipcRenderer.invoke('chat:load', repo, slug),
   newChat: (repo: string, slug: string): Promise<void> =>
     ipcRenderer.invoke('chat:new', repo, slug),
