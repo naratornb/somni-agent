@@ -3,6 +3,7 @@ import { existsSync } from 'fs'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { shellPath } from './env'
 import { killTask, wireTaskIpc } from './turn'
 import { killChats } from './chat'
 import { patchSettings, readSettings, repoSettings, wireRepoIpc } from './repoIpc'
@@ -25,13 +26,21 @@ import {
   wakeDrain
 } from './executor'
 
+// Must run before any binary probe or spawn (voice, runner). Dev inherits the
+// terminal's PATH already — only the Finder-launched build needs the fixup.
+if (app.isPackaged) process.env.PATH = shellPath()
+
 function createWindow(): void {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
+    title: 'somni',
     width: 900,
     height: 670,
+    minWidth: 720,
+    minHeight: 480,
     show: false,
     autoHideMenuBar: true,
+    backgroundColor: '#131315',
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -63,6 +72,15 @@ function createWindow(): void {
 app.whenReady().then(() => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.somni')
+
+  if (process.platform === 'darwin') {
+    app.setAboutPanelOptions({
+      applicationName: 'somni',
+      applicationVersion: app.getVersion(),
+      copyright: `© ${new Date().getFullYear()} Luke <f.luke.benj@gmail.com>`,
+      credits: 'Overnight AI agent workflow orchestrator for macOS'
+    })
+  }
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.

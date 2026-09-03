@@ -267,6 +267,14 @@ test('MicButton renders disabled with the checking placeholder before voice:stat
   expect(html).toContain('…')
 })
 
+// M22: no-binary must stay clickable so the install hint can surface on click —
+// a disabled control with a hover-only tooltip reads as "voice is broken".
+test('MicButton stays enabled in the no-binary state', () => {
+  const html = renderToStaticMarkup(<MicButton onText={() => {}} initialState="no-binary" />)
+  expect(html).not.toContain('disabled=""')
+  expect(html).toContain('Voice')
+})
+
 // M23: the nav is exactly the four destinations (plus Playground — vitest runs
 // with import.meta.env.DEV true). Groom, Pipeline, Roles left the nav, and the
 // PO/Engineer toggle is gone. SSR renders the no-repo state, so the Home hero

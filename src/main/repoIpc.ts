@@ -13,7 +13,7 @@ import {
 import { isRunning, loadRuns, RunState, wakeDrain } from './executor'
 import { lockedGit } from './git'
 import { diffFiles, RunStats, runStats } from './report'
-import { getRunner } from './runners'
+import { getRunner, runnerStatus } from './runners'
 import { turn } from './turn'
 import * as store from './store'
 import { atomicWrite, RunnerName, Settings } from './store'
@@ -132,6 +132,9 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
   })
 
   ipcMain.handle('settings:get', () => ({ ...store.SETTINGS_DEFAULTS, ...readSettings() }))
+  // Runner health (M22): probed fresh per ask, off the settings on disk.
+  ipcMain.handle('runner:status', () => runnerStatus(readSettings()))
+
   ipcMain.handle('settings:set', (_e, s: Settings) => {
     patchSettings(s)
     onSettingsChanged() // the nightly timer re-arms off the new time/armed flag
