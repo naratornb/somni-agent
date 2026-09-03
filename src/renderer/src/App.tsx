@@ -68,7 +68,8 @@ function App(): React.JSX.Element {
   const [runnerMissing, setRunnerMissing] = useState<string | null>(null)
   const [runnerHidden, setRunnerHidden] = useState(false)
   // A Groom that finished while the user was elsewhere (M25.2).
-  const [groomDone, setGroomDone] = useState<string | null>(null)
+  // The finished Groom to announce, and whether a background work unit did it.
+  const [groomDone, setGroomDone] = useState<{ slug: string; workUnit: boolean } | null>(null)
 
   const refresh = useCallback(
     (path = repo): void => {
@@ -115,11 +116,14 @@ function App(): React.JSX.Element {
   // for the open session — these two never render the same thing.
   useEffect(() => {
     return window.somni.onChatEvent((ev) => {
+      // A session transition (M25.5): Sessions/Home are projections of the repo
+      // load, so a refresh is the whole re-render.
+      if (ev.kind === 'state') return void refresh()
       if (ev.kind !== 'done') return
       if (view === 'Groom' && groom?.id === ev.slug) return
-      setGroomDone(ev.slug)
+      setGroomDone({ slug: ev.slug, workUnit: !!ev.workUnit })
     })
-  }, [view, groom?.id])
+  }, [view, groom?.id, refresh])
 
   useEffect(() => {
     if (!groomDone) return
@@ -404,6 +408,7 @@ function App(): React.JSX.Element {
               roles={data.roles}
               itemId={groom.id}
               itemName={groom.name}
+              groomState={data.items.find((i) => i.id === groom.id)?.groomState}
               seed={groomSeed ?? undefined}
               applyLabel={autoRun ? 'Apply & run' : undefined}
               onApplied={(item) => {
@@ -456,13 +461,14 @@ function App(): React.JSX.Element {
       {groomDone && (
         <div className="fixed bottom-6 right-6 z-30 flex items-center gap-3 rounded-lg border border-border-subtle bg-surface-elevated px-4 py-3 shadow-lg">
           <span>
-            Groom <b>{groomDone}</b> has a reply.
+            Groom <b>{groomDone.slug}</b>{' '}
+            {groomDone.workUnit ? 'finished its background draft — needs review.' : 'has a reply.'}
           </span>
           <button
             className="rounded-full bg-primary-container px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-inverse-primary"
             onClick={() => {
-              const item = data.items.find((i) => i.id === groomDone)
-              setGroom({ id: groomDone, name: item?.name ?? groomDone })
+              const item = data.items.find((i) => i.id === groomDone.slug)
+              setGroom({ id: groomDone.slug, name: item?.name ?? groomDone.slug })
               setGroomSeed(null)
               setAutoRun(false)
               setView('Groom')

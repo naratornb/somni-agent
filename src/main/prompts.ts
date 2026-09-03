@@ -85,6 +85,25 @@ export function groomPreamble(
   ].join('\n')
 }
 
+// Background work unit (M25.5): the user handed the interview off, so the AI
+// finishes it alone. Methodology-agnostic on purpose — the charter varies, the
+// assumptions contract does not. The somni-groomed schema is UNCHANGED: the
+// assumptions ride as a required section inside the Spec text.
+export const WORK_UNIT_PROMPT = [
+  'I am handing this grooming session off to you to finish in the background —',
+  'I am away and cannot answer anything.',
+  '',
+  '- Do NOT ask me questions. Do not emit a ```somni-question block.',
+  '- Resolve every question you still have yourself, choosing the most reasonable',
+  '  option, and inspect the codebase read-only to choose well.',
+  '- Then propose: end your reply with the ```somni-groomed block in the schema',
+  '  you were given.',
+  '- The "spec" text MUST contain a section headed exactly "## Assumptions",',
+  '  listing every assumption you made, one per line. If you made none, keep the',
+  '  section and write "None."',
+  '- Do not create or modify any files.'
+].join('\n')
+
 export const taskTitle = (t: { title?: string }, i: number): string => t.title || `task ${i + 1}`
 
 // The implement discipline (M16). Prompt text only — the runner adapters stay

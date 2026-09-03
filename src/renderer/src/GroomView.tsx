@@ -7,6 +7,7 @@ import type {
   ChatMessage,
   ChatProposal,
   ChatQuestion,
+  GroomState,
   Item,
   Role
 } from '../../preload/index'
@@ -20,6 +21,8 @@ type Props = {
   itemId: string
   // Its name at mount; the AI auto-title and manual rename update it in place.
   itemName: string
+  // Its session state at mount (M25.5); transitions arrive as chat events.
+  groomState?: GroomState
   // Home quick-start (M23): sent as the first message when the transcript is
   // empty, so the Interview starts from what the user already typed.
   seed?: string
@@ -40,12 +43,14 @@ export function GroomView({
   roles,
   itemId,
   itemName,
+  groomState,
   seed,
   applyLabel = 'Apply',
   onApplied
 }: Props): React.JSX.Element {
   const slug = itemId
   const [name, setName] = useState(itemName)
+  const [state, setState] = useState<GroomState | null>(groomState ?? null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -57,7 +62,10 @@ export function GroomView({
   const loaded = useRef(false)
   const listRef = useRef<HTMLDivElement>(null)
 
-  const sending = streaming !== null
+  // A background work unit owns the session: the composer is closed until the
+  // draft lands (M25.5).
+  const background = state === 'working' || state === 'queued'
+  const sending = streaming !== null || background
 
   useEffect(() => {
     const off = window.somni.onChatEvent((ev: ChatEvent) => {
@@ -68,6 +76,7 @@ export function GroomView({
         setError(ev.message)
       }
       if (ev.kind === 'title') setName(ev.name)
+      if (ev.kind === 'state') setState(ev.state)
       if (ev.kind === 'done') {
         setStreaming(null)
         setMessages((m) => [...m, ev.message])
@@ -89,6 +98,7 @@ export function GroomView({
     setLastUser(text)
     setMessages((m) => [...m, { role: 'user', text, ts: new Date().toISOString() }])
     setStreaming('')
+    setState(null) // main clears the session state on every send (M25.3)
     const res = await window.somni.sendChat(repo, slug, text)
     if (!res.ok) {
       setStreaming(null)
@@ -145,6 +155,20 @@ export function GroomView({
     setInput('')
   }
 
+  const handoff = async (): Promise<void> => {
+    setError(null)
+    const res = await window.somni.handoffSession(repo, slug)
+    if (!res.ok) setError(res.error ?? 'handoff failed')
+  }
+
+  // Dismissing the Proposal returns the session to plain conversation — the
+  // needs-review flag is main's, so clear it there too (M25.5).
+  const dismiss = (): void => {
+    setProposal(null)
+    setState(null)
+    void window.somni.reopenSession(repo, slug)
+  }
+
   const submit = (): void => {
     const text = input
     setInput('')
@@ -197,8 +221,15 @@ export function GroomView({
           applyLabel={applying ? 'Applying…' : proposal.kind === 'epic' ? 'Apply' : applyLabel}
           disabled={applying}
           onApply={() => void apply()}
-          onDismiss={() => setProposal(null)}
+          onDismiss={dismiss}
         />
+      )}
+      {background && (
+        <p className="shrink-0 rounded-lg bg-surface-container px-4 py-3 text-on-surface-variant">
+          {state === 'working'
+            ? 'Drafting in the background — resolving the open questions and writing a Proposal. You can leave this session.'
+            : 'Queued — three sessions are already drafting; this one starts when a slot frees.'}
+        </p>
       )}
       <div className="flex shrink-0 items-end gap-2 border-t border-border-subtle pt-3">
         <textarea
@@ -224,6 +255,9 @@ export function GroomView({
             disabled={sending}
           >
             Propose Now
+          </button>
+          <button className={BTN_GHOST} onClick={() => void handoff()} disabled={sending}>
+            Draft in background
           </button>
           <MicButton
             disabled={sending}

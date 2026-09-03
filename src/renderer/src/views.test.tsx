@@ -823,3 +823,28 @@ test('SessionsView renders every group heading, its rows and the empty state', (
   )
   expect(empty).toContain('No grooming sessions yet for this repo.')
 })
+
+// M25.5: a session handed off to a background work unit closes its composer and
+// says why; the queued case names the cap.
+test('GroomView renders the working and queued state lines', () => {
+  const view = (groomState: 'working' | 'queued'): string =>
+    renderToStaticMarkup(
+      <GroomView
+        repo="/repo"
+        roles={roles}
+        itemId="SOM-1"
+        itemName="Search is slow"
+        groomState={groomState}
+        onApplied={() => {}}
+      />
+    )
+  expect(view('working')).toContain('Drafting in the background')
+  expect(view('queued')).toContain('Queued')
+  expect(view('working')).toContain('disabled')
+  // The affordance itself is always present in a plain conversation.
+  expect(
+    renderToStaticMarkup(
+      <GroomView repo="/repo" roles={roles} itemId="SOM-1" itemName="x" onApplied={() => {}} />
+    )
+  ).toContain('Draft in background')
+})

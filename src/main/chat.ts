@@ -5,10 +5,10 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'fs'
 import { dirname, join } from 'path'
 import { getRunner } from './runners'
-import { groomPreamble } from './prompts'
+import { groomPreamble, WORK_UNIT_PROMPT } from './prompts'
 import * as store from './store'
 import { turn } from './turn'
-import type { Effort, Item, Profile, Role, RunnerName, Settings, Task } from './store'
+import type { Effort, GroomState, Item, Profile, Role, RunnerName, Settings, Task } from './store'
 
 // Every Groom is an Item from its first message (M25.1) — there is no draft
 // slot. A from-scratch groom starts as an Idea under this placeholder name,
@@ -36,7 +36,12 @@ export type ChatEvent =
       message: ChatMessage
       proposal: ChatProposal | null
       question: ChatQuestion | null
+      // The reply came from a background work unit (M25.5) — the toast says so.
+      workUnit?: boolean
     }
+  // A session transition (M25.5). `state` null = plain conversation again.
+  // Views re-render off it; Sessions is a projection, so App just refreshes.
+  | { slug: string; kind: 'state'; state: GroomState | null }
   | { slug: string; kind: 'error'; message: string }
   // The AI auto-title landed on the item (M25.1) — the view renders the name.
   | { slug: string; kind: 'title'; name: string }
@@ -243,6 +248,8 @@ const inFlight = new Map<string, AbortController>()
 // Reply text streamed so far, per in-flight slug — replayed by `loadChat`.
 const partials = new Map<string, string>()
 
+export const chatBusy = (slug: string): boolean => inFlight.has(slug)
+
 export function sendChat(
   repo: string,
   slug: string,
@@ -252,6 +259,38 @@ export function sendChat(
   onEvent: (ev: ChatEvent) => void
 ): { ok: boolean; error?: string } {
   if (inFlight.has(slug)) return { ok: false, error: 'a chat turn is already in flight' }
+  void runTurn(repo, slug, text, settings, roleSlugs, onEvent, false)
+  return { ok: true }
+}
+
+// The message a Handoff writes into the transcript, so the background draft has
+// a visible cause (the PROPOSE_NOW precedent).
+export const HANDOFF_MESSAGE =
+  'Draft this in the background: finish the interview yourself, assume what you ' +
+  'must, and propose when you have it.'
+
+// One background work unit (M25.5) = one Turn on the same session, driven by
+// the assume-and-continue preamble. The session manager owns the queue and the
+// working/queued transitions; this only runs the Turn and parks the result.
+export function workUnitTurn(
+  repo: string,
+  slug: string,
+  settings: Settings,
+  roleSlugs: string[],
+  onEvent: (ev: ChatEvent) => void
+): Promise<void> {
+  return runTurn(repo, slug, HANDOFF_MESSAGE, settings, roleSlugs, onEvent, true)
+}
+
+function runTurn(
+  repo: string,
+  slug: string,
+  text: string,
+  settings: Settings,
+  roleSlugs: string[],
+  onEvent: (ev: ChatEvent) => void,
+  workUnit: boolean
+): Promise<void> {
   const lines = readLines(repo, slug)
   let sessionId = sessionOf(lines)
   appendLine(repo, slug, { role: 'user', text, ts: new Date().toISOString() })
@@ -265,21 +304,29 @@ export function sendChat(
     if (item.name !== NEW_GROOM_NAME || item.spec.trim())
       context = `# ${item.name}\n\n${item.spec}`.trim()
     // Sending clears the session state: the user is back in the conversation,
-    // so a reviewed/done/archived session is plainly active again (M25.3).
+    // so a reviewed/done/archived session is plainly active again (M25.3). A
+    // work unit is the opposite — it runs *because* the session is `working`.
     store.updateItem(repo, item.id, {
       status: 'grooming',
       lastActivity: new Date().toISOString(),
-      groomState: undefined,
-      doneAt: undefined
+      ...(workUnit ? {} : { groomState: undefined, doneAt: undefined })
     })
+    if (!workUnit && item.groomState) onEvent({ slug, kind: 'state', state: null })
   }
 
   let reply = ''
   const ac = new AbortController()
   inFlight.set(slug, ac)
-  void turn(
+  // A work unit resumes the same session with the assume-and-continue rules on
+  // top; a handoff before the first turn still needs the grooming contract.
+  const prompt = workUnit
+    ? [sessionId ? '' : groomPreamble(roleSlugs, context, settings.methodology), WORK_UNIT_PROMPT]
+        .filter(Boolean)
+        .join('\n')
+    : chatPrompt(text, sessionId, roleSlugs, settings, context)
+  return turn(
     {
-      prompt: chatPrompt(text, sessionId, roleSlugs, settings, context),
+      prompt,
       settings, // runner/model/effort default from here — the chat is settings-profiled (§7)
       cwd: repo,
       resumeSessionId: sessionId ?? undefined,
@@ -301,17 +348,21 @@ export function sendChat(
   ).then((r) => {
     inFlight.delete(slug)
     partials.delete(slug) // the reply is about to be a real transcript line
-    if (!reply.trim()) {
+    // A work unit that produced nothing still owes the user an explanation, and
+    // it still parks for review — the transcript carries the failure.
+    const text2 = reply.trim() || (workUnit ? `Background draft failed (exit ${r.exitCode}).` : '')
+    if (!text2) {
       onEvent({ slug, kind: 'error', message: `chat turn failed (exit ${r.exitCode})` })
       return
     }
-    const message: ChatMessage = { role: 'assistant', text: reply, ts: new Date().toISOString() }
+    const message: ChatMessage = { role: 'assistant', text: text2, ts: new Date().toISOString() }
     appendLine(repo, slug, message)
-    // A pending Proposal is what "needs your review" means today (M25.3);
-    // #43 re-drives the same state from work units.
-    if (item && parseProposal(reply)) {
+    // A pending Proposal is what "needs your review" means (M25.3). A work unit
+    // always parks there — with or without a proposal, the user must look.
+    if (item && (workUnit || parseProposal(text2))) {
       try {
         store.updateItem(repo, item.id, { groomState: 'needs-review' })
+        onEvent({ slug, kind: 'state', state: 'needs-review' })
       } catch {
         /* item deleted mid-groom */
       }
@@ -320,12 +371,13 @@ export function sendChat(
       slug,
       kind: 'done',
       message,
-      proposal: parseProposal(reply),
-      question: parseQuestion(reply)
+      proposal: parseProposal(text2),
+      question: workUnit ? null : parseQuestion(text2),
+      ...(workUnit ? { workUnit: true } : {})
     })
-    if (item?.name === NEW_GROOM_NAME) void autoTitle(repo, slug, text, reply, settings, onEvent)
+    if (!workUnit && item?.name === NEW_GROOM_NAME)
+      void autoTitle(repo, slug, text, reply, settings, onEvent)
   })
-  return { ok: true }
 }
 
 const TITLE_PROMPT =

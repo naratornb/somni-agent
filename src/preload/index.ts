@@ -150,9 +150,14 @@ const somni = {
   // Opens a from-scratch Groom: main creates the Item first (M25.1) and the
   // conversation is keyed on its real id.
   startGroom: (repo: string): Promise<Item> => ipcRenderer.invoke('groom:start', repo),
-  // Archived session → plain active conversation again (M25.3).
+  // Archived session → plain active conversation again (M25.3). The same clear
+  // backs dismissing a needs-review Proposal (M25.5).
   reopenSession: (repo: string, id: string): Promise<Item> =>
     ipcRenderer.invoke('session:reopen', repo, id),
+  // Draft this session in the background (M25.5) — refused mid-turn, queued
+  // when three work units are already running.
+  handoffSession: (repo: string, id: string): Promise<IpcResult> =>
+    ipcRenderer.invoke('session:handoff', repo, id),
   // `partial` is the reply streamed so far when `busy` — a Groom re-entered
   // mid-Turn renders it under the streaming cursor (M25.2).
   loadChat: (

@@ -8,8 +8,10 @@ import {
   loadChat,
   newChat,
   sendChat,
-  startGroom
+  startGroom,
+  workUnitTurn
 } from './chat'
+import { handoff } from './sessions'
 import { isRunning, loadRuns, RunState, wakeDrain } from './executor'
 import { lockedGit } from './git'
 import { diffFiles, RunStats, runStats } from './report'
@@ -94,8 +96,23 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
     return store.loadRepo(repo)
   })
 
-  // Reopen an archived session — back to a plain active conversation.
+  // Back to a plain active conversation: reopening an archived session (M25.3)
+  // and dismissing a needs-review Proposal (M25.5) are the same clear.
   ipcMain.handle('session:reopen', (_e, repo: string, id: string) => store.reopenSession(repo, id))
+
+  // Handoff (M25.5): draft this session in the background. The session manager
+  // persists working/queued before anything spawns and caps concurrency at 3.
+  ipcMain.handle('session:handoff', (_e, repo: string, id: string): IpcResult => {
+    if (isRunning(id)) return { ok: false, error: 'this story is currently running' }
+    const settings = repoSettings(repo)
+    const roleSlugs = store.loadRepo(repo).roles.map((r) => r.slug)
+    const emit = (ev: ChatEvent): void =>
+      BrowserWindow.getAllWindows()[0]?.webContents.send('chat:event', ev)
+    return handoff(repo, id, {
+      emit,
+      run: () => workUnitTurn(repo, id, settings, roleSlugs, emit)
+    })
+  })
 
   // Home quick-start chips (M23): cheap local git signals, no AI calls. [] on
   // any failure — the renderer owns the static fallback.

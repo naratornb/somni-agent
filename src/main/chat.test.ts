@@ -14,8 +14,10 @@ import {
   PROPOSE_NOW,
   sendChat,
   startGroom,
-  turnArgs
+  turnArgs,
+  workUnitTurn
 } from './chat'
+import { handoff, resetSessions } from './sessions'
 import type { ChatEvent } from './chat'
 import { existsSync, readdirSync } from 'fs'
 import { loadBacklog, loadItems, loadRepo, renameItem, saveItem, saveRole } from './store'
@@ -474,6 +476,7 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     process.env.PATH = savedPath
     for (const k of fakeEnv) delete process.env[k]
     fakeEnv.length = 0
+    resetSessions()
   })
 
   // unique slug per call avoids any cross-test interference via chat.ts's
@@ -802,6 +805,71 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     const item = startGroom(repo)
     await send(item.id, 'hi')
     expect(loadItems(repo)[0].groomState).toBeUndefined()
+  })
+
+  // Background work unit (M25.5): one Turn on the same session, resumed, with
+  // the assume-and-continue contract on top of the transcript.
+  it('runs a work unit with --resume and the assumptions contract, parking needs-review', async () => {
+    fake({ FAKE_TEXT: 'first reply' })
+    // A named item: the placeholder would fire an auto-title Turn into the
+    // argv log and race this assertion.
+    const item = saveItem(repo, { name: 'Search is slow', kind: 'idea' })
+    await send(item.id, 'groom it')
+
+    fake({ FAKE_TEXT: '```somni-groomed\n' + story({ spec: '## Assumptions\n- none' }) + '\n```' })
+    const events: ChatEvent[] = []
+    const p = workUnitTurn(repo, item.id, {}, ['dev'], (ev) => events.push(ev))
+    pending.push(p)
+    // Persisted state is the session manager's; the Turn itself must not clear it.
+    expect(loadItems(repo)[0].groomState).toBeUndefined()
+    await p
+
+    const call = callsLogged()[1]
+    expect(call).toEqual(expect.arrayContaining(['--resume', 'sess-abc']))
+    expect(call[1]).toContain('## Assumptions')
+    expect(call[1]).toContain('somni-question') // ...as the fence it must NOT emit
+    expect(call[1]).not.toContain('Interview discipline') // resumed: no groom preamble
+
+    expect(loadItems(repo)[0].groomState).toBe('needs-review')
+    expect(events).toContainEqual({ slug: item.id, kind: 'state', state: 'needs-review' })
+    const done = events.find((e) => e.kind === 'done')!
+    expect(done).toMatchObject({ workUnit: true })
+    expect(loadChat(repo, item.id).messages.map((m) => m.role)).toEqual([
+      'user',
+      'assistant',
+      'user',
+      'assistant'
+    ])
+  })
+
+  // The user must look either way — a work unit that came back with prose (or
+  // nothing at all) still parks, and the transcript records what happened.
+  it('parks needs-review when a work unit produces no proposal, and when it fails', async () => {
+    const a = startGroom(repo)
+    fake({ FAKE_TEXT: 'I could not decide.' })
+    await workUnitTurn(repo, a.id, {}, ['dev'], () => {})
+    expect(loadItems(repo).find((i) => i.id === a.id)!.groomState).toBe('needs-review')
+
+    const b = startGroom(repo)
+    fake({ FAKE_FAIL: '1' })
+    await workUnitTurn(repo, b.id, {}, ['dev'], () => {})
+    const items = loadItems(repo)
+    expect(items.find((i) => i.id === b.id)!.groomState).toBe('needs-review')
+    expect(loadChat(repo, b.id).messages.at(-1)).toMatchObject({
+      role: 'assistant',
+      text: expect.stringContaining('Background draft failed')
+    })
+  })
+
+  it("refuses a handoff while that session's own chat turn is in flight", async () => {
+    const item = startGroom(repo)
+    const p = send(item.id, 'thinking out loud')
+    expect(handoff(repo, item.id, { run: () => Promise.resolve(), emit: () => {} })).toEqual({
+      ok: false,
+      error: 'a chat turn is already in flight'
+    })
+    await p
+    expect(handoff(repo, item.id, { run: () => Promise.resolve(), emit: () => {} }).ok).toBe(true)
   })
 
   // No cleanup machinery: an abandoned groom is just an idea with an empty
