@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { promisify } from 'util'
 import { describe, it, expect, vi } from 'vitest'
-import { antigravityRunner, claudeRunner, getRunner } from './runners'
+import { antigravityRunner, claudeRunner, getRunner, runnerStatus } from './runners'
 
 // Wrap the real execFile so listModels tests can assert *how* it was called
 // (the timeout ceiling) without losing the real spawn the fixture tests need.
@@ -238,5 +238,37 @@ describe('listModels', () => {
     const spy = vi.mocked(execFile[promisify.custom])
     const call = spy.mock.calls.find((c) => c[0] === bin)
     expect(call?.[2]).toMatchObject({ timeout: 10_000 })
+  })
+})
+
+// The health probe backs the missing-Runner banner: ok must track whether the
+// configured binary actually executes, and the answer must be cache-free so a
+// Settings fix clears the banner without an app restart.
+describe('runnerStatus', () => {
+  const fixture = (body: string): string => {
+    const path = join(mkdtempSync(join(tmpdir(), 'somni-runner-')), 'claude')
+    writeFileSync(path, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+    return path
+  }
+
+  it('reports ok with the resolved binary when it runs', async () => {
+    const bin = fixture('echo 1.0.0')
+    await expect(runnerStatus({ claudeBinary: bin })).resolves.toEqual({ ok: true, binary: bin })
+  })
+
+  it('reports not ok when the binary is missing or failing', async () => {
+    await expect(runnerStatus({ claudeBinary: '/nope/claude' })).resolves.toEqual({
+      ok: false,
+      binary: '/nope/claude'
+    })
+    const bin = fixture('exit 1')
+    await expect(runnerStatus({ claudeBinary: bin })).resolves.toEqual({ ok: false, binary: bin })
+  })
+
+  it('probes fresh each call — a fixed path turns ok without restart', async () => {
+    const bin = '/nope/claude'
+    await expect(runnerStatus({ claudeBinary: bin })).resolves.toMatchObject({ ok: false })
+    const fixed = fixture('echo 1.0.0')
+    await expect(runnerStatus({ claudeBinary: fixed })).resolves.toMatchObject({ ok: true })
   })
 })

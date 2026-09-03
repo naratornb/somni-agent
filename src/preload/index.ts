@@ -15,6 +15,7 @@ import type {
   RunnerName,
   Settings
 } from '../main/store'
+import type { RunnerHealth } from '../main/runners'
 import type { ModelProgress, Transcription, VoiceStatus } from '../main/voice'
 
 export type { ChatEvent, ChatMessage, ChatProposal, ChatQuestion, GroomedStory } from '../main/chat'
@@ -112,6 +113,8 @@ const somni = {
     ipcRenderer.invoke('field:refine', repo, kind, text),
   // `runner` undefined = the role editor's inherit case; main resolves it.
   listModels: (runner?: RunnerName): Promise<string[]> => ipcRenderer.invoke('models:list', runner),
+  // Health of the configured Runner CLI (M22) — probed fresh on each ask.
+  runnerStatus: (): Promise<RunnerHealth> => ipcRenderer.invoke('runner:status'),
   // Voice input (M12). Capture is renderer-side; everything else is main's.
   voiceStatus: (): Promise<VoiceStatus> => ipcRenderer.invoke('voice:status'),
   downloadModel: (): Promise<{ ok: boolean; error?: string }> =>

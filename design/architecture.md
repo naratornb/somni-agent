@@ -106,6 +106,8 @@ Run statuses: `Queued / Running / Completed / Failed / Skipped / Cancelled`, plu
 
 somni supports two execution backends ("runners"): **Claude Code** (`claude`, Max plan) and **Google Antigravity** (`agy`, headless mode, Google subscription). Which one runs a task — and with what model and effort — is an **execution profile**:
 
+**Binary resolution (M22).** CLI binaries resolve on PATH (Settings paths override). A Finder-launched packaged .app inherits launchd's bare PATH, so at startup (packaged only) main resolves the login shell's PATH once (`src/main/env.ts` `shellPath()`: `$SHELL -ilc`, marker-scraped, 3s timeout, Homebrew-dir fallback) and assigns `process.env.PATH` — every spawn (runner, voice, git) inherits it from that one place. A cache-free `runner:status` probe (`runnerStatus()` in runners.ts, IPC in repoIpc) backs a dismissible missing-Runner banner in the shell that re-probes while visible, so a Settings fix clears it without restart.
+
 ```
 { runner: 'claude' | 'antigravity', model?: string, effort?: 'low'|'medium'|'high' }
 ```

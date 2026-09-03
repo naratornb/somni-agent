@@ -55,6 +55,10 @@ function App(): React.JSX.Element {
   // Vendored skills (M16): the offer banner. Dismissal is per-session.
   const [skills, setSkills] = useState<SkillsStatus | null>(null)
   const [skillsHidden, setSkillsHidden] = useState(false)
+  // Missing Runner CLI (M22): the binary name when unresolvable, else null.
+  // Dismissal is per-session, like the skills banner.
+  const [runnerMissing, setRunnerMissing] = useState<string | null>(null)
+  const [runnerHidden, setRunnerHidden] = useState(false)
 
   const refresh = useCallback(
     (path = repo): void => {
@@ -119,6 +123,18 @@ function App(): React.JSX.Element {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [repo])
+
+  // Probe on mount and on every navigation; while the banner shows, keep
+  // re-probing so fixing the path in Settings clears it in place, no restart
+  // and no navigation needed.
+  useEffect(() => {
+    const probe = (): void =>
+      void window.somni.runnerStatus().then((h) => setRunnerMissing(h.ok ? null : h.binary))
+    probe()
+    if (!runnerMissing || runnerHidden) return
+    const timer = setInterval(probe, 4000)
+    return () => clearInterval(timer)
+  }, [view, runnerMissing, runnerHidden])
 
   const choose = async (): Promise<void> => {
     const path = await window.somni.chooseRepo()
@@ -295,6 +311,23 @@ function App(): React.JSX.Element {
               </div>
             </div>
           ))}
+          {/* M22: the Runner CLI is the app's engine — say so when it's missing. */}
+          {runnerMissing && !runnerHidden && (
+            <div className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface-elevated p-card-padding">
+              <span>
+                Runner CLI <b>{runnerMissing}</b> not found — somni can&apos;t execute stories
+                without it. Install it, or set its path in Settings.
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  className="rounded border border-border-subtle bg-surface-container px-3 py-1.5 text-sm text-on-surface transition-colors hover:bg-surface-bright"
+                  onClick={() => setRunnerHidden(true)}
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
           {/* M16: the one-time skills offer. Silent once set up or dismissed. */}
           {repo && skills && !skillsHidden && skills.repoVersion !== skills.bundledVersion && (
             <div className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface-elevated p-card-padding">
