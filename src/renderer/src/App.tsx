@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import appIcon from './assets/icon.png'
 import type { DrainState, RepoData, RunState, SkillsStatus, ViewMode } from '../../preload/index'
 import { Playground } from './Playground'
 import { LogLine, PipelineView } from './PipelineView'
@@ -183,7 +184,8 @@ function App(): React.JSX.Element {
   return (
     <div className="flex h-screen overflow-hidden bg-background text-on-surface font-body-md text-body-md">
       <nav className="fixed left-0 top-0 z-20 flex h-screen w-sidebar-width flex-col border-r border-border-subtle bg-background px-4 py-6">
-        <div className="mb-8 px-3">
+        <div className="mb-8 flex items-center gap-2.5 px-3">
+          <img src={appIcon} alt="" className="h-6 w-6 rounded-md" />
           <h1 className="font-headline-md text-headline-md font-bold tracking-tight text-primary">
             somni
           </h1>

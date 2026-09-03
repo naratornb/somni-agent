@@ -24,6 +24,9 @@ nsis:
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  target:
+    - target: dmg
+      arch: arm64
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.
@@ -33,6 +36,18 @@ mac:
   notarize: false
 dmg:
   artifactName: ${name}-${version}.${ext}
+  background: build/background.tiff
+  window:
+    width: 540
+    height: 380
+  contents:
+    - x: 140
+      y: 195
+      type: file
+    - x: 400
+      y: 195
+      type: link
+      path: /Applications
 linux:
   target:
     - AppImage
