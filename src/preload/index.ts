@@ -33,6 +33,7 @@ export type { IpcResult, RunDetails, RunRow } from '../main/repoIpc'
 export type { SkillsStatus } from '../main/skills'
 export type {
   Effort,
+  GroomState,
   Item,
   ItemKind,
   ItemStatus,
@@ -149,6 +150,9 @@ const somni = {
   // Opens a from-scratch Groom: main creates the Item first (M25.1) and the
   // conversation is keyed on its real id.
   startGroom: (repo: string): Promise<Item> => ipcRenderer.invoke('groom:start', repo),
+  // Archived session → plain active conversation again (M25.3).
+  reopenSession: (repo: string, id: string): Promise<Item> =>
+    ipcRenderer.invoke('session:reopen', repo, id),
   // `partial` is the reply streamed so far when `busy` — a Groom re-entered
   // mid-Turn renders it under the streaming cursor (M25.2).
   loadChat: (

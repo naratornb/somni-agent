@@ -99,6 +99,75 @@ export const reorderBacklog = (order: string[], dragId: string, targetId: string
   return at === -1 ? [...without, dragId] : [...without.slice(0, at), dragId, ...without.slice(at)]
 }
 
+// ── Sessions page (M25.3) ────────────────────────────────────────────────────
+// Grooming sessions are Items with session state in their frontmatter; the page
+// is a pure projection of the repo:load payload, so no session index exists.
+
+// Session-state chip, in the STATUS_CHIP formula but on the session vocabulary
+// — a session state is never an Item Status, so it never reuses those labels.
+export const SESSION_CHIP: Record<string, { label: string; cls: string }> = {
+  'needs-review': { label: 'Needs review', cls: STATUS_CHIP.Running },
+  working: { label: 'Working', cls: STATUS_CHIP.Running },
+  queued: { label: 'Queued', cls: STATUS_CHIP.Queued },
+  interrupted: { label: 'Interrupted', cls: STATUS_CHIP.Cancelled },
+  done: { label: 'Done', cls: STATUS_CHIP.Completed },
+  archived: { label: 'Archived', cls: STATUS_CHIP.Skipped },
+  active: { label: 'Active', cls: STATUS_CHIP.Queued }
+}
+export const sessionChip = (state?: string): { label: string; cls: string } => {
+  const c = SESSION_CHIP[state ?? 'active'] ?? SESSION_CHIP.active
+  return { label: c.label, cls: `${STATUS_CHIP_BASE} ${c.cls}` }
+}
+
+export type SessionSort = 'activity' | 'created' | 'title'
+export type SessionGroup = { key: string; label: string; items: Item[] }
+
+/** Last time anything happened in the session — the default sort key. */
+export const sessionActivity = (i: Item): string => i.lastActivity || i.created || ''
+
+// `working`/`queued` render empty until #43 fills them; `interrupted` joins the
+// review group — it is equally something the user has to come back to.
+const GROUPS: { key: string; label: string; states: (string | undefined)[] }[] = [
+  { key: 'needs-review', label: 'Needs your review', states: ['needs-review', 'interrupted'] },
+  { key: 'working', label: 'Working', states: ['working'] },
+  { key: 'queued', label: 'Queued', states: ['queued'] },
+  { key: 'talking', label: 'In conversation', states: [undefined] },
+  { key: 'done', label: 'Recently done', states: ['done'] },
+  { key: 'archived', label: 'Archived', states: ['archived'] }
+]
+
+/** An item is a grooming session once it is being groomed or carries a state. */
+export const isSession = (i: Item): boolean => i.status === 'grooming' || i.groomState != null
+
+/**
+ * The Sessions page's grouped, filtered, sorted rows. Pure so the ordering and
+ * the empty groups (which still render, with their heading) are testable.
+ */
+export const sessionGroups = (
+  items: Item[],
+  opts: { sort?: SessionSort; query?: string; kind?: string; archived?: boolean } = {}
+): SessionGroup[] => {
+  const q = (opts.query ?? '').trim().toLowerCase()
+  const matches = items.filter(
+    (i) =>
+      isSession(i) &&
+      (!q || i.name.toLowerCase().includes(q) || i.id.toLowerCase().includes(q)) &&
+      (!opts.kind || i.kind === opts.kind)
+  )
+  const sorted = [...matches].sort((a, b) =>
+    opts.sort === 'title'
+      ? a.name.localeCompare(b.name)
+      : opts.sort === 'created'
+        ? (b.created || '').localeCompare(a.created || '')
+        : sessionActivity(b).localeCompare(sessionActivity(a))
+  )
+  return GROUPS.filter((g) => g.key !== 'archived' || opts.archived).map((g) => ({
+    key: g.key,
+    label: g.label,
+    items: sorted.filter((i) => g.states.includes(i.groomState))
+  }))
+}
+
 export type PaletteResult =
   | { key: string; label: string; action: 'capture' | 'pipeline' }
   | { key: string; label: string; action: 'goto'; view: string }

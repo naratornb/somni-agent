@@ -264,9 +264,13 @@ export function sendChat(
     // A brand-new groom has nothing worth seeding — don't feed the placeholder.
     if (item.name !== NEW_GROOM_NAME || item.spec.trim())
       context = `# ${item.name}\n\n${item.spec}`.trim()
+    // Sending clears the session state: the user is back in the conversation,
+    // so a reviewed/done/archived session is plainly active again (M25.3).
     store.updateItem(repo, item.id, {
       status: 'grooming',
-      lastActivity: new Date().toISOString()
+      lastActivity: new Date().toISOString(),
+      groomState: undefined,
+      doneAt: undefined
     })
   }
 
@@ -303,6 +307,15 @@ export function sendChat(
     }
     const message: ChatMessage = { role: 'assistant', text: reply, ts: new Date().toISOString() }
     appendLine(repo, slug, message)
+    // A pending Proposal is what "needs your review" means today (M25.3);
+    // #43 re-drives the same state from work units.
+    if (item && parseProposal(reply)) {
+      try {
+        store.updateItem(repo, item.id, { groomState: 'needs-review' })
+      } catch {
+        /* item deleted mid-groom */
+      }
+    }
     onEvent({
       slug,
       kind: 'done',
@@ -375,8 +388,12 @@ export function applyProposal(
   }
   // An Epic never executes, so it lands back in Backlog; a groomed Story is
   // Ready by definition — the Spec and its Subtasks just got approved.
+  // Apply is what `done` means for a session (M25.3) — doneAt starts the
+  // 14-day auto-archive clock.
   const root = store.saveItem(repo, {
     ...existing,
+    groomState: 'done',
+    doneAt: new Date().toISOString(),
     slug: store.slugify(proposal.name), // a renamed item moves file, keeping its id
     kind: proposal.kind,
     status: proposal.kind === 'epic' ? 'backlog' : 'ready',

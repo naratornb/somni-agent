@@ -327,6 +327,16 @@ describe('applyProposal', () => {
     )
   })
 
+  it('marks the session done with a doneAt stamp (M25.3)', () => {
+    const idea = saveItem(repo, { name: 'Vague thought', kind: 'idea', status: 'grooming' })
+    const res = applyProposal(repo, idea.id, groomed({ roles: [] }))
+    expect(res.ok).toBe(true)
+    const applied = loadItems(repo)[0]
+    expect(applied.groomState).toBe('done')
+    expect(Date.parse(applied.doneAt!)).toBeGreaterThan(0)
+    expect(applied.status).toBe('ready') // the Item Status is its own vocabulary
+  })
+
   it('rewrites an already-groomed story in place when re-groomed', () => {
     const first = applyProposal(repo, saveItem(repo, { name: 'Thing' }).id, groomed({ roles: [] }))
     expect(first.ok).toBe(true)
@@ -773,6 +783,25 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     expect(loadChat(repo, a.id).messages.map((m) => m.text)).toEqual(['groom A', 'hello there'])
     expect(loadChat(repo, b.id).messages.map((m) => m.text)).toEqual(['groom B', 'hello there'])
     expect(loadItems(repo)).toHaveLength(2)
+  })
+
+  // Session state (M25.3): the pending Proposal is what needs review, and the
+  // next message puts the session back into plain conversation.
+  it('flags needs-review when a turn proposes, and clears it on the next send', async () => {
+    fake({ FAKE_TEXT: '```somni-groomed\n' + story() + '\n```' })
+    const item = startGroom(repo)
+    await send(item.id, 'groom it')
+    expect(loadItems(repo)[0].groomState).toBe('needs-review')
+    expect(readFileSync(itemFile(repo, item.id), 'utf8')).toContain('groomState: needs-review')
+    fake({ FAKE_TEXT: 'plain reply' })
+    await send(item.id, 'actually, one more thing')
+    expect(loadItems(repo)[0].groomState).toBeUndefined()
+  })
+
+  it('leaves a session stateless when the turn carries no proposal', async () => {
+    const item = startGroom(repo)
+    await send(item.id, 'hi')
+    expect(loadItems(repo)[0].groomState).toBeUndefined()
   })
 
   // No cleanup machinery: an abandoned groom is just an idea with an empty

@@ -4,6 +4,7 @@ import type { DrainState, RepoData, RunState, SkillsStatus } from '../../preload
 import { Playground } from './Playground'
 import { LogLine, PipelineView } from './PipelineView'
 import { RunsView } from './RunsView'
+import { SessionsView } from './SessionsView'
 import { SettingsView } from './SettingsView'
 import { BoardView } from './BoardView'
 import { GroomView } from './GroomView'
@@ -17,6 +18,9 @@ import { BTN_PRIMARY, saveCapture, type PaletteResult } from './ui'
 const VIEWS = {
   Home: 'speed',
   Board: 'account_tree',
+  // Sessions and Groom share the chat glyph — Groom is not a nav destination,
+  // so nothing is ambiguous and the icon subset stays as it is.
+  Sessions: 'chat_bubble',
   Groom: 'chat_bubble',
   Runs: 'history',
   Settings: 'settings',
@@ -24,9 +28,9 @@ const VIEWS = {
 } as const
 type View = keyof typeof VIEWS
 
-// The four destinations (M23). Groom is a flow step, not a place; Playground
-// is a dev surface only.
-const NAV: View[] = ['Home', 'Board', 'Runs', 'Settings']
+// The nav destinations (M23, + Sessions in M25.3). Groom is a flow step, not a
+// place; Playground is a dev surface only.
+const NAV: View[] = ['Home', 'Board', 'Sessions', 'Runs', 'Settings']
 if (import.meta.env.DEV) NAV.push('Playground')
 
 const timeAgo = (iso: string): string => {
@@ -380,6 +384,18 @@ function App(): React.JSX.Element {
                 onCancel={() => void window.somni.cancelPipeline()}
               />
             </HomeView>
+          ) : view === 'Sessions' ? (
+            <SessionsView
+              repo={repo}
+              items={data.items}
+              refresh={refresh}
+              onOpen={(item) => {
+                setGroom({ id: item.id, name: item.name })
+                setGroomSeed(null)
+                setAutoRun(false)
+                setView('Groom')
+              }}
+            />
           ) : view === 'Runs' ? (
             <RunsView repo={repo} />
           ) : view === 'Groom' && groom ? (

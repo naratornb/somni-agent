@@ -16,6 +16,7 @@ import { StoryPanel } from './StoryPanel'
 import { Playground } from './Playground'
 import { RolesView } from './RolesView'
 import { RunDetailsPanel, RunsView } from './RunsView'
+import { SessionsView } from './SessionsView'
 import { SettingsView } from './SettingsView'
 import {
   MicButton,
@@ -25,7 +26,7 @@ import {
   StreamingBubble
 } from './chatShared'
 import { CaptureModal, CommandPalette, QuickAdd } from './capture'
-import { captureItem, paletteResults, reorderBacklog, saveCapture } from './ui'
+import { captureItem, paletteResults, reorderBacklog, saveCapture, sessionGroups } from './ui'
 
 // Every somni.* call is a noop; proposeNow is read during render.
 const somni = new Proxy({ proposeNow: 'PROPOSE_NOW' } as Record<string, unknown>, {
@@ -302,7 +303,7 @@ test('MicButton stays enabled in the no-binary state', () => {
 // is what the body shows.
 test('App nav lists exactly the destinations; retired entries and the mode toggle are gone', () => {
   const html = renderToStaticMarkup(<App />)
-  for (const v of ['Home', 'Board', 'Runs', 'Settings', 'Playground']) {
+  for (const v of ['Home', 'Board', 'Sessions', 'Runs', 'Settings', 'Playground']) {
     expect(html).toContain(`>${v}</button>`)
   }
   for (const gone of ['>Groom</button>', '>Pipeline</button>', '>Roles</button>', '>Engineer<']) {
@@ -720,4 +721,105 @@ test('HomeView renders a mic beside the quick-start box', () => {
 test('QuickAdd renders its mic without requiring field focus', () => {
   const html = renderToStaticMarkup(<QuickAdd repo="/repo" refresh={() => {}} />)
   expect(html).toContain('material-symbols-outlined text-[16px]">mic')
+})
+
+// M25.3: the Sessions page. Sessions are Items with session state in
+// frontmatter — the page is a pure projection of the loaded items.
+const sessions: Item[] = [
+  {
+    id: 'SOM-10',
+    slug: 'a',
+    kind: 'idea',
+    status: 'grooming',
+    name: 'Alpha talk',
+    spec: '',
+    created: '2026-09-01T00:00:00.000Z',
+    lastActivity: '2026-09-03T10:00:00.000Z',
+    tasks: []
+  },
+  {
+    id: 'SOM-11',
+    slug: 'b',
+    kind: 'story',
+    status: 'grooming',
+    name: 'Beta review',
+    spec: '',
+    created: '2026-09-02T00:00:00.000Z',
+    lastActivity: '2026-09-03T12:00:00.000Z',
+    groomState: 'needs-review',
+    tasks: []
+  },
+  {
+    id: 'SOM-12',
+    slug: 'c',
+    kind: 'story',
+    status: 'ready',
+    name: 'Gamma applied',
+    spec: '',
+    created: '2026-08-01T00:00:00.000Z',
+    groomState: 'done',
+    doneAt: '2026-09-02T00:00:00.000Z',
+    tasks: []
+  },
+  {
+    id: 'SOM-13',
+    slug: 'd',
+    kind: 'story',
+    status: 'ready',
+    name: 'Delta old',
+    spec: '',
+    created: '2026-07-01T00:00:00.000Z',
+    groomState: 'archived',
+    tasks: []
+  }
+]
+
+test('sessionGroups groups, hides archived, sorts and filters', () => {
+  const groups = sessionGroups(sessions)
+  expect(groups.map((g) => g.key)).toEqual(['needs-review', 'working', 'queued', 'talking', 'done'])
+  expect(groups[0].items.map((i) => i.id)).toEqual(['SOM-11'])
+  expect(groups[1].items).toEqual([]) // working stays empty until #43
+  expect(groups[3].items.map((i) => i.id)).toEqual(['SOM-10'])
+  expect(groups[4].items.map((i) => i.id)).toEqual(['SOM-12'])
+  // only grooming/stateful items are sessions — the Board fixture has one
+  expect(sessionGroups(items).flatMap((g) => g.items.map((i) => i.id))).toEqual(['SOM-2'])
+
+  const withArchived = sessionGroups(sessions, { archived: true })
+  expect(withArchived.at(-1)).toMatchObject({ key: 'archived' })
+  expect(withArchived.at(-1)!.items.map((i) => i.id)).toEqual(['SOM-13'])
+
+  // default sort is last activity (falling back to created), newest first
+  const all = (opts = {}): string[] =>
+    sessionGroups([...sessions].reverse(), { archived: true, ...opts }).flatMap((g) =>
+      g.items.map((i) => i.id)
+    )
+  expect(all({ sort: 'title' })).toEqual(['SOM-11', 'SOM-10', 'SOM-12', 'SOM-13'])
+  expect(all({ query: 'beta' })).toEqual(['SOM-11'])
+  expect(all({ query: 'som-12' })).toEqual(['SOM-12'])
+  expect(all({ kind: 'idea' })).toEqual(['SOM-10'])
+  expect(all({ kind: 'story' })).toEqual(['SOM-11', 'SOM-12', 'SOM-13'])
+})
+
+test('SessionsView renders every group heading, its rows and the empty state', () => {
+  const html = renderToStaticMarkup(
+    <SessionsView repo="/repo" items={sessions} onOpen={() => {}} refresh={() => {}} />
+  )
+  for (const label of [
+    'Needs your review',
+    'Working',
+    'Queued',
+    'In conversation',
+    'Recently done'
+  ])
+    expect(html).toContain(label)
+  expect(html).toContain('Beta review')
+  expect(html).toContain('SOM-11')
+  expect(html).toContain('Needs review')
+  expect(html).toContain('Nothing here.') // Working/Queued are empty for now
+  expect(html).not.toContain('Delta old') // archived is behind the toggle
+
+  const empty = renderToStaticMarkup(
+    <SessionsView repo="/repo" items={[]} onOpen={() => {}} refresh={() => {}} />
+  )
+  expect(empty).toContain('No grooming sessions yet for this repo.')
 })

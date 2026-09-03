@@ -89,8 +89,13 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
 
   ipcMain.handle('repo:load', (_e, repo: string) => {
     store.ensureSomni(repo)
+    // Done sessions age out here rather than on a timer (M25.3).
+    store.archiveStaleSessions(repo)
     return store.loadRepo(repo)
   })
+
+  // Reopen an archived session — back to a plain active conversation.
+  ipcMain.handle('session:reopen', (_e, repo: string, id: string) => store.reopenSession(repo, id))
 
   // Home quick-start chips (M23): cheap local git signals, no AI calls. [] on
   // any failure — the renderer owns the static fallback.

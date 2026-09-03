@@ -18,7 +18,9 @@ import {
   readyBlocker,
   resolveProfile,
   resolveSettings,
-  setItemStatus
+  setItemStatus,
+  archiveStaleSessions,
+  reopenSession
 } from './store'
 
 let repo: string
@@ -297,5 +299,59 @@ describe('backlog ordering', () => {
     expect(loadBacklog(repo)).toEqual([b.id, a.id])
     deleteItem(repo, b.id)
     expect(loadBacklog(repo)).toEqual([a.id])
+  })
+})
+
+// Session lifecycle (M25.3) — grooming machinery in frontmatter, never a Status.
+describe('grooming sessions', () => {
+  const day = 86_400_000
+  const groom = (name: string, extra = {}): ReturnType<typeof saveItem> =>
+    saveItem(repo, { name, kind: 'idea', status: 'grooming', ...extra })
+
+  it('round-trips groomState and doneAt through frontmatter', () => {
+    const i = groom('Applied', { groomState: 'done', doneAt: '2026-09-01T00:00:00.000Z' })
+    const raw = readFileSync(join(repo, '.somni/items', `${i.id}-applied.md`), 'utf8')
+    expect(raw).toContain('groomState: done')
+    expect(raw).toContain('doneAt: 2026-09-01T00:00:00.000Z')
+    expect(loadItems(repo)[0]).toMatchObject({
+      status: 'grooming',
+      groomState: 'done',
+      doneAt: '2026-09-01T00:00:00.000Z'
+    })
+  })
+
+  it('ignores an unknown hand-written groomState', () => {
+    mkdirSync(join(repo, '.somni/items'), { recursive: true })
+    writeFileSync(
+      join(repo, '.somni/items/SOM-7-hand.md'),
+      '---\nid: SOM-7\nkind: idea\nstatus: grooming\ngroomState: nonsense\n---\n# Hand\n'
+    )
+    expect(loadItems(repo)[0].groomState).toBeUndefined()
+  })
+
+  it('archives only done sessions older than 14 days', () => {
+    const now = Date.parse('2026-09-20T00:00:00.000Z')
+    const old = groom('Old', { groomState: 'done', doneAt: new Date(now - 15 * day).toISOString() })
+    const fresh = groom('Fresh', {
+      groomState: 'done',
+      doneAt: new Date(now - 13 * day).toISOString()
+    })
+    const talking = groom('Talking')
+    expect(archiveStaleSessions(repo, now)).toEqual([old.id])
+    const byId = Object.fromEntries(loadItems(repo).map((i) => [i.id, i]))
+    expect(byId[old.id].groomState).toBe('archived')
+    expect(byId[fresh.id].groomState).toBe('done')
+    expect(byId[talking.id].groomState).toBeUndefined()
+    // idempotent: a second sweep finds nothing new
+    expect(archiveStaleSessions(repo, now)).toEqual([])
+  })
+
+  it('reopen clears the archived state back to an active conversation', () => {
+    const i = groom('Old', { groomState: 'archived', doneAt: '2026-08-01T00:00:00.000Z' })
+    expect(reopenSession(repo, i.id).groomState).toBeUndefined()
+    const raw = readFileSync(join(repo, '.somni/items', `${i.id}-old.md`), 'utf8')
+    expect(raw).not.toContain('groomState')
+    expect(raw).not.toContain('doneAt')
+    expect(loadItems(repo)[0].status).toBe('grooming') // Status is untouched
   })
 })
