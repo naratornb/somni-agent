@@ -38,8 +38,8 @@ function App(): React.JSX.Element {
   const [repo, setRepo] = useState<string | null>(null)
   const [data, setData] = useState<RepoData>({ roles: [], items: [], backlog: [] })
   const [view, setView] = useState<View>('Home')
-  // Which item the Groom view is grooming; null = from scratch (_draft).
-  const [groomId, setGroomId] = useState<string | null>(null)
+  // The item the Groom view is grooming — every door creates it first (M25.1).
+  const [groom, setGroom] = useState<{ id: string; name: string } | null>(null)
   // Home quick-start (M23): the typed task seeds the groom, and Apply of a
   // Ready story auto-queues it. Board/Capture grooms never set these.
   const [groomSeed, setGroomSeed] = useState<string | null>(null)
@@ -175,10 +175,13 @@ function App(): React.JSX.Element {
 
   // Home quick-start → groom seeded with the typed task; Apply auto-queues.
   const quickStart = (text: string): void => {
-    setGroomId(null)
-    setGroomSeed(text)
-    setAutoRun(true)
-    setView('Groom')
+    if (!repo) return
+    void window.somni.startGroom(repo).then((item) => {
+      setGroom({ id: item.id, name: item.name })
+      setGroomSeed(text)
+      setAutoRun(true)
+      setView('Groom')
+    })
   }
 
   // The palette is a second surface for actions that already exist — never a
@@ -360,11 +363,12 @@ function App(): React.JSX.Element {
             </HomeView>
           ) : view === 'Runs' ? (
             <RunsView repo={repo} />
-          ) : view === 'Groom' ? (
+          ) : view === 'Groom' && groom ? (
             <GroomView
               repo={repo}
               roles={data.roles}
-              itemId={groomId}
+              itemId={groom.id}
+              itemName={groom.name}
               seed={groomSeed ?? undefined}
               applyLabel={autoRun ? 'Apply & run' : undefined}
               onApplied={(item) => {
@@ -388,8 +392,8 @@ function App(): React.JSX.Element {
               refresh={refresh}
               openId={openId}
               onClosePanel={() => setOpenId(null)}
-              onGroom={(id) => {
-                setGroomId(id)
+              onGroom={(item) => {
+                setGroom({ id: item.id, name: item.name })
                 setGroomSeed(null)
                 setAutoRun(false)
                 setView('Groom')
@@ -403,9 +407,9 @@ function App(): React.JSX.Element {
           repo={repo}
           onClose={() => setCapturing(false)}
           onSaved={() => refresh()}
-          onGroom={(id) => {
+          onGroom={(item) => {
             setCapturing(false)
-            setGroomId(id)
+            setGroom({ id: item.id, name: item.name })
             setGroomSeed(null)
             setAutoRun(false)
             setView('Groom')

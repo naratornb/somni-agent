@@ -2,7 +2,7 @@
 // claude spawn path as task execution; the chat never writes definitions —
 // `applyProposal` below is the one user-triggered mutation.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'fs'
 import { dirname, join } from 'path'
 import { getRunner } from './runners'
 import { groomPreamble } from './prompts'
@@ -10,8 +10,10 @@ import * as store from './store'
 import { turn } from './turn'
 import type { Effort, Item, Profile, Role, RunnerName, Settings, Task } from './store'
 
-// Reserved chat key for the one pre-Apply from-scratch groom (§7, Decision 1).
-export const DRAFT_KEY = '_draft'
+// Every Groom is an Item from its first message (M25.1) — there is no draft
+// slot. A from-scratch groom starts as an Idea under this placeholder name,
+// which the AI replaces with a real title after the first exchange.
+export const NEW_GROOM_NAME = 'New groom'
 
 export type ChatMessage = { role: 'user' | 'assistant'; text: string; ts: string }
 // One proposed child Story. `blockedBy` holds *indices* of earlier entries in
@@ -36,6 +38,8 @@ export type ChatEvent =
       question: ChatQuestion | null
     }
   | { slug: string; kind: 'error'; message: string }
+  // The AI auto-title landed on the item (M25.1) — the view renders the name.
+  | { slug: string; kind: 'title'; name: string }
 
 const chatPath = (repo: string, slug: string): string =>
   join(repo, '.somni', 'chats', slug + '.jsonl')
@@ -44,6 +48,13 @@ const chatPath = (repo: string, slug: string): string =>
 export const PROPOSE_NOW =
   'Stop interviewing and propose the groomed result now, from my answers so far ' +
   'plus your own stated assumptions for anything still open.'
+
+// Opening a from-scratch Groom (M25.1): the Item exists before the first
+// message, so the conversation is keyed on a real id and two parallel grooms
+// can never share a transcript.
+export function startGroom(repo: string): Item {
+  return store.saveItem(repo, { kind: 'idea', status: 'grooming', name: NEW_GROOM_NAME })
+}
 
 // The message for one turn. First turn carries the preamble; later turns resume.
 const chatPrompt = (
@@ -237,14 +248,19 @@ export function sendChat(
   const lines = readLines(repo, slug)
   let sessionId = sessionOf(lines)
   appendLine(repo, slug, { role: 'user', text, ts: new Date().toISOString() })
-  // An item-keyed groom seeds turn-1 context with the item as it stands, and
-  // the first turn moves it into Grooming (§7). A from-scratch groom has no
-  // item to seed or flip — it creates nothing until Apply.
-  const item = slug === DRAFT_KEY ? undefined : store.loadItems(repo).find((i) => i.id === slug)
+  // Every groom is keyed on a real item (M25.1): turn 1 is seeded with the item
+  // as it stands, and each turn flips it into Grooming and stamps its last
+  // activity. Nothing else is written until Apply.
+  const item = store.loadItems(repo).find((i) => i.id === slug)
   let context: string | undefined
   if (item) {
-    context = `# ${item.name}\n\n${item.spec}`.trim()
-    if (item.status !== 'grooming') store.setItemStatus(repo, item.id, 'grooming')
+    // A brand-new groom has nothing worth seeding — don't feed the placeholder.
+    if (item.name !== NEW_GROOM_NAME || item.spec.trim())
+      context = `# ${item.name}\n\n${item.spec}`.trim()
+    store.updateItem(repo, item.id, {
+      status: 'grooming',
+      lastActivity: new Date().toISOString()
+    })
   }
 
   let reply = ''
@@ -285,27 +301,65 @@ export function sendChat(
       proposal: parseProposal(reply),
       question: parseQuestion(reply)
     })
+    if (item?.name === NEW_GROOM_NAME) void autoTitle(repo, slug, text, reply, settings, onEvent)
   })
   return { ok: true }
+}
+
+const TITLE_PROMPT =
+  'Title this grooming conversation as a work-item name: a specific noun phrase ' +
+  'of at most 8 words. Reply with the title alone — no quotes, no punctuation at ' +
+  'the end, no preamble.'
+
+// After the first exchange the placeholder name is replaced by an AI title
+// (M25.1). One read-only Turn, the report.ts compact-summary precedent: any
+// failure degrades to keeping the placeholder, and the groom is unaffected.
+async function autoTitle(
+  repo: string,
+  id: string,
+  question: string,
+  reply: string,
+  settings: Settings,
+  onEvent: (ev: ChatEvent) => void
+): Promise<void> {
+  const r = await turn({
+    prompt: `${TITLE_PROMPT}\n\n---\n${question}\n\n---\n${reply}`,
+    settings,
+    cwd: repo,
+    readOnly: true
+  })
+  const name = r.ok
+    ? r.text
+        .trim()
+        .split('\n')[0]
+        .replace(/^["'#\s]+|["'\s]+$/g, '')
+    : ''
+  if (!name) return
+  try {
+    // Re-read guards the race with a manual rename mid-turn: only the
+    // placeholder is ever overwritten.
+    if (store.loadItems(repo).find((i) => i.id === id)?.name !== NEW_GROOM_NAME) return
+    onEvent({ slug: id, kind: 'title', name: store.renameItem(repo, id, name).name })
+  } catch {
+    /* item deleted mid-groom — nothing to title */
+  }
 }
 
 // Apply — the only mutation out of a groom, and it lives here so every write
 // stays in main (§7). The groomed item converts in place, keeping its id;
 // child Stories are created ready with their blockedBy indices resolved to real
-// ids. From-scratch (`key` = _draft) it creates the item(s) and renames the
-// transcript onto the root item's id.
+// ids. Every groom is item-keyed now (M25.1) — there is no from-scratch case.
 export function applyProposal(
   repo: string,
   key: string,
   proposal: ChatProposal
 ): { ok: true; item: Item } | { ok: false; error: string } {
-  // Applying mid-turn would rename the transcript out from under the reply
+  // Applying mid-turn would move the item's file out from under the reply
   // still being appended to it.
   if (inFlight.has(key)) return { ok: false, error: 'a chat turn is already in flight' }
-  const scratch = key === DRAFT_KEY
   const { roles, items } = store.loadRepo(repo)
-  const existing = scratch ? undefined : items.find((i) => i.id === key)
-  if (!scratch && !existing) return { ok: false, error: `item not found: ${key}` }
+  const existing = items.find((i) => i.id === key)
+  if (!existing) return { ok: false, error: `item not found: ${key}` }
   const roleSlugs = new Set(roles.map((r) => r.slug))
   for (const role of proposal.roles) {
     if (!roleSlugs.has(role.slug)) store.saveRole(repo, role) // existing role always wins
@@ -334,13 +388,10 @@ export function applyProposal(
     })
     childIds.push(child.id)
   }
-  if (scratch) {
-    // Mirrors `item:save`: a new Backlog item joins the column's ordering.
-    if (root.status === 'backlog') store.saveBacklog(repo, [...store.loadBacklog(repo), root.id])
-    mkdirSync(dirname(chatPath(repo, root.id)), { recursive: true })
-    if (existsSync(chatPath(repo, DRAFT_KEY)))
-      renameSync(chatPath(repo, DRAFT_KEY), chatPath(repo, root.id))
-  }
+  // Mirrors `item:save`: an item landing in Backlog joins the column's ordering.
+  const backlog = store.loadBacklog(repo)
+  if (root.status === 'backlog' && !backlog.includes(root.id))
+    store.saveBacklog(repo, [...backlog, root.id])
   return { ok: true, item: root }
 }
 

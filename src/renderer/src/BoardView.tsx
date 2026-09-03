@@ -24,7 +24,7 @@ type Props = {
   roles: Role[]
   runs: Record<string, RunState> // this session's live runs, keyed by runId
   refresh: () => void
-  onGroom: (id: string) => void // hand off to the Groom view (§7)
+  onGroom: (item: Item) => void // hand off to the Groom view (§7)
   openId?: string | null // item the palette asked to open in the StoryPanel
   onClosePanel?: () => void
 }
@@ -123,7 +123,7 @@ export function BoardView({
 
   // Grooming is the AI interview, not the hand-edit panel: main flips the
   // status on the first turn, so this just opens the view (§7).
-  const groom = (item: Item): void => onGroom(item.id)
+  const groom = (item: Item): void => onGroom(item)
 
   // Add to pipeline / Re-run share the gate-checking path in main.
   const addToPipeline = async (id: string): Promise<void> => {

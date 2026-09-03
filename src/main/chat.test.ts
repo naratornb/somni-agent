@@ -5,19 +5,31 @@ import { join } from 'path'
 import { groomPreamble } from './prompts'
 import {
   applyProposal,
-  DRAFT_KEY,
   killChats,
+  NEW_GROOM_NAME,
   loadChat,
   newChat,
   parseProposal,
   parseQuestion,
   PROPOSE_NOW,
   sendChat,
+  startGroom,
   turnArgs
 } from './chat'
 import type { ChatEvent } from './chat'
-import { existsSync } from 'fs'
-import { loadBacklog, loadItems, loadRepo, saveItem, saveRole } from './store'
+import { existsSync, readdirSync } from 'fs'
+import { loadBacklog, loadItems, loadRepo, renameItem, saveItem, saveRole } from './store'
+
+// The item's file basename is id + slug, and the slug moves on rename.
+const itemFile = (repo: string, id: string): string =>
+  join(
+    repo,
+    '.somni',
+    'items',
+    readdirSync(join(repo, '.somni', 'items')).find(
+      (f) => f.startsWith(id + '-') && f.endsWith('.md')
+    )!
+  )
 
 const block = (json: string): string => '```somni-groomed\n' + json + '\n```'
 // A one-Story proposal in the pinned schema; `over` swaps any field.
@@ -245,22 +257,22 @@ describe('parseQuestion', () => {
   })
 })
 
-// Crash-safety (M8): nothing about finding/loading a draft depends on
+// Crash-safety (M8): nothing about finding/loading a transcript depends on
 // in-process state — a transcript written by a prior process lifetime (i.e.
 // before an app restart) must load exactly like one written this session.
-describe('draft transcript survives a simulated restart', () => {
+describe('groom transcript survives a simulated restart', () => {
   it('loadChat finds a transcript it never wrote itself', () => {
     const repo = mkdtempSync(join(tmpdir(), 'somni-restart-'))
     mkdirSync(join(repo, '.somni', 'chats'), { recursive: true })
     writeFileSync(
-      join(repo, '.somni', 'chats', DRAFT_KEY + '.jsonl'),
+      join(repo, '.somni', 'chats', 'SOM-1.jsonl'),
       [
         JSON.stringify({ role: 'user', text: 'hi', ts: '2020-01-01T00:00:00Z' }),
         JSON.stringify({ sessionId: 'sess-from-before-restart' }),
         JSON.stringify({ role: 'assistant', text: 'hello', ts: '2020-01-01T00:00:01Z' })
       ].join('\n') + '\n'
     )
-    const { messages, busy } = loadChat(repo, DRAFT_KEY)
+    const { messages, busy } = loadChat(repo, 'SOM-1')
     expect(messages.map((m) => `${m.role}:${m.text}`)).toEqual(['user:hi', 'assistant:hello'])
     expect(busy).toBe(false) // inFlight is in-memory and correctly empty post-restart
   })
@@ -369,17 +381,18 @@ describe('applyProposal', () => {
     expect(md).toContain('write things')
   })
 
-  it('creates the item from scratch and renames the _draft transcript onto its id', () => {
+  // M25.1: a from-scratch groom already owns its Item and its transcript, so
+  // Apply converts that Item in place — no draft slot, no transcript rename.
+  it('converts the groom-born idea into the epic in place, keeping id and transcript', () => {
+    const born = startGroom(repo)
     mkdirSync(join(repo, '.somni', 'chats'), { recursive: true })
-    writeFileSync(join(repo, '.somni', 'chats', DRAFT_KEY + '.jsonl'), '{"role":"user"}\n')
-    const res = applyProposal(repo, DRAFT_KEY, epic({ roles: [] }))
-    expect(res.ok).toBe(true)
-    const id = res.ok ? res.item.id : ''
+    writeFileSync(join(repo, '.somni', 'chats', born.id + '.jsonl'), '{"role":"user"}\n')
+    const res = applyProposal(repo, born.id, epic({ roles: [] }))
+    expect(res.ok && res.item.id).toBe(born.id)
     expect(loadItems(repo).map((i) => i.name)).toEqual(['Search Overhaul', 'Index', 'Query'])
-    expect(existsSync(join(repo, '.somni', 'chats', DRAFT_KEY + '.jsonl'))).toBe(false)
-    expect(existsSync(join(repo, '.somni', 'chats', id + '.jsonl'))).toBe(true)
-    // a new Backlog item joins the column's ordering, as item:save does
-    expect(loadBacklog(repo)).toEqual([id])
+    expect(existsSync(join(repo, '.somni', 'chats', born.id + '.jsonl'))).toBe(true)
+    // an item landing in Backlog joins the column's ordering, as item:save does
+    expect(loadBacklog(repo)).toEqual([born.id])
   })
 
   it('refuses an unknown item key and writes nothing', () => {
@@ -594,9 +607,9 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
   })
 
   // §7 security invariant, specifically for the two surfaces the Decisions
-  // log calls out: the draft key and a Propose Now turn.
-  it('keeps chat spawns read-only for the _draft key and for a Propose Now turn', async () => {
-    await send(DRAFT_KEY, 'build me a thing')
+  // log calls out: a from-scratch groom and a Propose Now turn.
+  it('keeps chat spawns read-only for a fresh groom and for a Propose Now turn', async () => {
+    await send(nextSlug(), 'build me a thing')
     const proposeSlug = nextSlug()
     await send(proposeSlug, PROPOSE_NOW)
     for (const call of callsLogged()) {
@@ -641,6 +654,107 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     await Promise.all([firstDone, otherDone])
     expect(loadChat(repo, slug).busy).toBe(false)
     expect(otherEvents.some((e) => e.kind === 'done')).toBe(true)
+  })
+
+  // ---- M25.1: every Groom is an Item from birth --------------------------
+
+  // Resolves on the title event, which lands after `done` — the auto-title
+  // Turn is deliberately off the critical path of the reply.
+  const sendAwaitingTitle = (slug: string, text: string): Promise<ChatEvent[]> => {
+    const p = new Promise<ChatEvent[]>((resolve) => {
+      const events: ChatEvent[] = []
+      sendChat(repo, slug, text, {}, ['dev'], (ev) => {
+        events.push(ev)
+        if (ev.kind === 'title' || ev.kind === 'error') resolve(events)
+      })
+    })
+    pending.push(p)
+    return p
+  }
+
+  it('startGroom creates the item before the first message', () => {
+    const item = startGroom(repo)
+    expect(item.kind).toBe('idea')
+    expect(item.status).toBe('grooming')
+    expect(item.name).toBe(NEW_GROOM_NAME)
+    expect(loadItems(repo).map((i) => i.id)).toEqual([item.id])
+  })
+
+  it('stamps lastActivity on the item frontmatter per turn', async () => {
+    const item = startGroom(repo)
+    expect(item.lastActivity).toBeUndefined()
+    await send(item.id, 'hi')
+    const first = loadItems(repo)[0].lastActivity
+    expect(first).toBeTruthy()
+    expect(readFileSync(itemFile(repo, item.id), 'utf8')).toContain(`lastActivity: ${first}`)
+  })
+
+  it('auto-titles the item after the first exchange and stops overwriting after', async () => {
+    fake({ FAKE_TEXT: 'Faster search indexing' })
+    const item = startGroom(repo)
+    const events = await sendAwaitingTitle(item.id, 'search is slow')
+    expect(events.at(-1)).toEqual({ slug: item.id, kind: 'title', name: 'Faster search indexing' })
+    expect(loadItems(repo)[0].name).toBe('Faster search indexing')
+    // second turn: the name is no longer the placeholder, so no title Turn runs
+    const before = callsLogged().length
+    await send(item.id, 'go on')
+    expect(callsLogged()).toHaveLength(before + 1)
+    expect(loadItems(repo)[0].name).toBe('Faster search indexing')
+  })
+
+  it('keeps the placeholder name when the auto-title Turn fails', async () => {
+    const item = startGroom(repo)
+    // reply arrives, then the *next* spawn (the title Turn) fails
+    const events: ChatEvent[] = []
+    const done = new Promise<void>((resolve) => {
+      sendChat(repo, item.id, 'hi', {}, ['dev'], (ev) => {
+        events.push(ev)
+        if (ev.kind === 'done') {
+          fake({ FAKE_FAIL: '1' })
+          resolve()
+        }
+      })
+    })
+    await done
+    await new Promise((r) => setTimeout(r, 300))
+    expect(events.some((e) => e.kind === 'title')).toBe(false)
+    expect(loadItems(repo)[0].name).toBe(NEW_GROOM_NAME)
+  })
+
+  it('a manual rename mid-turn wins over the auto-title', async () => {
+    const item = startGroom(repo)
+    const events: ChatEvent[] = []
+    const done = new Promise<void>((resolve) => {
+      sendChat(repo, item.id, 'hi', {}, ['dev'], (ev) => {
+        events.push(ev)
+        if (ev.kind === 'done') {
+          renameItem(repo, item.id, 'My own title')
+          resolve()
+        }
+      })
+    })
+    await done
+    await new Promise((r) => setTimeout(r, 300))
+    expect(events.some((e) => e.kind === 'title')).toBe(false)
+    expect(loadItems(repo)[0].name).toBe('My own title')
+  })
+
+  it('two parallel from-scratch grooms keep separate items and transcripts', async () => {
+    const a = startGroom(repo)
+    const b = startGroom(repo)
+    expect(a.id).not.toBe(b.id)
+    await Promise.all([send(a.id, 'groom A'), send(b.id, 'groom B')])
+    expect(loadChat(repo, a.id).messages.map((m) => m.text)).toEqual(['groom A', 'hello there'])
+    expect(loadChat(repo, b.id).messages.map((m) => m.text)).toEqual(['groom B', 'hello there'])
+    expect(loadItems(repo)).toHaveLength(2)
+  })
+
+  // No cleanup machinery: an abandoned groom is just an idea with an empty
+  // Spec sitting in Grooming — visible, deletable, and never auto-swept.
+  it('leaves an abandoned empty groom on the board as an idea', () => {
+    const item = startGroom(repo)
+    expect(loadItems(repo)).toEqual([expect.objectContaining({ id: item.id, spec: '' })])
+    expect(loadBacklog(repo)).toEqual([])
   })
 })
 

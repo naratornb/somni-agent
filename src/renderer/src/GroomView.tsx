@@ -1,6 +1,6 @@
-// Grooming (§7): the full-page grill interview, keyed by the item being groomed
-// or the reserved _draft key from scratch. Apply is a main-process call; this
-// view only renders and hands off.
+// Grooming (§7): the full-page grill interview, always keyed by the item being
+// groomed — every Groom is an Item from birth (M25.1). Apply is a main-process
+// call; this view only renders and hands off.
 import { useEffect, useRef, useState } from 'react'
 import type {
   ChatEvent,
@@ -16,8 +16,10 @@ import { appendText, BTN_GHOST, BTN_PRIMARY, BUBBLE_AI, BUBBLE_USER, ERROR_BANNE
 type Props = {
   repo: string
   roles: Role[]
-  // The item being groomed, or null to groom from scratch under DRAFT_KEY.
-  itemId?: string | null
+  // The item being groomed — created by the door before this view mounts.
+  itemId: string
+  // Its name at mount; the AI auto-title and manual rename update it in place.
+  itemName: string
   // Home quick-start (M23): sent as the first message when the transcript is
   // empty, so the Interview starts from what the user already typed.
   seed?: string
@@ -37,11 +39,13 @@ export function GroomView({
   repo,
   roles,
   itemId,
+  itemName,
   seed,
   applyLabel = 'Apply',
   onApplied
 }: Props): React.JSX.Element {
-  const slug = itemId ?? window.somni.draftKey
+  const slug = itemId
+  const [name, setName] = useState(itemName)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -63,6 +67,7 @@ export function GroomView({
         setStreaming(null)
         setError(ev.message)
       }
+      if (ev.kind === 'title') setName(ev.name)
       if (ev.kind === 'done') {
         setStreaming(null)
         setMessages((m) => [...m, ev.message])
@@ -96,14 +101,11 @@ export function GroomView({
     if (loaded.current) return
     loaded.current = true
     void window.somni.loadChat(repo, slug).then((c) => {
-      // A seed means quick-start, and quick-start means a fresh groom: an
-      // abandoned _draft transcript must not swallow the typed text (#26).
-      if (seed && c.messages.length > 0) {
-        void window.somni.newChat(repo, slug).then(() => send(seed))
-        return
-      }
       setMessages(c.messages)
-      if (seed) void send(seed)
+      // The seed is the quick-start's first message. Each groom owns its own
+      // transcript now, so a fresh one is always empty — but never re-send into
+      // a transcript that already has turns.
+      if (seed && c.messages.length === 0) void send(seed)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per slug
   }, [repo, slug])
@@ -118,6 +120,14 @@ export function GroomView({
       return
     }
     onApplied(res.item)
+  }
+
+  // Manual override of the AI auto-title. `prompt` matches the view's existing
+  // `confirm` idiom — no modal component for one string.
+  const rename = (): void => {
+    const next = prompt('Rename this groom', name)?.trim()
+    if (!next || next === name) return
+    void window.somni.renameItem(repo, itemId, next).then((i) => setName(i.name))
   }
 
   const newGroom = async (): Promise<void> => {
@@ -141,9 +151,12 @@ export function GroomView({
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-stack-gap">
       <div className="flex shrink-0 items-center gap-4 border-b border-border-subtle pb-4">
-        <h2 className="font-headline-md text-headline-md font-bold">
-          {itemId ? `Groom ${itemId}` : 'Groom'}
+        <h2 className="truncate font-headline-md text-headline-md font-bold">
+          {itemId} — {name}
         </h2>
+        <button className={BTN_GHOST} onClick={rename}>
+          Rename
+        </button>
         <button className={BTN_GHOST} onClick={newGroom} disabled={sending}>
           New groom
         </button>
@@ -206,7 +219,6 @@ export function GroomView({
           <button className={BTN_PRIMARY} disabled={sending || !input.trim()} onClick={submit}>
             Send
           </button>
-          {/* _draft is never blocked by a running pipeline (Decision 9). */}
           <button
             className={BTN_GHOST}
             onClick={() => void send(window.somni.proposeNow)}

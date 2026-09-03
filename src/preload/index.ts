@@ -55,16 +55,12 @@ function on(channel: string, cb: (payload: unknown) => void): () => void {
   return () => ipcRenderer.removeListener(channel, listener)
 }
 
-// Reserved chat key for the one pre-Apply from-scratch groom (keep in sync with
-// DRAFT_KEY in src/main/chat.ts).
-export const DRAFT_KEY = '_draft'
 // The fixed Propose Now message (keep in sync with PROPOSE_NOW in chat.ts).
 export const PROPOSE_NOW =
   'Stop interviewing and propose the groomed result now, from my answers so far ' +
   'plus your own stated assumptions for anything still open.'
 
 const somni = {
-  draftKey: DRAFT_KEY,
   proposeNow: PROPOSE_NOW,
   runTask: (prompt: string): Promise<void> => ipcRenderer.invoke('task:run', prompt),
   onTaskEvent: (cb: (ev: unknown) => void): (() => void) => on('task:event', cb),
@@ -143,20 +139,24 @@ const somni = {
     ipcRenderer.invoke('role:delete', repo, slug),
   saveItem: (repo: string, item: Partial<Item> & { name: string }): Promise<Item> =>
     ipcRenderer.invoke('item:save', repo, item),
+  renameItem: (repo: string, id: string, name: string): Promise<Item> =>
+    ipcRenderer.invoke('item:rename', repo, id, name),
   deleteItem: (repo: string, id: string): Promise<void> =>
     ipcRenderer.invoke('item:delete', repo, id),
   // Refused (with a reason) unless the Ready gate passes — main is the authority.
   setItemStatus: (repo: string, id: string, status: ItemStatus): Promise<IpcResult> =>
     ipcRenderer.invoke('item:setStatus', repo, id, status),
+  // Opens a from-scratch Groom: main creates the Item first (M25.1) and the
+  // conversation is keyed on its real id.
+  startGroom: (repo: string): Promise<Item> => ipcRenderer.invoke('groom:start', repo),
   loadChat: (repo: string, slug: string): Promise<{ messages: ChatMessage[]; busy: boolean }> =>
     ipcRenderer.invoke('chat:load', repo, slug),
   newChat: (repo: string, slug: string): Promise<void> =>
     ipcRenderer.invoke('chat:new', repo, slug),
   sendChat: (repo: string, slug: string, text: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('chat:send', repo, slug, text),
-  // Apply — the only write out of a groom. `key` is DRAFT_KEY (creates the
-  // item(s), renames the transcript) or the groomed item's id (converted in
-  // place, keeping its id).
+  // Apply — the only write out of a groom. `key` is the groomed item's id; it
+  // converts in place, keeping its id, and child Stories are created beside it.
   applyProposal: (
     repo: string,
     key: string,

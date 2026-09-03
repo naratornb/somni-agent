@@ -84,6 +84,8 @@ export type Item = {
   name: string // H1 of the body
   spec: string // the rest of the body — the approved Spec
   created: string
+  // Last grooming-session activity (M25) — stamped per chat turn.
+  lastActivity?: string
   epic?: string
   blockedBy?: string[] // ids that must be `done` first
   tasks: Task[] // stories only: the .tasks.json sidecar
@@ -316,6 +318,7 @@ function parseItem(repo: string, file: string): Item {
     name,
     spec: rest,
     created: fields.created ?? '',
+    ...(fields.lastActivity ? { lastActivity: fields.lastActivity } : {}),
     ...(fields.epic ? { epic: fields.epic } : {}),
     ...(blockedBy.length ? { blockedBy } : {}),
     tasks: loadTasks(repo, base)
@@ -373,6 +376,7 @@ export function saveItem(repo: string, item: Partial<Item> & { name: string }): 
     name: item.name,
     spec: (item.spec ?? '').trim(),
     created: item.created || new Date().toISOString(),
+    ...(item.lastActivity ? { lastActivity: item.lastActivity } : {}),
     ...(item.epic ? { epic: item.epic } : {}),
     ...(item.blockedBy?.length ? { blockedBy: item.blockedBy } : {}),
     tasks: item.tasks ?? []
@@ -390,6 +394,7 @@ export function saveItem(repo: string, item: Partial<Item> & { name: string }): 
     `kind: ${full.kind}`,
     `status: ${full.status}`,
     `created: ${full.created}`,
+    full.lastActivity ? `lastActivity: ${full.lastActivity}` : '',
     full.epic ? `epic: ${full.epic}` : '',
     full.blockedBy ? `blockedBy: ${full.blockedBy.join(', ')}` : ''
   ].filter(Boolean)
@@ -412,13 +417,20 @@ export function deleteItem(repo: string, id: string): void {
   rmSync(dir(repo, 'chats', id + '.jsonl'), { force: true })
 }
 
-// Status is the only field the engine writes, and it re-reads the file first so
-// a spec edited meanwhile is never clobbered. Throws if the item is gone.
-export function setItemStatus(repo: string, id: string, status: ItemStatus): Item {
+// The engine only ever patches a field or two, and it re-reads the file first
+// so a spec edited meanwhile is never clobbered. Throws if the item is gone.
+export function updateItem(repo: string, id: string, patch: Partial<Item>): Item {
   const item = loadItems(repo).find((i) => i.id === id)
   if (!item) throw new Error(`item not found: ${id}`)
-  return saveItem(repo, { ...item, status })
+  return saveItem(repo, { ...item, ...patch })
 }
+
+export const setItemStatus = (repo: string, id: string, status: ItemStatus): Item =>
+  updateItem(repo, id, { status })
+
+// A retitled item keeps its id and moves file (saveItem drops the old basename).
+export const renameItem = (repo: string, id: string, name: string): Item =>
+  updateItem(repo, id, { name, slug: slugify(name) })
 
 // The Ready gate (§4.1) — main is the authority for both `item:setStatus` and
 // `pipeline:add`. Returns the refusal reason, or null when the item may run.

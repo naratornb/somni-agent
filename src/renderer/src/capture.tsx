@@ -30,7 +30,7 @@ export function CaptureModal({
 }: {
   repo: string
   onClose: () => void
-  onGroom: (id: string) => void
+  onGroom: (item: Item) => void
   onSaved: () => void
 }): React.JSX.Element {
   const [text, setText] = useState('')
@@ -52,7 +52,7 @@ export function CaptureModal({
 
   const groomNow = async (): Promise<void> => {
     const saved = await add()
-    if (saved) onGroom(saved.id)
+    if (saved) onGroom(saved)
   }
 
   return (

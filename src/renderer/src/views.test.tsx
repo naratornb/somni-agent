@@ -21,11 +21,10 @@ import { MicButton, ProposalPreview, QuestionCard, RefineControl } from './chatS
 import { CaptureModal, CommandPalette, QuickAdd } from './capture'
 import { captureItem, paletteResults, reorderBacklog, saveCapture } from './ui'
 
-// Every somni.* call is a noop; draftKey/proposeNow are read during render.
-const somni = new Proxy(
-  { draftKey: '_draft', proposeNow: 'PROPOSE_NOW' } as Record<string, unknown>,
-  { get: (t, k) => (k in t ? t[k as string] : () => Promise.resolve(undefined)) }
-)
+// Every somni.* call is a noop; proposeNow is read during render.
+const somni = new Proxy({ proposeNow: 'PROPOSE_NOW' } as Record<string, unknown>, {
+  get: (t, k) => (k in t ? t[k as string] : () => Promise.resolve(undefined))
+})
 Object.assign(globalThis, { window: { somni } })
 
 const roles = [{ slug: 'dev', name: 'Developer', preamble: 'You write code.' }]
@@ -207,10 +206,16 @@ const views: [string, React.JSX.Element][] = [
   ['Roles', <RolesView key="ro" repo="/repo" roles={roles} refresh={() => {}} />],
   ['Settings', <SettingsView key="s" repo="/repo" roles={roles} refresh={() => {}} />],
   ['Playground', <Playground key="pl" />],
-  ['Groom', <GroomView key="g" repo="/repo" roles={roles} onApplied={() => {}} />],
   [
-    'GroomView on an item',
-    <GroomView key="gi" repo="/repo" roles={roles} itemId="SOM-1" onApplied={() => {}} />
+    'Groom',
+    <GroomView
+      key="g"
+      repo="/repo"
+      roles={roles}
+      itemId="SOM-1"
+      itemName="New groom"
+      onApplied={() => {}}
+    />
   ],
   [
     'QuestionCard',
