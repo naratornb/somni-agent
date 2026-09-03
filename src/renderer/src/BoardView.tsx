@@ -1,6 +1,7 @@
-// The Board (M13-ui.md) — the kanban home view. One column per item Status;
-// every move is a status change through main, which is the sole authority: no
-// optimistic move, refusals are surfaced verbatim (§4).
+// The Board (M13-ui.md, M23) — the kanban work-item view. Four columns group
+// the unchanged Statuses; cards render by their true Status so every
+// affordance survives. Every move is a status change through main, which is
+// the sole authority: no optimistic move, refusals are surfaced verbatim (§4).
 import { useState } from 'react'
 import type { Item, ItemStatus, Role, RunState } from '../../preload/index'
 import { StoryPanel } from './StoryPanel'
@@ -28,16 +29,53 @@ type Props = {
   onClosePanel?: () => void
 }
 
-// Fixed and ordered — never reordered, never hidden (§1).
-const COLUMNS: { status: ItemStatus; label: string; empty: string }[] = [
-  { status: 'backlog', label: 'Backlog', empty: 'Nothing yet — New Story to get started.' },
-  { status: 'grooming', label: 'Grooming', empty: 'Nothing being groomed.' },
-  { status: 'ready', label: 'Ready', empty: 'No stories ready — groom one, then drag it here.' },
-  { status: 'in-progress', label: 'In Progress', empty: 'Nothing running.' },
-  { status: 'needs-attention', label: 'Needs Attention', empty: 'Nothing needs attention.' },
-  { status: 'review', label: 'Review', empty: 'Nothing to review.' },
-  { status: 'done', label: 'Done', empty: 'Nothing shipped yet.' }
+// Fixed and ordered — never reordered, never hidden (§1). `drop` is the one
+// Status a drop on this column writes: Done drops land in Review because
+// Acceptance is the only path to done (CONTEXT.md), and Running drops land in
+// In Progress, which main already gates and wakes the drain for.
+const COLUMNS: {
+  key: string
+  label: string
+  statuses: ItemStatus[]
+  drop: ItemStatus
+  empty: string
+}[] = [
+  {
+    key: 'ideas',
+    label: 'Ideas',
+    statuses: ['backlog', 'grooming'],
+    drop: 'backlog',
+    empty: 'Nothing yet — New Story to get started.'
+  },
+  {
+    key: 'ready',
+    label: 'Ready',
+    statuses: ['ready'],
+    drop: 'ready',
+    empty: 'No stories ready — groom one, then drag it here.'
+  },
+  {
+    // "In Progress", not "Running": Running is a Run status, and the two
+    // vocabularies never mix (AGENTS.md). Needs Attention parks here too —
+    // the card's chip and red border carry the distinction.
+    key: 'progress',
+    label: 'In Progress',
+    statuses: ['in-progress', 'needs-attention'],
+    drop: 'in-progress',
+    empty: 'Nothing in progress.'
+  },
+  {
+    key: 'done',
+    label: 'Done',
+    statuses: ['review', 'done'],
+    drop: 'review',
+    empty: 'Nothing shipped yet.'
+  }
 ]
+
+// Which column shows a status's refusal banner / refused-drop ring.
+const colOf = (status: ItemStatus): string =>
+  COLUMNS.find((c) => c.statuses.includes(status))?.key ?? COLUMNS[0].key
 
 const KIND_LABEL = { idea: 'Idea', story: 'Story', epic: 'Epic' } as const
 
@@ -64,14 +102,15 @@ export function BoardView({
   onClosePanel
 }: Props): React.JSX.Element {
   const [editing, setEditing] = useState<Item | null>(null)
-  const [refused, setRefused] = useState<{ status: ItemStatus; error: string } | null>(null)
-  const [ringing, setRinging] = useState<ItemStatus | null>(null)
+  const [refused, setRefused] = useState<{ col: string; error: string } | null>(null)
+  const [ringing, setRinging] = useState<string | null>(null)
 
   const flashRefused = (status: ItemStatus, error: string): void => {
-    setRefused({ status, error })
-    setRinging(status)
+    const col = colOf(status)
+    setRefused({ col, error })
+    setRinging(col)
     setTimeout(() => setRinging(null), 600)
-    setTimeout(() => setRefused((r) => (r?.status === status ? null : r)), 3000)
+    setTimeout(() => setRefused((r) => (r?.col === col ? null : r)), 3000)
   }
 
   // Every board move is this one call — main refuses or it happens (§4).
@@ -102,14 +141,18 @@ export function BoardView({
   const doneIds = new Set(items.filter((i) => i.status === 'done').map((i) => i.id))
   const blockers = (item: Item): string[] => (item.blockedBy ?? []).filter((b) => !doneIds.has(b))
 
-  const column = (status: ItemStatus): Item[] => {
-    const inColumn = items.filter((i) => i.status === status)
-    if (status !== 'backlog') return inColumn
-    // The Backlog column is the one with a user-chosen order (backlog.json);
-    // anything missing from it (hand-added file) trails behind, by id.
+  const column = (col: (typeof COLUMNS)[number]): Item[] => {
+    const inColumn = items.filter((i) => col.statuses.includes(i.status))
+    if (col.key !== 'ideas') return inColumn
+    // Backlog keeps its user-chosen order (backlog.json); anything missing
+    // from it (hand-added file) trails behind; grooming items trail last.
     const rank = (i: Item): number =>
       backlog.indexOf(i.id) === -1 ? Number.MAX_SAFE_INTEGER : backlog.indexOf(i.id)
-    return [...inColumn].sort((a, b) => rank(a) - rank(b))
+    return [...inColumn].sort((a, b) =>
+      a.status === b.status
+        ? rank(a) - rank(b)
+        : col.statuses.indexOf(a.status) - col.statuses.indexOf(b.status)
+    )
   }
 
   // The palette's "open item" arrives as a prop, so it works without an effect.
@@ -259,17 +302,16 @@ export function BoardView({
       >
         New Story
       </button>
-      {/* Seven readable columns don't fit one screen — the board scrolls (§1). */}
       <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto">
         {COLUMNS.map((col) => {
-          const cards = column(col.status)
+          const cards = column(col)
           return (
-            <div key={col.status} className="flex min-w-[220px] flex-1 basis-0 flex-col">
+            <div key={col.key} className="flex min-w-[220px] flex-1 basis-0 flex-col">
               <div className="sticky top-0 mb-2 flex items-center justify-between border-b border-border-subtle bg-background pb-2">
                 <span className={LABEL}>{col.label.toUpperCase()}</span>
                 <span className={CHIP}>{cards.length}</span>
               </div>
-              {refused?.status === col.status && (
+              {refused?.col === col.key && (
                 <div className={`${ERROR_BANNER} mb-2 text-xs`}>
                   {refused.error}
                   <button className={ICON_BTN} onClick={() => setRefused(null)} title="Dismiss">
@@ -279,19 +321,21 @@ export function BoardView({
               )}
               <div
                 className={`flex-1 space-y-2 overflow-y-auto rounded-lg transition-colors ${
-                  ringing === col.status ? 'ring-2 ring-error' : ''
+                  ringing === col.key ? 'ring-2 ring-error' : ''
                 }`}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => {
                   const id = e.dataTransfer.getData('text/plain')
-                  if (id) void move(id, col.status)
+                  if (id) void move(id, col.drop)
                 }}
               >
-                {col.status === 'backlog' && <QuickAdd repo={repo} refresh={refresh} />}
+                {col.key === 'ideas' && <QuickAdd repo={repo} refresh={refresh} />}
                 {cards.length === 0 ? (
                   <p className="p-4 text-center text-sm text-on-surface-variant">{col.empty}</p>
                 ) : (
-                  cards.map((i) => card(i, col.status))
+                  // Cards keep their true Status — affordances, chips and drag
+                  // rules are per-Status, not per-column.
+                  cards.map((i) => card(i, i.status))
                 )}
               </div>
             </div>

@@ -1,30 +1,33 @@
 import { useCallback, useEffect, useState } from 'react'
 import appIcon from './assets/icon.png'
-import type { DrainState, RepoData, RunState, SkillsStatus, ViewMode } from '../../preload/index'
+import type { DrainState, RepoData, RunState, SkillsStatus } from '../../preload/index'
 import { Playground } from './Playground'
 import { LogLine, PipelineView } from './PipelineView'
-import { RolesView } from './RolesView'
 import { RunsView } from './RunsView'
 import { SettingsView } from './SettingsView'
 import { BoardView } from './BoardView'
 import { GroomView } from './GroomView'
+import { HomeView } from './HomeView'
 import { CaptureModal, CommandPalette } from './capture'
-import { LABEL, saveCapture, type PaletteResult } from './ui'
+import { BTN_PRIMARY, saveCapture, type PaletteResult } from './ui'
 
-// Nav order + Material Symbols glyph per view (mock: any code.html sidebar).
+// Material Symbols glyph per routable view. Home reuses the freed `speed`
+// glyph — the icon font is a subset (main.css), so new ligatures render as
+// raw text; reuse beats re-subsetting, and Home is where draining lives.
 const VIEWS = {
+  Home: 'speed',
   Board: 'account_tree',
   Groom: 'chat_bubble',
-  Pipeline: 'speed',
   Runs: 'history',
-  Roles: 'groups',
   Settings: 'settings',
   Playground: 'terminal'
 } as const
 type View = keyof typeof VIEWS
 
-// PO hat = capture, groom, accept (CONTEXT.md). Presentation only (Decision 9).
-const PO_VIEWS: View[] = ['Board', 'Groom', 'Pipeline', 'Runs']
+// The four destinations (M23). Groom is a flow step, not a place; Playground
+// is a dev surface only.
+const NAV: View[] = ['Home', 'Board', 'Runs', 'Settings']
+if (import.meta.env.DEV) NAV.push('Playground')
 
 const timeAgo = (iso: string): string => {
   const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60_000)
@@ -34,9 +37,13 @@ const timeAgo = (iso: string): string => {
 function App(): React.JSX.Element {
   const [repo, setRepo] = useState<string | null>(null)
   const [data, setData] = useState<RepoData>({ roles: [], items: [], backlog: [] })
-  const [view, setView] = useState<View>('Board')
+  const [view, setView] = useState<View>('Home')
   // Which item the Groom view is grooming; null = from scratch (_draft).
   const [groomId, setGroomId] = useState<string | null>(null)
+  // Home quick-start (M23): the typed task seeds the groom, and Apply of a
+  // Ready story auto-queues it. Board/Capture grooms never set these.
+  const [groomSeed, setGroomSeed] = useState<string | null>(null)
+  const [autoRun, setAutoRun] = useState(false)
   const [runs, setRuns] = useState<Record<string, RunState>>({})
   const [logs, setLogs] = useState<Record<string, LogLine[]>>({})
   // Drain state is owned by main (Decision 8): seeded from pipeline:state on
@@ -44,9 +51,6 @@ function App(): React.JSX.Element {
   // pipeline:status pushes, which carry the mode.
   const [drain, setDrain] = useState<DrainState | null>(null)
   const [orphans, setOrphans] = useState<RunState[]>([])
-  // Which views the sidebar offers. Seeded from settings on mount, persisted
-  // straight back through settings:set — no separate IPC, no localStorage.
-  const [mode, setMode] = useState<ViewMode>('engineer')
   // Capture surfaces (M15): the modal and the palette. Esc closes the top-most.
   const [capturing, setCapturing] = useState(false)
   const [palette, setPalette] = useState(false)
@@ -72,7 +76,6 @@ function App(): React.JSX.Element {
   )
 
   useEffect(() => {
-    void window.somni.getSettings().then((s) => setMode(s.viewMode))
     void window.somni.lastRepo().then((path) => {
       if (path) {
         setRepo(path)
@@ -149,13 +152,13 @@ function App(): React.JSX.Element {
   // wiping runs/logs on every join would erase the night's work (Decision 8).
   const startPipeline = (slugs: string[]): void => {
     if (!repo) return
-    setView('Pipeline')
+    setView('Home') // the activity area lives on Home now (M23)
     void window.somni.startPipeline(repo, slugs).then(() => refresh())
   }
 
   const resumeRun = (runId: string): void => {
     if (!repo) return
-    setView('Pipeline')
+    setView('Home')
     setOrphans((o) => o.filter((r) => r.runId !== runId))
     void window.somni.resumePipeline(repo, [runId])
   }
@@ -169,9 +172,14 @@ function App(): React.JSX.Element {
   // Busy = a drain is live, per main — not derived from the run board.
   const busy = drain != null && drain.mode != null
   const keepRunning = drain?.mode === 'keep'
-  const navViews = Object.entries(VIEWS).filter(
-    ([v]) => mode === 'engineer' || PO_VIEWS.includes(v as View)
-  )
+
+  // Home quick-start → groom seeded with the typed task; Apply auto-queues.
+  const quickStart = (text: string): void => {
+    setGroomId(null)
+    setGroomSeed(text)
+    setAutoRun(true)
+    setView('Groom')
+  }
 
   // The palette is a second surface for actions that already exist — never a
   // second write path (capture goes through the same helper as the modal).
@@ -180,7 +188,6 @@ function App(): React.JSX.Element {
     if (r.action === 'capture') {
       if (repo) void saveCapture(repo, query).then(() => refresh())
     } else if (r.action === 'goto') {
-      if (r.view === 'Groom') setGroomId(null)
       setView(r.view as View)
     } else if (r.action === 'open') {
       setOpenId(r.id)
@@ -188,13 +195,6 @@ function App(): React.JSX.Element {
     } else {
       startPipeline([])
     }
-  }
-
-  const switchMode = (m: ViewMode): void => {
-    setMode(m)
-    // Falling back keeps the shell coherent when the current view disappears.
-    if (m === 'po' && !PO_VIEWS.includes(view)) setView('Board')
-    void window.somni.setSettings({ viewMode: m })
   }
 
   return (
@@ -207,7 +207,7 @@ function App(): React.JSX.Element {
           </h1>
         </div>
         <div className="flex flex-1 flex-col gap-1">
-          {navViews.map(([v, icon]) => (
+          {NAV.map((v) => (
             <button
               key={v}
               className={
@@ -216,39 +216,17 @@ function App(): React.JSX.Element {
                   ? 'bg-surface-container-high font-semibold text-on-surface'
                   : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface')
               }
-              onClick={() => {
-                if (v === 'Groom') setGroomId(null) // the nav entry always grooms from scratch
-                setView(v as View)
-              }}
+              onClick={() => setView(v)}
             >
               <span
                 className="material-symbols-outlined text-[20px]"
                 style={v === view ? { fontVariationSettings: "'FILL' 1" } : undefined}
               >
-                {icon}
+                {VIEWS[v]}
               </span>
               {v}
             </button>
           ))}
-        </div>
-        <div className="mt-auto flex flex-col gap-2 border-t border-border-subtle pt-4">
-          <span className={`px-3 ${LABEL}`}>View</span>
-          <div className="flex items-center gap-1 rounded-lg border border-border-subtle bg-surface-container p-1">
-            {(['po', 'engineer'] as const).map((m) => (
-              <button
-                key={m}
-                className={
-                  'flex-1 rounded px-3 py-1.5 text-sm transition-colors ' +
-                  (mode === m
-                    ? 'bg-surface-container-high font-semibold text-on-surface'
-                    : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface')
-                }
-                onClick={() => switchMode(m)}
-              >
-                {m === 'po' ? 'PO' : 'Engineer'}
-              </button>
-            ))}
-          </div>
         </div>
       </nav>
       <main className="relative ml-sidebar-width flex h-screen flex-1 flex-col overflow-hidden bg-background">
@@ -355,22 +333,31 @@ function App(): React.JSX.Element {
           {view === 'Playground' ? (
             <Playground />
           ) : view === 'Settings' ? (
-            <SettingsView repo={repo} />
+            <SettingsView repo={repo} roles={data.roles} refresh={refresh} />
           ) : !repo ? (
-            <p className="text-on-surface-variant">
-              Choose a repo to manage its work items and roles.
-            </p>
-          ) : view === 'Pipeline' ? (
-            <PipelineView
-              runs={runs}
-              logs={logs}
-              busy={busy}
-              drain={drain}
-              keepRunning={keepRunning}
-              onToggleKeepRunning={(on) => void window.somni.setKeepRunning(repo, on)}
-              onStart={() => startPipeline([])}
-              onCancel={() => void window.somni.cancelPipeline()}
-            />
+            // The whole first-run story in one place: nothing else competes.
+            <div className="m-auto flex max-w-md flex-col items-center gap-4 text-center">
+              <h2 className="font-headline-lg text-headline-lg font-bold">Welcome to somni</h2>
+              <p className="leading-relaxed text-on-surface-variant">
+                Pick a repository — somni grooms your ideas into stories and runs them overnight.
+              </p>
+              <button className={BTN_PRIMARY} onClick={() => void choose()}>
+                Choose repo
+              </button>
+            </div>
+          ) : view === 'Home' ? (
+            <HomeView repo={repo} onStart={quickStart}>
+              <PipelineView
+                runs={runs}
+                logs={logs}
+                busy={busy}
+                drain={drain}
+                keepRunning={keepRunning}
+                onToggleKeepRunning={(on) => void window.somni.setKeepRunning(repo, on)}
+                onStart={() => startPipeline([])}
+                onCancel={() => void window.somni.cancelPipeline()}
+              />
+            </HomeView>
           ) : view === 'Runs' ? (
             <RunsView repo={repo} />
           ) : view === 'Groom' ? (
@@ -378,12 +365,20 @@ function App(): React.JSX.Element {
               repo={repo}
               roles={data.roles}
               itemId={groomId}
-              onApplied={() => {
+              seed={groomSeed ?? undefined}
+              applyLabel={autoRun ? 'Apply & run' : undefined}
+              onApplied={(item) => {
                 refresh()
-                setView('Board')
+                // Quick-start path: a Ready story goes straight into the
+                // pipeline (the gate stays main's); everything else lands on
+                // the Board where the applied items are visible.
+                if (autoRun && item.status === 'ready') startPipeline([item.id])
+                else setView('Board')
+                setAutoRun(false)
+                setGroomSeed(null)
               }}
             />
-          ) : view === 'Board' ? (
+          ) : (
             <BoardView
               repo={repo}
               items={data.items}
@@ -395,11 +390,11 @@ function App(): React.JSX.Element {
               onClosePanel={() => setOpenId(null)}
               onGroom={(id) => {
                 setGroomId(id)
+                setGroomSeed(null)
+                setAutoRun(false)
                 setView('Groom')
               }}
             />
-          ) : (
-            <RolesView repo={repo} roles={data.roles} refresh={refresh} />
           )}
         </div>
       </main>
@@ -411,6 +406,8 @@ function App(): React.JSX.Element {
           onGroom={(id) => {
             setCapturing(false)
             setGroomId(id)
+            setGroomSeed(null)
+            setAutoRun(false)
             setView('Groom')
           }}
         />
@@ -418,7 +415,7 @@ function App(): React.JSX.Element {
       {palette && (
         <CommandPalette
           items={data.items}
-          views={navViews.map(([v]) => v)}
+          views={NAV}
           onRun={runPalette}
           onClose={() => setPalette(false)}
         />

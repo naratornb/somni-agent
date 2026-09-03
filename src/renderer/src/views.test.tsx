@@ -9,6 +9,7 @@ import { expect, test } from 'vitest'
 import type { Item, RunDetails, RunRow } from '../../preload/index'
 import App from './App'
 import { GroomView } from './GroomView'
+import { HomeView } from './HomeView'
 import { BoardView } from './BoardView'
 import { PipelineView } from './PipelineView'
 import { StoryPanel } from './StoryPanel'
@@ -204,7 +205,7 @@ const views: [string, React.JSX.Element][] = [
     />
   ],
   ['Roles', <RolesView key="ro" repo="/repo" roles={roles} refresh={() => {}} />],
-  ['Settings', <SettingsView key="s" repo="/repo" />],
+  ['Settings', <SettingsView key="s" repo="/repo" roles={roles} refresh={() => {}} />],
   ['Playground', <Playground key="pl" />],
   ['Groom', <GroomView key="g" repo="/repo" roles={roles} onApplied={() => {}} />],
   [
@@ -274,24 +275,27 @@ test('MicButton stays enabled in the no-binary state', () => {
   expect(html).toContain('Voice')
 })
 
-// M11 Decision 8/9: mode gates the sidebar nav. SSR skips effects, so `mode`
-// never leaves its useState seed ('engineer') — the App case above only ever
-// exercises the engineer branch of the nav filter. Assert that branch
-// explicitly (all seven views, PO-only views included) so the filter logic is
-// actually checked, not just "renders without throwing"; PO's *filtered* nav
-// needs a DOM/effects environment this SSR harness doesn't have — flagged as
-// a gap for the TD, exercise by hand in the live-app pass.
-test('App default (engineer) mode nav lists every view, and not the hidden Draft', () => {
+// M23: the nav is exactly the four destinations (plus Playground — vitest runs
+// with import.meta.env.DEV true). Groom, Pipeline, Roles left the nav, and the
+// PO/Engineer toggle is gone. SSR renders the no-repo state, so the Home hero
+// is what the body shows.
+test('App nav lists exactly the destinations; retired entries and the mode toggle are gone', () => {
   const html = renderToStaticMarkup(<App />)
-  for (const v of ['Board', 'Groom', 'Pipeline', 'Runs', 'Roles', 'Settings', 'Playground']) {
+  for (const v of ['Home', 'Board', 'Runs', 'Settings', 'Playground']) {
     expect(html).toContain(`>${v}</button>`)
   }
+  for (const gone of ['>Groom</button>', '>Pipeline</button>', '>Roles</button>', '>Engineer<']) {
+    expect(html).not.toContain(gone)
+  }
+  expect(html).toContain('Welcome to somni')
+  expect(html).toContain('Choose repo')
 })
 
-// §1/§5: the seven-column shell is permanent furniture — every column renders
-// with its count and, when empty, its own copy.
-test('Board renders all seven columns with counts and empty copy', () => {
-  const html = renderToStaticMarkup(
+// §1/§5 + M23: four grouped columns are the permanent furniture — each renders
+// with its grouped count and, when empty, its own copy. The seven-item fixture
+// (one per Status) groups as Ideas 2, Ready 1, Running 2, Done 2.
+test('Board renders four grouped columns with grouped counts and empty copy', () => {
+  const empty = renderToStaticMarkup(
     <BoardView
       repo="/repo"
       items={[]}
@@ -302,18 +306,28 @@ test('Board renders all seven columns with counts and empty copy', () => {
       onGroom={() => {}}
     />
   )
-  for (const label of [
-    'BACKLOG',
-    'GROOMING',
-    'READY',
-    'IN PROGRESS',
-    'NEEDS ATTENTION',
-    'REVIEW',
-    'DONE'
-  ])
-    expect(html).toContain(label)
-  expect(html).toContain('Nothing yet — New Story to get started.')
-  expect(html).toContain('Nothing shipped yet.')
+  for (const label of ['IDEAS', 'READY', 'IN PROGRESS', 'DONE']) expect(empty).toContain(label)
+  for (const gone of ['BACKLOG', 'GROOMING', 'NEEDS ATTENTION', 'REVIEW', 'RUNNING'])
+    expect(empty).not.toContain(gone)
+  expect(empty).toContain('Nothing yet — New Story to get started.')
+  expect(empty).toContain('Nothing shipped yet.')
+
+  const grouped = renderToStaticMarkup(
+    <BoardView
+      repo="/repo"
+      items={items}
+      backlog={[]}
+      roles={roles}
+      runs={{}}
+      refresh={() => {}}
+      onGroom={() => {}}
+    />
+  )
+  // One count chip per column, in nav order: Ideas, Ready, Running, Done.
+  const counts = [...grouped.matchAll(/rounded-full bg-surface-variant[^>]*>(\d+)</g)].map(
+    (m) => m[1]
+  )
+  expect(counts).toEqual(['2', '1', '2', '2'])
 })
 
 // §7: ProposalPreview must show one card per epic child Story with its
@@ -608,4 +622,64 @@ test('Board opens the StoryPanel for openId', () => {
   )
   expect(html).toContain('Back to Board')
   expect(html).toContain('Hello World Feature')
+})
+
+// M23 #28: with zero runs the Drain controls render alongside the empty copy —
+// the pipeline must be discoverable before the first run (this inverts the old
+// early-return-a-sentence behavior).
+test('PipelineView with zero runs renders Drain controls and empty copy', () => {
+  const html = renderToStaticMarkup(
+    <PipelineView
+      runs={{}}
+      logs={{}}
+      busy={false}
+      drain={null}
+      keepRunning={false}
+      onToggleKeepRunning={() => {}}
+      onStart={() => {}}
+      onCancel={() => {}}
+    />
+  )
+  expect(html).toContain('Drain queue')
+  expect(html).toContain('Keep Running')
+  expect(html).toContain('Nothing running')
+})
+
+// M23 #30: Home shows the quick-start heading, the static fallback chips (SSR
+// skips the suggestions effect — the fallback is exactly the no-signal
+// contract), and its children (the activity area App passes in).
+test('HomeView renders the quick-start box, fallback chips, and its children', () => {
+  const html = renderToStaticMarkup(
+    <HomeView repo="/repo" onStart={() => {}}>
+      <p>ACTIVITY</p>
+    </HomeView>
+  )
+  expect(html).toContain('What do you want done overnight?')
+  expect(html).toContain('Clean up TODOs in the codebase')
+  expect(html).toContain('ACTIVITY')
+})
+
+// M23 #32: Roles are configuration now — they render inside Settings, even
+// while the settings fetch is pending (SSR shows the loading branch).
+test('SettingsView with a repo renders the Roles section', () => {
+  const html = renderToStaticMarkup(<SettingsView repo="/repo" roles={roles} refresh={() => {}} />)
+  expect(html).toContain('Roles')
+  expect(html).toContain('Developer')
+})
+
+// M23 #31: the auto-run path's promise — the Apply button reads "Apply & run"
+// when a run will start. Label plumbing is ProposalPreview's; GroomView guards
+// the Epic case (Epics land in Backlog and run nothing) before passing it.
+test('ProposalPreview renders a custom apply label', () => {
+  const html = renderToStaticMarkup(
+    <ProposalPreview
+      proposal={{ ...proposal, kind: 'story' as const, stories: [], tasks: workflow.tasks }}
+      roles={roles}
+      applyLabel="Apply & run"
+      disabled={false}
+      onApply={() => {}}
+      onDismiss={() => {}}
+    />
+  )
+  expect(html).toContain('Apply &amp; run')
 })

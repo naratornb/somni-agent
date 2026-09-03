@@ -16,7 +16,6 @@ export type Effort = 'low' | 'medium' | 'high'
 export type ReportStyle = 'minimal' | 'compact' | 'full'
 export type RunnerName = 'claude' | 'antigravity'
 export const RUNNER_NAMES: RunnerName[] = ['claude', 'antigravity']
-export type ViewMode = 'po' | 'engineer'
 // The selectable engineering discipline (docs/adr/0002): governs the grooming
 // and run prompts plus which vendored skills are injected — never the item model.
 export type Methodology = 'pocock' | 'superpowers'
@@ -35,8 +34,6 @@ export type Settings = Profile & {
   // across restarts and is re-armed on app ready.
   nightlyTime?: string // "HH:MM"
   nightlyArmed?: boolean
-  // Which sidebar views are shown (M11 Decision 8) — presentation only.
-  viewMode?: ViewMode
   // The deterministic green signal for the closing review loop (M16, §10).
   // Repo-level only: it lives in .somni/config.json, never in global settings.
   checkCommand?: string
@@ -54,7 +51,6 @@ export const SETTINGS_DEFAULTS = {
   timeoutMinutes: 30,
   reportStyle: 'minimal' as ReportStyle,
   runner: 'claude' as RunnerName,
-  viewMode: 'engineer' as ViewMode,
   methodology: 'pocock' as Methodology
 }
 

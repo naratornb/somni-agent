@@ -73,13 +73,6 @@ export function PipelineView({
       <span className={chipClass('Queued')}>Draining — waiting for work</span>
     ) : null
 
-  if (cards.length === 0)
-    return (
-      <p className="text-on-surface-variant">
-        Nothing running — add a Ready story to the pipeline from the Board.
-      </p>
-    )
-
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-stack-gap">
       <div className="mb-4 flex items-center gap-4">
@@ -122,6 +115,13 @@ export function PipelineView({
           </span>
         </div>
       </div>
+      {/* The controls above always render (M23 #28): the pipeline must be
+          discoverable before the first run, and Home embeds this surface. */}
+      {cards.length === 0 && (
+        <p className="text-on-surface-variant">
+          Nothing running — queue a Ready story from the Board, or describe work above.
+        </p>
+      )}
       {cards.map(({ key, name, run, tasks: defs }) => {
         const tasks = run?.tasks ?? defs
         return (

@@ -98,6 +98,25 @@ beforeEach(() => {
   wireRepoIpc()
 })
 
+// Home quick-start chips (M23): cheap local git signals; [] on any failure is
+// the contract — the renderer owns the static fallback.
+describe('repo:suggestions', () => {
+  it('derives chips from TODO counts and recent commit subjects', async () => {
+    writeFileSync(join(repo, 'notes.js'), '// TODO: one\n// FIXME: two\n')
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-m', 'add notes')
+    const chips = await invoke<string[]>('repo:suggestions', repo)
+    expect(chips.some((c) => c.includes('TODO'))).toBe(true)
+    expect(chips.some((c) => c.includes('add notes'))).toBe(true)
+    expect(chips.length).toBeLessThanOrEqual(4)
+  })
+
+  it('returns [] on a non-git directory', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'somni-plain-'))
+    await expect(invoke('repo:suggestions', dir)).resolves.toEqual([])
+  })
+})
+
 describe('runs:switchBranch', () => {
   it('refuses a dirty target repo without touching the checkout', async () => {
     writeFileSync(join(repo, 'README.md'), 'dirty\n')
