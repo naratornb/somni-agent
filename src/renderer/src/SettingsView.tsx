@@ -204,6 +204,17 @@ export function SettingsView({
             <option value="full">Full — stats + a Report task in the worktree</option>
           </select>
         </FieldRow>
+        <FieldRow label="Voice quick-start">
+          <input
+            type="checkbox"
+            className={CHECKBOX}
+            checked={!!s.voiceAutoGroom}
+            onChange={(e) => patch({ voiceAutoGroom: e.target.checked })}
+          />
+          <span className="text-sm text-on-surface-variant">
+            Speaking on Home starts the groom immediately (off: fills the box for review)
+          </span>
+        </FieldRow>
         <FieldRow label="Nightly window">
           <input
             className={`${INPUT} font-mono-code`}

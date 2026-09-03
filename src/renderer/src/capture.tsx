@@ -124,7 +124,14 @@ export function QuickAdd({
           }
         }}
       />
-      {open && <MicButton onText={(t) => setText((c) => appendText(c, t))} />}
+      {/* Always visible (M24): a voice capture must not require clicking into
+          the keyboard field first. Speaking expands the row like focus does. */}
+      <MicButton
+        onText={(t) => {
+          setOpen(true)
+          setText((c) => appendText(c, t))
+        }}
+      />
     </div>
   )
 }

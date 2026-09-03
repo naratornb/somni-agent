@@ -18,7 +18,7 @@ import { RolesView } from './RolesView'
 import { RunDetailsPanel, RunsView } from './RunsView'
 import { SettingsView } from './SettingsView'
 import { MicButton, ProposalPreview, QuestionCard, RefineControl } from './chatShared'
-import { CaptureModal, CommandPalette } from './capture'
+import { CaptureModal, CommandPalette, QuickAdd } from './capture'
 import { captureItem, paletteResults, reorderBacklog, saveCapture } from './ui'
 
 // Every somni.* call is a noop; draftKey/proposeNow are read during render.
@@ -682,4 +682,21 @@ test('ProposalPreview renders a custom apply label', () => {
     />
   )
   expect(html).toContain('Apply &amp; run')
+})
+
+// M24: voice on the golden path. SSR renders MicButton in its 'checking' "…"
+// state — presence of the control is what these assert; behavior (auto-send,
+// auto-groom) is closure-over-live-state and belongs to the packaged pass.
+test('HomeView renders a mic beside the quick-start box', () => {
+  const html = renderToStaticMarkup(
+    <HomeView repo="/repo" onStart={() => {}}>
+      <p />
+    </HomeView>
+  )
+  expect(html).toContain('material-symbols-outlined text-[16px]">mic')
+})
+
+test('QuickAdd renders its mic without requiring field focus', () => {
+  const html = renderToStaticMarkup(<QuickAdd repo="/repo" refresh={() => {}} />)
+  expect(html).toContain('material-symbols-outlined text-[16px]">mic')
 })

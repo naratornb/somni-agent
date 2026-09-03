@@ -34,6 +34,9 @@ export type Settings = Profile & {
   // across restarts and is re-armed on app ready.
   nightlyTime?: string // "HH:MM"
   nightlyArmed?: boolean
+  // Home quick-start dictation (M24): speaking auto-starts the groom seeded
+  // with the transcription, instead of just filling the box.
+  voiceAutoGroom?: boolean
   // The deterministic green signal for the closing review loop (M16, §10).
   // Repo-level only: it lives in .somni/config.json, never in global settings.
   checkCommand?: string
@@ -51,7 +54,8 @@ export const SETTINGS_DEFAULTS = {
   timeoutMinutes: 30,
   reportStyle: 'minimal' as ReportStyle,
   runner: 'claude' as RunnerName,
-  methodology: 'pocock' as Methodology
+  methodology: 'pocock' as Methodology,
+  voiceAutoGroom: false
 }
 
 export type Role = { slug: string; name: string; preamble: string } & Profile
