@@ -1,7 +1,7 @@
 // Shared UI atoms — M10-ui.md §0. Class strings, not components: the design
 // system is Tailwind utilities, and a wrapper component per button would hide
 // the exact strings the mocks are the source of truth for.
-import type { Item } from '../../preload/index'
+import type { GroomState, Item } from '../../preload/index'
 
 const DISABLED = 'disabled:opacity-40 disabled:pointer-events-none'
 
@@ -105,7 +105,10 @@ export const reorderBacklog = (order: string[], dragId: string, targetId: string
 
 // Session-state chip, in the STATUS_CHIP formula but on the session vocabulary
 // — a session state is never an Item Status, so it never reuses those labels.
-export const SESSION_CHIP: Record<string, { label: string; cls: string }> = {
+// 'active' is the absent-state fallback: a plain conversation with no session
+// state of its own.
+export type SessionState = GroomState | 'active'
+export const SESSION_CHIP: Record<SessionState, { label: string; cls: string }> = {
   'needs-review': { label: 'Needs review', cls: STATUS_CHIP.Running },
   working: { label: 'Working', cls: STATUS_CHIP.Running },
   queued: { label: 'Queued', cls: STATUS_CHIP.Queued },
@@ -114,7 +117,7 @@ export const SESSION_CHIP: Record<string, { label: string; cls: string }> = {
   archived: { label: 'Archived', cls: STATUS_CHIP.Skipped },
   active: { label: 'Active', cls: STATUS_CHIP.Queued }
 }
-export const sessionChip = (state?: string): { label: string; cls: string } => {
+export const sessionChip = (state?: GroomState): { label: string; cls: string } => {
   const c = SESSION_CHIP[state ?? 'active'] ?? SESSION_CHIP.active
   return { label: c.label, cls: `${STATUS_CHIP_BASE} ${c.cls}` }
 }
@@ -122,11 +125,14 @@ export const sessionChip = (state?: string): { label: string; cls: string } => {
 export type SessionSort = 'activity' | 'created' | 'title'
 export type SessionGroup = { key: string; label: string; items: Item[] }
 
+/** Human date for a session timestamp — '—' when it has never happened. */
+export const stamp = (iso: string): string => (iso ? new Date(iso).toLocaleString() : '—')
+
 /** Last time anything happened in the session — the default sort key. */
 export const sessionActivity = (i: Item): string => i.lastActivity || i.created || ''
 
 // `interrupted` is its own group (M25.6): it wants a Resume, not a review.
-const GROUPS: { key: string; label: string; states: (string | undefined)[] }[] = [
+const GROUPS: { key: string; label: string; states: (GroomState | undefined)[] }[] = [
   { key: 'needs-review', label: 'Needs your review', states: ['needs-review'] },
   { key: 'interrupted', label: 'Interrupted', states: ['interrupted'] },
   { key: 'working', label: 'Working', states: ['working'] },
@@ -145,14 +151,21 @@ export const isSession = (i: Item): boolean => i.status === 'grooming' || i.groo
  */
 export const sessionGroups = (
   items: Item[],
-  opts: { sort?: SessionSort; query?: string; kind?: string; archived?: boolean } = {}
+  opts: {
+    sort?: SessionSort
+    query?: string
+    kind?: string
+    state?: string
+    archived?: boolean
+  } = {}
 ): SessionGroup[] => {
   const q = (opts.query ?? '').trim().toLowerCase()
   const matches = items.filter(
     (i) =>
       isSession(i) &&
       (!q || i.name.toLowerCase().includes(q) || i.id.toLowerCase().includes(q)) &&
-      (!opts.kind || i.kind === opts.kind)
+      (!opts.kind || i.kind === opts.kind) &&
+      (!opts.state || (i.groomState ?? 'active') === opts.state)
   )
   const sorted = [...matches].sort((a, b) =>
     opts.sort === 'title'
@@ -161,11 +174,20 @@ export const sessionGroups = (
         ? (b.created || '').localeCompare(a.created || '')
         : sessionActivity(b).localeCompare(sessionActivity(a))
   )
-  return GROUPS.filter((g) => g.key !== 'archived' || opts.archived).map((g) => ({
-    key: g.key,
-    label: g.label,
-    items: sorted.filter((i) => g.states.includes(i.groomState))
-  }))
+  return GROUPS.filter(
+    (g) =>
+      (g.key !== 'archived' || opts.archived) &&
+      // A state filter shows that one group, not six empty headings.
+      (!opts.state ||
+        g.states.includes(opts.state === 'active' ? undefined : (opts.state as GroomState)))
+  ).map((g) => {
+    const items = sorted.filter((i) => g.states.includes(i.groomState))
+    // The queue is served FIFO, so it reads oldest-first whatever the sort —
+    // every other group is a worklist and keeps the chosen ordering.
+    if (g.key === 'queued')
+      items.sort((a, b) => sessionActivity(a).localeCompare(sessionActivity(b)))
+    return { key: g.key, label: g.label, items }
+  })
 }
 
 // ── Home session rail (M25.4) ────────────────────────────────────────────────

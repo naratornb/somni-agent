@@ -814,6 +814,45 @@ test('sessionGroups groups, hides archived, sorts and filters', () => {
   expect(all({ kind: 'story' })).toEqual(['SOM-11', 'SOM-12', 'SOM-13'])
 })
 
+// Issue #41: the state filter narrows to that one group, headings and all.
+test('sessionGroups filters by session state', () => {
+  const only = (state: string): string[] =>
+    sessionGroups(sessions, { state, archived: true }).flatMap((g) => g.items.map((i) => i.id))
+  expect(sessionGroups(sessions, { state: 'done' }).map((g) => g.key)).toEqual(['done'])
+  expect(only('done')).toEqual(['SOM-12'])
+  expect(only('needs-review')).toEqual(['SOM-11'])
+  expect(only('archived')).toEqual(['SOM-13'])
+  expect(only('active')).toEqual(['SOM-10']) // no state = plain conversation
+  expect(only('working')).toEqual([])
+})
+
+// Issue #43: the queue is served oldest-first, so it must read that way — the
+// other groups stay newest-first worklists.
+test('sessionGroups orders the queued group FIFO', () => {
+  const queued = (id: string, lastActivity: string): Item => ({
+    ...sessions[0],
+    id,
+    groomState: 'queued',
+    lastActivity
+  })
+  const rows = sessionGroups([
+    queued('SOM-3', '2026-09-03T03:00:00.000Z'),
+    queued('SOM-1', '2026-09-03T01:00:00.000Z'),
+    queued('SOM-2', '2026-09-03T02:00:00.000Z')
+  ])
+  expect(rows.find((g) => g.key === 'queued')!.items.map((i) => i.id)).toEqual([
+    'SOM-1',
+    'SOM-2',
+    'SOM-3'
+  ])
+  // ...and the recency order elsewhere is untouched.
+  expect(
+    sessionGroups(sessions)
+      .find((g) => g.key === 'talking')!
+      .items.map((i) => i.id)
+  ).toEqual(['SOM-10'])
+})
+
 test('SessionsView renders every group heading, its rows and the empty state', () => {
   const html = renderToStaticMarkup(
     <SessionsView repo="/repo" items={sessions} onOpen={() => {}} refresh={() => {}} />

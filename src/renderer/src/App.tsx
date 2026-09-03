@@ -71,6 +71,16 @@ function App(): React.JSX.Element {
   // The finished Groom to announce, and whether a background work unit did it.
   const [groomDone, setGroomDone] = useState<{ slug: string; workUnit: boolean } | null>(null)
 
+  // Every door into a Groom (Board, Sessions, Home, Capture, the toast, a
+  // clicked notification) opens it the same way: plain conversation, no seed,
+  // no auto-run. Quick-start is the one exception and sets those itself.
+  const openGroom = useCallback((item: { id: string; name: string }): void => {
+    setGroom({ id: item.id, name: item.name })
+    setGroomSeed(null)
+    setAutoRun(false)
+    setView('Groom')
+  }, [])
+
   const refresh = useCallback(
     (path = repo): void => {
       if (!path) return
@@ -129,12 +139,9 @@ function App(): React.JSX.Element {
   // main — this is the navigation half.
   useEffect(() => {
     return window.somni.onOpenSession((slug) => {
-      setGroom({ id: slug, name: data.items.find((i) => i.id === slug)?.name ?? slug })
-      setGroomSeed(null)
-      setAutoRun(false)
-      setView('Groom')
+      openGroom({ id: slug, name: data.items.find((i) => i.id === slug)?.name ?? slug })
     })
-  }, [data.items])
+  }, [data.items, openGroom])
 
   useEffect(() => {
     if (!groomDone) return
@@ -315,10 +322,7 @@ function App(): React.JSX.Element {
                 finished.
               </span>
               <div className="flex items-center gap-2">
-                <button
-                  className="rounded-full bg-primary-container px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-inverse-primary"
-                  onClick={() => resumeRun(r.runId)}
-                >
+                <button className={BTN_PRIMARY} onClick={() => resumeRun(r.runId)}>
                   Resume run
                 </button>
                 <button
@@ -357,7 +361,7 @@ function App(): React.JSX.Element {
               </span>
               <div className="flex items-center gap-2">
                 <button
-                  className="rounded-full bg-primary-container px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-inverse-primary"
+                  className={BTN_PRIMARY}
                   onClick={() => void window.somni.injectSkills(repo).then(setSkills)}
                 >
                   {skills.repoVersion == null ? 'Set up skills' : 'Upgrade skills'}
@@ -392,10 +396,7 @@ function App(): React.JSX.Element {
               items={data.items}
               onStart={quickStart}
               onGroom={(item) => {
-                setGroom({ id: item.id, name: item.name })
-                setGroomSeed(null)
-                setAutoRun(false)
-                setView('Groom')
+                openGroom(item)
               }}
               onViewAll={() => setView('Sessions')}
             >
@@ -416,10 +417,7 @@ function App(): React.JSX.Element {
               items={data.items}
               refresh={refresh}
               onOpen={(item) => {
-                setGroom({ id: item.id, name: item.name })
-                setGroomSeed(null)
-                setAutoRun(false)
-                setView('Groom')
+                openGroom(item)
               }}
             />
           ) : view === 'Runs' ? (
@@ -455,10 +453,7 @@ function App(): React.JSX.Element {
               openId={openId}
               onClosePanel={() => setOpenId(null)}
               onGroom={(item) => {
-                setGroom({ id: item.id, name: item.name })
-                setGroomSeed(null)
-                setAutoRun(false)
-                setView('Groom')
+                openGroom(item)
               }}
             />
           )}
@@ -471,10 +466,7 @@ function App(): React.JSX.Element {
           onSaved={() => refresh()}
           onGroom={(item) => {
             setCapturing(false)
-            setGroom({ id: item.id, name: item.name })
-            setGroomSeed(null)
-            setAutoRun(false)
-            setView('Groom')
+            openGroom(item)
           }}
         />
       )}
@@ -487,13 +479,10 @@ function App(): React.JSX.Element {
             {groomDone.workUnit ? 'finished its background draft — needs review.' : 'has a reply.'}
           </span>
           <button
-            className="rounded-full bg-primary-container px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-inverse-primary"
+            className={BTN_PRIMARY}
             onClick={() => {
               const item = data.items.find((i) => i.id === groomDone.slug)
-              setGroom({ id: groomDone.slug, name: item?.name ?? groomDone.slug })
-              setGroomSeed(null)
-              setAutoRun(false)
-              setView('Groom')
+              openGroom({ id: groomDone.slug, name: item?.name ?? groomDone.slug })
               setGroomDone(null)
             }}
           >

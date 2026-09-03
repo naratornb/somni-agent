@@ -10,13 +10,13 @@ import {
   sessionActivity,
   sessionChip,
   sessionGroups,
+  SESSION_CHIP,
+  stamp,
   type SessionSort
 } from './ui'
 
 const ROW_BTN =
   'rounded border border-border-subtle bg-surface-container px-3 py-1 text-xs text-on-surface transition-colors hover:bg-surface-bright'
-
-const stamp = (iso: string): string => (iso ? new Date(iso).toLocaleString() : '—')
 
 export function SessionsView({
   repo,
@@ -32,8 +32,9 @@ export function SessionsView({
   const [sort, setSort] = useState<SessionSort>('activity')
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState('')
+  const [state, setState] = useState('')
   const [archived, setArchived] = useState(false)
-  const groups = sessionGroups(items, { sort, query, kind, archived })
+  const groups = sessionGroups(items, { sort, query, kind, state, archived })
   const total = groups.reduce((n, g) => n + g.items.length, 0)
 
   return (
@@ -50,6 +51,14 @@ export function SessionsView({
           {(['idea', 'story', 'epic'] as const).map((k) => (
             <option key={k} value={k}>
               {k}
+            </option>
+          ))}
+        </select>
+        <select className={INPUT} value={state} onChange={(e) => setState(e.target.value)}>
+          <option value="">All states</option>
+          {Object.entries(SESSION_CHIP).map(([k, c]) => (
+            <option key={k} value={k}>
+              {c.label}
             </option>
           ))}
         </select>
@@ -74,7 +83,8 @@ export function SessionsView({
 
       {total === 0 && (
         <p className="text-on-surface-variant">
-          No grooming sessions{query || kind ? ' match those filters' : ' yet for this repo'}.
+          No grooming sessions
+          {query || kind || state ? ' match those filters' : ' yet for this repo'}.
         </p>
       )}
 

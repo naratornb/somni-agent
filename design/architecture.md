@@ -80,7 +80,7 @@ All per-repo state lives **inside the target repo** at `<repo>/.somni/` as plain
   items/SOM-<n>-<slug>.tasks.json # stories only: ordered subtasks
                                  #   [{title, prompt, role, selected}] — the shape the executor consumes
   chats/SOM-<n>.jsonl   # grooming transcript per item (committable)
-  chats/_draft.jsonl    # the one in-progress capture-seeded groom — renamed on Apply
+  chats/<id>.jsonl      # one grooming transcript per item — every groom is item-keyed (M25)
   backlog.json          # ordered item ids = Backlog column priority; missing ids pruned on load
   runs/<runId>/
     run.json            # execution state: pipeline/story/subtask statuses, attempts,

@@ -12,7 +12,8 @@ import {
   KIND_CHIP,
   railOrder,
   sessionActivity,
-  sessionChip
+  sessionChip,
+  stamp
 } from './ui'
 
 // Rendered until repo:suggestions answers with something better; also the
@@ -22,8 +23,6 @@ const FALLBACK_CHIPS = [
   'Add tests for the most fragile area',
   'Update the README to match reality'
 ]
-
-const stamp = (iso: string): string => (iso ? new Date(iso).toLocaleString() : '—')
 
 export function HomeView({
   repo,

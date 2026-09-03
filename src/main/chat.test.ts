@@ -18,7 +18,7 @@ import {
   turnArgs,
   workUnitTurn
 } from './chat'
-import { handoff, resetSessions } from './sessions'
+import { handoff, queuedIds, resetSessions } from './sessions'
 import type { ChatEvent } from './chat'
 import { existsSync, readdirSync } from 'fs'
 import {
@@ -891,6 +891,35 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     expect(callsLogged()[1]).toEqual(expect.arrayContaining(['--resume', 'sess-abc']))
     expect(loadChat(repo, item.id).messages.at(-1)!.text).toBe('resumed reply')
     expect(loadItems(repo)[0].groomState).toBe('needs-review')
+  })
+
+  // Review fix: exactly one Turn per session, whichever path asks for it. A
+  // work unit arriving mid-conversation must not spawn a second, interleaving
+  // Turn on the same transcript.
+  it('never runs two turns at once for one session', async () => {
+    const item = saveItem(repo, { name: 'Search is slow', kind: 'idea' })
+    const before = callsLogged().length
+    const p = send(item.id, 'hi')
+    await workUnitTurn(repo, item.id, {}, ['dev'], () => {}) // refused: resolves without spawning
+    expect(sendChat(repo, item.id, 'again', {}, ['dev'], () => {}).ok).toBe(false)
+    await p
+    expect(callsLogged()).toHaveLength(before + 1)
+    expect(loadChat(repo, item.id).messages.map((m) => m.text)).toEqual(['hi', 'hello there'])
+  })
+
+  // Review fix: typing into a queued session reclaims it — the waiting job is
+  // dropped, so no background Turn lands on it once a slot frees.
+  it('a user message on a queued session cancels its background job', async () => {
+    const ids = ['A', 'B', 'C', 'D'].map((n) => saveItem(repo, { name: n, kind: 'idea' }).id)
+    for (const id of ids)
+      expect(handoff(repo, id, { emit: () => {}, run: () => new Promise<void>(() => {}) }).ok).toBe(
+        true
+      )
+    expect(queuedIds()).toEqual([ids[3]])
+
+    await send(ids[3], 'actually, let me finish this myself')
+    expect(queuedIds()).toEqual([])
+    expect(loadItems(repo).find((i) => i.id === ids[3])!.groomState).toBeUndefined()
   })
 
   // Native notifications (M25.6) at the injected seam — Vitest never sees

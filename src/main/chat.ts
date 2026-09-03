@@ -6,6 +6,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'fs'
 import { dirname, join } from 'path'
 import { getRunner } from './runners'
 import { groomPreamble, WORK_UNIT_PROMPT } from './prompts'
+import { cancelQueued } from './sessions'
 import * as store from './store'
 import { turn } from './turn'
 import type { Effort, GroomState, Item, Profile, Role, RunnerName, Settings, Task } from './store'
@@ -305,6 +306,12 @@ function runTurn(
   onEvent: (ev: ChatEvent) => void,
   workUnit: boolean
 ): Promise<void> {
+  // One Turn per session, whichever path asked for it — a second would
+  // interleave the same transcript. Claimed synchronously, before any write:
+  // sendChat reports the refusal, a work unit simply does not run.
+  if (inFlight.has(slug)) return Promise.resolve()
+  const ac = new AbortController()
+  inFlight.set(slug, ac)
   const lines = readLines(repo, slug)
   let sessionId = sessionOf(lines)
   appendLine(repo, slug, { role: 'user', text, ts: new Date().toISOString() })
@@ -325,12 +332,11 @@ function runTurn(
       lastActivity: new Date().toISOString(),
       ...(workUnit ? {} : { groomState: undefined, doneAt: undefined })
     })
+    if (!workUnit) cancelQueued(repo, item.id) // reclaimed: its queued job never runs
     if (!workUnit && item.groomState) onEvent({ slug, kind: 'state', state: null })
   }
 
   let reply = ''
-  const ac = new AbortController()
-  inFlight.set(slug, ac)
   // A work unit resumes the same session with the assume-and-continue rules on
   // top; a handoff before the first turn still needs the grooming contract.
   const prompt = workUnit
@@ -364,16 +370,21 @@ function runTurn(
     partials.delete(slug) // the reply is about to be a real transcript line
     // A work unit that produced nothing still owes the user an explanation, and
     // it still parks for review — the transcript carries the failure.
-    const text2 = reply.trim() || (workUnit ? `Background draft failed (exit ${r.exitCode}).` : '')
-    if (!text2) {
+    const finalText =
+      reply.trim() || (workUnit ? `Background draft failed (exit ${r.exitCode}).` : '')
+    if (!finalText) {
       onEvent({ slug, kind: 'error', message: `chat turn failed (exit ${r.exitCode})` })
       return
     }
-    const message: ChatMessage = { role: 'assistant', text: text2, ts: new Date().toISOString() }
+    const message: ChatMessage = {
+      role: 'assistant',
+      text: finalText,
+      ts: new Date().toISOString()
+    }
     appendLine(repo, slug, message)
     // A pending Proposal is what "needs your review" means (M25.3). A work unit
     // always parks there — with or without a proposal, the user must look.
-    if (item && (workUnit || parseProposal(text2))) {
+    if (item && (workUnit || parseProposal(finalText))) {
       try {
         store.updateItem(repo, item.id, { groomState: 'needs-review' })
         onEvent({ slug, kind: 'state', state: 'needs-review' })
@@ -393,8 +404,8 @@ function runTurn(
       slug,
       kind: 'done',
       message,
-      proposal: parseProposal(text2),
-      question: workUnit ? null : parseQuestion(text2),
+      proposal: parseProposal(finalText),
+      question: workUnit ? null : parseQuestion(finalText),
       ...(workUnit ? { workUnit: true } : {})
     })
     if (!workUnit && item?.name === NEW_GROOM_NAME)
