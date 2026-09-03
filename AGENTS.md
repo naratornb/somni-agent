@@ -6,6 +6,7 @@
 
 - Requirements: [design/design.md](design/design.md)
 - Approved technical design: [design/architecture.md](design/architecture.md) — **source of truth**. If a decision must change, update that doc in the same PR; never silently diverge from it.
+- **Every change bumps the version** (`package.json`, semver): patch for fixes, minor for a feature/milestone, in the same PR — no two builds may share a version number.
 
 ## Stack
 
