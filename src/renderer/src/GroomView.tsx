@@ -216,7 +216,11 @@ export function GroomView({
           </button>
           <MicButton
             disabled={sending}
-            onText={(text) => setInput((cur) => appendText(cur, text))}
+            // Empty box: the transcription IS the reply — send it (M24).
+            // A typed partial thought: append and wait, never auto-send mixed.
+            onText={(text) =>
+              input.trim() ? setInput((cur) => appendText(cur, text)) : void send(text)
+            }
           />
         </div>
       </div>

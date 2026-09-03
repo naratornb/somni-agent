@@ -2,7 +2,8 @@
 // with suggestion chips, and the live pipeline activity beneath it. The
 // activity is passed as children so its eight props stay App's business.
 import { useEffect, useState } from 'react'
-import { BTN_PRIMARY, CHIP } from './ui'
+import { MicButton } from './chatShared'
+import { appendText, BTN_PRIMARY, CHIP } from './ui'
 
 // Rendered until repo:suggestions answers with something better; also the
 // permanent copy for repos with no usable signals.
@@ -23,12 +24,22 @@ export function HomeView({
 }): React.JSX.Element {
   const [text, setText] = useState('')
   const [chips, setChips] = useState<string[]>(FALLBACK_CHIPS)
+  // Voice quick-start (M24): off = dictation fills the box for a glance;
+  // on = speaking starts the groom immediately, seeded with the words.
+  const [autoGroom, setAutoGroom] = useState(false)
 
   useEffect(() => {
     void window.somni.suggestions(repo).then((s) => {
       if (s.length) setChips(s)
     })
+    void window.somni.getSettings().then((s) => setAutoGroom(!!s.voiceAutoGroom))
   }, [repo])
+
+  const onSpoken = (spoken: string): void => {
+    const next = appendText(text, spoken)
+    setText(next)
+    if (autoGroom && next.trim()) onStart(next.trim())
+  }
 
   const submit = (): void => {
     if (text.trim()) onStart(text.trim())
@@ -53,9 +64,12 @@ export function HomeView({
               }
             }}
           />
-          <button className={BTN_PRIMARY} disabled={!text.trim()} onClick={submit}>
-            Start
-          </button>
+          <div className="flex flex-col gap-2">
+            <button className={BTN_PRIMARY} disabled={!text.trim()} onClick={submit}>
+              Start
+            </button>
+            <MicButton onText={onSpoken} />
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           {/* Chips fill the box, never submit — the user edits before committing. */}
