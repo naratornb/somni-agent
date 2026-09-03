@@ -13,6 +13,7 @@ import {
   parseQuestion,
   PROPOSE_NOW,
   sendChat,
+  setNotifier,
   startGroom,
   turnArgs,
   workUnitTurn
@@ -20,7 +21,15 @@ import {
 import { handoff, resetSessions } from './sessions'
 import type { ChatEvent } from './chat'
 import { existsSync, readdirSync } from 'fs'
-import { loadBacklog, loadItems, loadRepo, renameItem, saveItem, saveRole } from './store'
+import {
+  loadBacklog,
+  loadItems,
+  loadRepo,
+  renameItem,
+  saveItem,
+  saveRole,
+  updateItem
+} from './store'
 
 // The item's file basename is id + slug, and the slug moves on rename.
 const itemFile = (repo: string, id: string): string =>
@@ -859,6 +868,52 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
       role: 'assistant',
       text: expect.stringContaining('Background draft failed')
     })
+  })
+
+  // Resume (M25.6): an interrupted session re-enters the work-unit path and the
+  // CLI conversation continues — same session id on --resume, transcript intact.
+  it('resumes an interrupted session on the same CLI session id', async () => {
+    fake({ FAKE_TEXT: 'first reply' })
+    const item = saveItem(repo, { name: 'Search is slow', kind: 'idea' })
+    await send(item.id, 'groom it')
+    updateItem(repo, item.id, { groomState: 'interrupted' }) // what quit left behind
+
+    fake({ FAKE_TEXT: 'resumed reply' })
+    let running!: Promise<void>
+    const res = handoff(repo, item.id, {
+      emit: () => {},
+      run: () => (running = workUnitTurn(repo, item.id, {}, ['dev'], () => {}))
+    })
+    expect(res.ok).toBe(true)
+    expect(loadItems(repo)[0].groomState).toBe('working') // interrupted cleared on resume
+    await running
+
+    expect(callsLogged()[1]).toEqual(expect.arrayContaining(['--resume', 'sess-abc']))
+    expect(loadChat(repo, item.id).messages.at(-1)!.text).toBe('resumed reply')
+    expect(loadItems(repo)[0].groomState).toBe('needs-review')
+  })
+
+  // Native notifications (M25.6) at the injected seam — Vitest never sees
+  // Electron; index.ts owns Notification/BrowserWindow.
+  it('requests a notification on needs-review only when no window is focused', async () => {
+    const shown: { title: string; body: string; slug: string }[] = []
+    let focused = true
+    setNotifier({ notify: (n) => shown.push(n), isFocused: () => focused })
+    try {
+      fake({ FAKE_TEXT: '```somni-groomed\n' + story() + '\n```' })
+      const watched = saveItem(repo, { name: 'Watched', kind: 'idea' })
+      await send(watched.id, 'groom it')
+      expect(shown).toEqual([]) // the user is already looking at it
+
+      focused = false
+      const away = saveItem(repo, { name: 'Search is slow', kind: 'idea' })
+      await send(away.id, 'groom it')
+      expect(shown).toEqual([
+        { title: 'Search is slow', body: 'Grooming session needs your review.', slug: away.id }
+      ])
+    } finally {
+      setNotifier(null)
+    }
   })
 
   it("refuses a handoff while that session's own chat turn is in flight", async () => {

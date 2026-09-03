@@ -125,10 +125,10 @@ export type SessionGroup = { key: string; label: string; items: Item[] }
 /** Last time anything happened in the session — the default sort key. */
 export const sessionActivity = (i: Item): string => i.lastActivity || i.created || ''
 
-// `working`/`queued` render empty until #43 fills them; `interrupted` joins the
-// review group — it is equally something the user has to come back to.
+// `interrupted` is its own group (M25.6): it wants a Resume, not a review.
 const GROUPS: { key: string; label: string; states: (string | undefined)[] }[] = [
-  { key: 'needs-review', label: 'Needs your review', states: ['needs-review', 'interrupted'] },
+  { key: 'needs-review', label: 'Needs your review', states: ['needs-review'] },
+  { key: 'interrupted', label: 'Interrupted', states: ['interrupted'] },
   { key: 'working', label: 'Working', states: ['working'] },
   { key: 'queued', label: 'Queued', states: ['queued'] },
   { key: 'talking', label: 'In conversation', states: [undefined] },

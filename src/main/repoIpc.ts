@@ -102,7 +102,7 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
 
   // Handoff (M25.5): draft this session in the background. The session manager
   // persists working/queued before anything spawns and caps concurrency at 3.
-  ipcMain.handle('session:handoff', (_e, repo: string, id: string): IpcResult => {
+  const startWorkUnit = (repo: string, id: string): IpcResult => {
     if (isRunning(id)) return { ok: false, error: 'this story is currently running' }
     const settings = repoSettings(repo)
     const roleSlugs = store.loadRepo(repo).roles.map((r) => r.slug)
@@ -112,7 +112,12 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
       emit,
       run: () => workUnitTurn(repo, id, settings, roleSlugs, emit)
     })
-  })
+  }
+  ipcMain.handle('session:handoff', (_e, repo: string, id: string) => startWorkUnit(repo, id))
+  // Resume an interrupted session (M25.6): the same work-unit path. The CLI
+  // session outlived the quit, so `--resume` continues the same conversation —
+  // ponytail: no separate resume machinery, a re-handoff *is* the resume.
+  ipcMain.handle('session:resume', (_e, repo: string, id: string) => startWorkUnit(repo, id))
 
   // Home quick-start chips (M23): cheap local git signals, no AI calls. [] on
   // any failure — the renderer owns the static fallback.

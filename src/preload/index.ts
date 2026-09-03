@@ -158,6 +158,10 @@ const somni = {
   // when three work units are already running.
   handoffSession: (repo: string, id: string): Promise<IpcResult> =>
     ipcRenderer.invoke('session:handoff', repo, id),
+  // Pick an interrupted session back up (M25.6) — the same work-unit path,
+  // resuming the CLI conversation the quit cut short.
+  resumeSession: (repo: string, id: string): Promise<IpcResult> =>
+    ipcRenderer.invoke('session:resume', repo, id),
   // `partial` is the reply streamed so far when `busy` — a Groom re-entered
   // mid-Turn renders it under the streaming cursor (M25.2).
   loadChat: (
@@ -178,7 +182,10 @@ const somni = {
   ): Promise<{ ok: true; item: Item } | { ok: false; error: string }> =>
     ipcRenderer.invoke('proposal:apply', repo, key, proposal),
   onChatEvent: (cb: (ev: ChatEvent) => void): (() => void) =>
-    on('chat:event', (p) => cb(p as ChatEvent))
+    on('chat:event', (p) => cb(p as ChatEvent)),
+  // A clicked native notification (M25.6): focus the window and open that Groom.
+  onOpenSession: (cb: (slug: string) => void): (() => void) =>
+    on('session:open', (p) => cb(p as string))
 }
 
 export type SomniApi = typeof somni

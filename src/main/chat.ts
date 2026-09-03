@@ -244,6 +244,20 @@ export function newChat(repo: string, slug: string): void {
   rmSync(chatPath(repo, slug), { force: true })
 }
 
+// Native notifications (M25.6) at an injected seam: main decides *when* to
+// notify, the wiring in index.ts owns Electron's Notification/BrowserWindow, so
+// nothing here needs Electron under test.
+export type Notifier = {
+  /** Ask the platform to show a banner. Best effort — it may show nothing. */
+  notify: (n: { title: string; body: string; slug: string }) => void
+  /** True while any app window has focus — the user is already looking. */
+  isFocused: () => boolean
+}
+let notifier: Notifier | null = null
+export const setNotifier = (n: Notifier | null): void => {
+  notifier = n
+}
+
 const inFlight = new Map<string, AbortController>()
 // Reply text streamed so far, per in-flight slug — replayed by `loadChat`.
 const partials = new Map<string, string>()
@@ -363,6 +377,14 @@ function runTurn(
       try {
         store.updateItem(repo, item.id, { groomState: 'needs-review' })
         onEvent({ slug, kind: 'state', state: 'needs-review' })
+        // Only when the user isn't already watching: a banner over the window
+        // they are staring at is noise (M25.6).
+        if (notifier && !notifier.isFocused())
+          notifier.notify({
+            title: item.name || slug,
+            body: 'Grooming session needs your review.',
+            slug
+          })
       } catch {
         /* item deleted mid-groom */
       }

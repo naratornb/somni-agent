@@ -161,6 +161,12 @@ export function GroomView({
     if (!res.ok) setError(res.error ?? 'handoff failed')
   }
 
+  const resume = async (): Promise<void> => {
+    setError(null)
+    const res = await window.somni.resumeSession(repo, slug)
+    if (!res.ok) setError(res.error ?? 'resume failed')
+  }
+
   // Dismissing the Proposal returns the session to plain conversation — the
   // needs-review flag is main's, so clear it there too (M25.5).
   const dismiss = (): void => {
@@ -229,6 +235,16 @@ export function GroomView({
           {state === 'working'
             ? 'Drafting in the background — resolving the open questions and writing a Proposal. You can leave this session.'
             : 'Queued — three sessions are already drafting; this one starts when a slot frees.'}
+        </p>
+      )}
+      {/* Quit interrupted the background draft (M25.6); resuming continues the
+          same conversation, so nothing said so far is lost. */}
+      {state === 'interrupted' && (
+        <p className="flex shrink-0 items-center gap-3 rounded-lg bg-surface-container px-4 py-3 text-on-surface-variant">
+          Interrupted when somni quit — the conversation is intact.
+          <button className={BTN_GHOST} onClick={() => void resume()}>
+            Resume
+          </button>
         </p>
       )}
       <div className="flex shrink-0 items-end gap-2 border-t border-border-subtle pt-3">

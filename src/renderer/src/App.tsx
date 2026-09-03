@@ -125,6 +125,17 @@ function App(): React.JSX.Element {
     })
   }, [view, groom?.id, refresh])
 
+  // A clicked native notification (M25.6): the window is already focused by
+  // main — this is the navigation half.
+  useEffect(() => {
+    return window.somni.onOpenSession((slug) => {
+      setGroom({ id: slug, name: data.items.find((i) => i.id === slug)?.name ?? slug })
+      setGroomSeed(null)
+      setAutoRun(false)
+      setView('Groom')
+    })
+  }, [data.items])
+
   useEffect(() => {
     if (!groomDone) return
     const t = setTimeout(() => setGroomDone(null), 8000)

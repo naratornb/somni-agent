@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { handoff, queuedIds, resetSessions, WORK_UNIT_CAP } from './sessions'
+import { handoff, interruptSessions, queuedIds, resetSessions, WORK_UNIT_CAP } from './sessions'
 import type { ChatEvent } from './chat'
 import { loadItems, saveItem } from './store'
 
@@ -91,5 +91,21 @@ describe('session manager', () => {
       ok: false,
       error: 'this session is already working in the background'
     })
+  })
+
+  // M25.6: before-quit parks everything in flight so relaunch shows a Resume
+  // instead of a session frozen at "Working".
+  it('parks every working and queued session interrupted on quit, and frees the queue', () => {
+    const ids = ['A', 'B', 'C', 'D'].map(groom)
+    ids.forEach((id) => expect(hand(id, deferred().run).ok).toBe(true))
+    expect(queuedIds()).toEqual([ids[3]]) // three working, one queued
+
+    interruptSessions()
+
+    for (const id of ids) expect(frontmatter(repo, id)).toContain('groomState: interrupted')
+    expect(loadItems(repo).every((i) => i.groomState === 'interrupted')).toBe(true)
+    expect(queuedIds()).toEqual([])
+    // The slot bookkeeping is gone too — a resumed session isn't refused.
+    expect(hand(ids[0], deferred().run).ok).toBe(true)
   })
 })

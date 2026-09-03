@@ -13,6 +13,9 @@ import {
   type SessionSort
 } from './ui'
 
+const ROW_BTN =
+  'rounded border border-border-subtle bg-surface-container px-3 py-1 text-xs text-on-surface transition-colors hover:bg-surface-bright'
+
 const stamp = (iso: string): string => (iso ? new Date(iso).toLocaleString() : '—')
 
 export function SessionsView({
@@ -105,13 +108,25 @@ export function SessionsView({
                     <span className={CHIP_SM}>{stamp(sessionActivity(i))}</span>
                     {i.groomState === 'archived' && (
                       <button
-                        className="rounded border border-border-subtle bg-surface-container px-3 py-1 text-xs text-on-surface transition-colors hover:bg-surface-bright"
+                        className={ROW_BTN}
                         onClick={(e) => {
                           e.stopPropagation()
                           void window.somni.reopenSession(repo, i.id).then(refresh)
                         }}
                       >
                         Reopen
+                      </button>
+                    )}
+                    {/* The quit cut this draft short — pick it back up (M25.6). */}
+                    {i.groomState === 'interrupted' && (
+                      <button
+                        className={ROW_BTN}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void window.somni.resumeSession(repo, i.id).then(refresh)
+                        }}
+                      >
+                        Resume
                       </button>
                     )}
                   </div>

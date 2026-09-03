@@ -783,11 +783,18 @@ const sessions: Item[] = [
 
 test('sessionGroups groups, hides archived, sorts and filters', () => {
   const groups = sessionGroups(sessions)
-  expect(groups.map((g) => g.key)).toEqual(['needs-review', 'working', 'queued', 'talking', 'done'])
+  expect(groups.map((g) => g.key)).toEqual([
+    'needs-review',
+    'interrupted', // M25.6: its own group — it wants a Resume, not a review
+    'working',
+    'queued',
+    'talking',
+    'done'
+  ])
   expect(groups[0].items.map((i) => i.id)).toEqual(['SOM-11'])
-  expect(groups[1].items).toEqual([]) // working stays empty until #43
-  expect(groups[3].items.map((i) => i.id)).toEqual(['SOM-10'])
-  expect(groups[4].items.map((i) => i.id)).toEqual(['SOM-12'])
+  expect(groups[2].items).toEqual([])
+  expect(groups[4].items.map((i) => i.id)).toEqual(['SOM-10'])
+  expect(groups[5].items.map((i) => i.id)).toEqual(['SOM-12'])
   // only grooming/stateful items are sessions — the Board fixture has one
   expect(sessionGroups(items).flatMap((g) => g.items.map((i) => i.id))).toEqual(['SOM-2'])
 
@@ -829,6 +836,37 @@ test('SessionsView renders every group heading, its rows and the empty state', (
     <SessionsView repo="/repo" items={[]} onOpen={() => {}} refresh={() => {}} />
   )
   expect(empty).toContain('No grooming sessions yet for this repo.')
+})
+
+// M25.6: quit parked this session — the Sessions row and the Groom state line
+// both offer the Resume that picks the same conversation back up.
+test('interrupted sessions get their own group and a Resume affordance', () => {
+  const interrupted: Item = { ...sessions[1], id: 'SOM-14', name: 'Cut short' }
+  interrupted.groomState = 'interrupted'
+  const html = renderToStaticMarkup(
+    <SessionsView
+      repo="/repo"
+      items={[...sessions, interrupted]}
+      onOpen={() => {}}
+      refresh={() => {}}
+    />
+  )
+  expect(html).toContain('Interrupted')
+  expect(html).toContain('Cut short')
+  expect(html).toContain('Resume')
+
+  const groom = renderToStaticMarkup(
+    <GroomView
+      repo="/repo"
+      roles={[]}
+      itemId="SOM-14"
+      itemName="Cut short"
+      groomState="interrupted"
+      onApplied={() => {}}
+    />
+  )
+  expect(groom).toContain('Interrupted when somni quit')
+  expect(groom).toContain('Resume')
 })
 
 // M25.4: the Home rail. railOrder picks the focused session by last activity
