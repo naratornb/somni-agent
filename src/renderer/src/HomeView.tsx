@@ -2,8 +2,18 @@
 // with suggestion chips, and the live pipeline activity beneath it. The
 // activity is passed as children so its eight props stay App's business.
 import { useEffect, useState } from 'react'
+import type { Item } from '../../preload/index'
 import { MicButton } from './chatShared'
-import { appendText, BTN_PRIMARY, CHIP } from './ui'
+import {
+  appendText,
+  BTN_PRIMARY,
+  CHIP,
+  CHIP_SM,
+  KIND_CHIP,
+  railOrder,
+  sessionActivity,
+  sessionChip
+} from './ui'
 
 // Rendered until repo:suggestions answers with something better; also the
 // permanent copy for repos with no usable signals.
@@ -13,13 +23,21 @@ const FALLBACK_CHIPS = [
   'Update the README to match reality'
 ]
 
+const stamp = (iso: string): string => (iso ? new Date(iso).toLocaleString() : '—')
+
 export function HomeView({
   repo,
+  items = [],
   onStart,
+  onGroom,
+  onViewAll,
   children
 }: {
   repo: string
+  items?: Item[]
   onStart: (text: string) => void
+  onGroom?: (item: Item) => void
+  onViewAll?: () => void
   children?: React.ReactNode
 }): React.JSX.Element {
   const [text, setText] = useState('')
@@ -44,6 +62,9 @@ export function HomeView({
   const submit = (): void => {
     if (text.trim()) onStart(text.trim())
   }
+
+  const { focused, compact, overflow } = railOrder(items)
+  const open = (i: Item): void => onGroom?.(i)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-6">
@@ -84,6 +105,59 @@ export function HomeView({
           ))}
         </div>
       </div>
+      {/* Session rail (M25.4): only when there is a live session — otherwise
+          Home is exactly the quick-start box over the pipeline. */}
+      {focused && (
+        <section className="flex shrink-0 flex-col gap-2">
+          <div
+            className="flex cursor-pointer items-center justify-between gap-4 rounded-xl border border-primary/40 bg-surface-elevated p-card-padding transition-colors hover:bg-surface-container"
+            onClick={() => open(focused)}
+          >
+            <div className="flex min-w-0 flex-col gap-1">
+              <span className="truncate font-headline-lg text-headline-lg font-bold text-on-surface">
+                {focused.name}
+              </span>
+              <span className="font-mono-code text-xs text-on-surface-variant">
+                {focused.id} · {stamp(sessionActivity(focused))}
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-3">
+              <span className={KIND_CHIP[focused.kind]}>{focused.kind}</span>
+              <span className={sessionChip(focused.groomState).cls}>
+                {sessionChip(focused.groomState).label}
+              </span>
+              {focused.groomState === 'needs-review' && (
+                <button className={BTN_PRIMARY} onClick={() => open(focused)}>
+                  Review
+                </button>
+              )}
+            </div>
+          </div>
+          {compact.map((i) => (
+            <div
+              className="flex cursor-pointer items-center justify-between gap-4 rounded-lg border border-border-subtle bg-surface-elevated px-3 py-2 transition-colors hover:bg-surface-container"
+              key={i.id}
+              onClick={() => open(i)}
+            >
+              <span className="truncate text-on-surface">{i.name}</span>
+              <div className="flex shrink-0 items-center gap-2">
+                <span className={sessionChip(i.groomState).cls}>
+                  {sessionChip(i.groomState).label}
+                </span>
+                <span className={CHIP_SM}>{i.id}</span>
+              </div>
+            </div>
+          ))}
+          {overflow > 0 && (
+            <button
+              className="self-start text-sm text-primary hover:underline"
+              onClick={() => onViewAll?.()}
+            >
+              View all {overflow + compact.length + 1} → Sessions
+            </button>
+          )}
+        </section>
+      )}
       {children}
     </div>
   )

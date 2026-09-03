@@ -376,7 +376,18 @@ function App(): React.JSX.Element {
               </button>
             </div>
           ) : view === 'Home' ? (
-            <HomeView repo={repo} onStart={quickStart}>
+            <HomeView
+              repo={repo}
+              items={data.items}
+              onStart={quickStart}
+              onGroom={(item) => {
+                setGroom({ id: item.id, name: item.name })
+                setGroomSeed(null)
+                setAutoRun(false)
+                setView('Groom')
+              }}
+              onViewAll={() => setView('Sessions')}
+            >
               <PipelineView
                 runs={runs}
                 logs={logs}

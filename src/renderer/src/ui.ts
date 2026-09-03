@@ -168,6 +168,32 @@ export const sessionGroups = (
   }))
 }
 
+// ── Home session rail (M25.4) ────────────────────────────────────────────────
+
+const RAIL_RANK = ['needs-review', 'interrupted', 'working', 'queued']
+export const RAIL_COMPACT_CAP = 6
+
+/**
+ * The Home rail: the most recently active non-archived session gets the head
+ * card, the rest are compact rows ordered needs-review → working → queued →
+ * everything else by last activity. `overflow` is what the cap hid.
+ */
+export const railOrder = (
+  items: Item[],
+  cap = RAIL_COMPACT_CAP
+): { focused?: Item; compact: Item[]; overflow: number } => {
+  const live = items
+    .filter((i) => isSession(i) && i.groomState !== 'archived')
+    .sort((a, b) => sessionActivity(b).localeCompare(sessionActivity(a)))
+  const [focused, ...rest] = live
+  const rank = (i: Item): number => {
+    const n = RAIL_RANK.indexOf(i.groomState ?? '')
+    return n === -1 ? RAIL_RANK.length : n
+  }
+  const ordered = rest.sort((a, b) => rank(a) - rank(b)) // stable: ties keep activity order
+  return { focused, compact: ordered.slice(0, cap), overflow: Math.max(0, ordered.length - cap) }
+}
+
 export type PaletteResult =
   | { key: string; label: string; action: 'capture' | 'pipeline' }
   | { key: string; label: string; action: 'goto'; view: string }

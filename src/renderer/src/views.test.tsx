@@ -26,7 +26,14 @@ import {
   StreamingBubble
 } from './chatShared'
 import { CaptureModal, CommandPalette, QuickAdd } from './capture'
-import { captureItem, paletteResults, reorderBacklog, saveCapture, sessionGroups } from './ui'
+import {
+  captureItem,
+  paletteResults,
+  railOrder,
+  reorderBacklog,
+  saveCapture,
+  sessionGroups
+} from './ui'
 
 // Every somni.* call is a noop; proposeNow is read during render.
 const somni = new Proxy({ proposeNow: 'PROPOSE_NOW' } as Record<string, unknown>, {
@@ -822,6 +829,48 @@ test('SessionsView renders every group heading, its rows and the empty state', (
     <SessionsView repo="/repo" items={[]} onOpen={() => {}} refresh={() => {}} />
   )
   expect(empty).toContain('No grooming sessions yet for this repo.')
+})
+
+// M25.4: the Home rail. railOrder picks the focused session by last activity
+// and ranks the rest by what they want from the user.
+test('railOrder focuses the freshest session and ranks the rest', () => {
+  const r = railOrder(sessions)
+  expect(r.focused?.id).toBe('SOM-11') // newest activity, needs review
+  expect(r.compact.map((i) => i.id)).toEqual(['SOM-10', 'SOM-12']) // archived excluded
+  expect(r.overflow).toBe(0)
+  expect(railOrder([]).focused).toBeUndefined()
+
+  // needs-review/working/queued float above plain conversations, and the cap bites
+  const many: Item[] = Array.from({ length: 9 }, (_, n) => ({
+    ...sessions[0],
+    id: `SOM-${100 + n}`,
+    groomState: n === 8 ? 'working' : undefined,
+    lastActivity: `2026-09-0${9 - Math.min(n, 8)}T00:00:00.000Z`
+  }))
+  const big = railOrder(many)
+  expect(big.focused?.id).toBe('SOM-100')
+  expect(big.compact).toHaveLength(6)
+  expect(big.compact[0].id).toBe('SOM-108') // working outranks the chatter
+  expect(big.overflow).toBe(2)
+})
+
+test('HomeView renders the session rail, capped, and omits it when empty', () => {
+  const html = renderToStaticMarkup(
+    <HomeView repo="/repo" items={sessions} onStart={() => {}}>
+      <p>ACTIVITY</p>
+    </HomeView>
+  )
+  expect(html).toContain('Beta review') // focused card
+  expect(html).toContain('Review') // needs-review affordance
+  expect(html).toContain('Alpha talk') // compact row
+  expect(html).not.toContain('Delta old') // archived never reaches the rail
+
+  const bare = renderToStaticMarkup(
+    <HomeView repo="/repo" items={[]} onStart={() => {}}>
+      <p>ACTIVITY</p>
+    </HomeView>
+  )
+  expect(bare).not.toContain('Sessions')
 })
 
 // M25.5: a session handed off to a background work unit closes its composer and
