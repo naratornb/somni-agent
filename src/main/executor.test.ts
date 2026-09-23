@@ -471,6 +471,25 @@ describe('failover (M26)', () => {
     // one claude slot, so they run one at a time: 4 * 200ms, not 2 in parallel.
     expect(Date.now() - t0).toBeGreaterThanOrEqual(700)
   })
+
+  // report.ts's full-style Report task (review round 1): it went through the
+  // same "resolve 'auto' before persisting" bug the subtask loop had —
+  // task.runner = settings.runner would have literally written 'auto' into
+  // run.json. Routing it through the shared runTurnWithFailover fixes this
+  // the same way it does for a subtask.
+  it('a full-style report under auto records a concrete runner, never "auto", in run.json', async () => {
+    const settings = { runner: 'auto' as const, reportStyle: 'full' as const }
+    const state = await runStory(repo, docs, base, noEvents, { settings })
+    expect(state.status).toBe('Completed')
+    const report = state.tasks.find((t) => t.title === 'Report')
+    expect(report?.status).toBe('Completed')
+    expect(report?.runner).toBe('claude') // resolved from 'auto' — head of chain, available
+    const onDisk = JSON.parse(
+      readFileSync(join(repo, '.somni/runs', state.runId, 'run.json'), 'utf8')
+    )
+    const onDiskReport = onDisk.tasks.find((t: { title: string }) => t.title === 'Report')
+    expect(onDiskReport.runner).toBe('claude') // never 'auto' on disk either
+  })
 })
 
 describe('crash resume', () => {

@@ -5,10 +5,8 @@
 import { execFile } from 'child_process'
 import { join } from 'path'
 import { promisify } from 'util'
-import { resolveTurnRunner } from './executor'
-import { acquireSlot, markAuthFailed, markOk, markRateLimited } from './providers'
-import { getRunner } from './runners'
-import { atomicWrite, resolveProfile, RunnerName, Settings } from './store'
+import { runTurnWithFailover } from './failover'
+import { atomicWrite, resolveProfile, Settings } from './store'
 import { turn } from './turn'
 import type { Ctrl, RunEvents, RunState, TaskRun } from './executor'
 
@@ -178,7 +176,8 @@ export async function writeReport(
   state: RunState,
   settings: Settings,
   ctrl: Ctrl,
-  events: RunEvents
+  events: RunEvents,
+  nowMs: () => number
 ): Promise<RunStats> {
   const runDir = join(repo, '.somni', 'runs', state.runId)
   const stats = await collectStats(state).catch(() => ({
@@ -211,10 +210,9 @@ export async function writeReport(
     // ponytail: the report task is spawned directly rather than threaded through
     // execute()'s retry/gate loop — it must never fail the run, and one shot is
     // enough for a genuine failure. It still fails over/waits on a rate limit
-    // or auth park via resolveTurnRunner (M26 §5), same as every other Turn —
+    // or auth park via runTurnWithFailover (M26 §5), same as every other Turn —
     // and never persists 'auto' into run.json (task.runner must be concrete).
-    const choice = resolveProfile(undefined, settings).runner ?? 'claude'
-    const auto = choice === 'auto'
+    const profile = resolveProfile(undefined, settings)
     const task: TaskRun = {
       title: 'Report',
       role: '',
@@ -225,85 +223,39 @@ export async function writeReport(
     }
     state.tasks.push(task)
 
-    let concrete: RunnerName | null = null
+    const outcome = await runTurnWithFailover({
+      choice: profile.runner ?? 'claude',
+      pinnedModel: profile.model,
+      pinnedEffort: profile.effort,
+      settings,
+      ctrl,
+      nowMs,
+      events,
+      runId: state.runId,
+      taskIndex: -1,
+      task,
+      maxAttempts: 1, // one shot for a genuine failure — a report must never block the run
+      request: {
+        prompt: REPORT_PROMPT,
+        cwd: state.worktree,
+        autonomous: true,
+        logPath: join(runDir, task.log)
+      }
+    })
+
     let text: string | null = null
-    for (;;) {
-      if (ctrl.cancelled) {
-        task.status = 'Cancelled'
-        break
-      }
-      if (!concrete) {
-        const resolved = await resolveTurnRunner(
-          choice,
-          settings,
-          ctrl,
-          () => Date.now(),
-          (resumeAt) => events.onPipeline?.('Paused', { resumeAt }),
-          () => events.onPipeline?.('Running')
-        )
-        if (resolved === 'cancelled') {
-          task.status = 'Cancelled'
-          break
-        }
-        if (resolved === 'unavailable') {
-          task.status = 'Failed'
-          task.error = 'no provider available'
-          break
-        }
-        concrete = resolved
-      }
-      const model = auto ? settings.providers?.defaults?.[concrete]?.model : settings.model
-      const effort = auto ? settings.providers?.defaults?.[concrete]?.effort : settings.effort
-      task.runner = concrete
-      task.model = model
-      task.effort = effort
-      task.attempts = (task.attempts ?? 0) + 1
-
-      const release = await acquireSlot(concrete, settings)
-      let r: Awaited<ReturnType<typeof turn>>
-      try {
-        r = await turn(
-          {
-            prompt: REPORT_PROMPT,
-            settings,
-            cwd: state.worktree,
-            runner: concrete,
-            model,
-            effort,
-            autonomous: true,
-            logPath: join(runDir, task.log)
-          },
-          { signal: ctrl.ac.signal }
-        )
-      } finally {
-        release()
-      }
-
-      if (r.ok) {
-        markOk(concrete)
-        text = r.text || null
-        task.status = text ? 'Completed' : 'Failed'
-        if (!text) task.error = 'report task produced no output'
-        break
-      }
-      if (r.rateLimited) {
-        markRateLimited(concrete)
-        concrete = null
-        continue
-      }
-      if (getRunner(concrete, settings).isAuthError?.(r.detail ?? '')) {
-        markAuthFailed(concrete)
-        if (!auto) {
-          task.status = 'Failed'
-          task.error = 'report task produced no output'
-          break
-        }
-        concrete = null
-        continue
-      }
+    if (outcome.ok) {
+      text = outcome.text || null
+      task.status = text ? 'Completed' : 'Failed'
+      if (!text) task.error = 'report task produced no output'
+    } else if (outcome.reason === 'cancelled') {
+      task.status = 'Cancelled'
+    } else if (outcome.reason === 'no-provider') {
       task.status = 'Failed'
-      task.error = 'report task produced no output'
-      break
+      task.error = 'no provider available'
+    } else {
+      task.status = 'Failed'
+      task.error ??= 'report task produced no output'
     }
     body += text ? `\n## Summary\n\n${text}\n` : '\n_(report task failed — minimal report only)_\n'
   }

@@ -8,6 +8,7 @@ import { execFile } from 'child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { promisify } from 'util'
+import { runTurnWithFailover } from './failover'
 import { lockedGit } from './git'
 import { writeReport } from './report'
 import {
@@ -18,17 +19,6 @@ import {
   subtaskPrompt,
   taskTitle
 } from './prompts'
-import {
-  acquireSlot,
-  isAvailable,
-  markAuthFailed,
-  markOk,
-  markRateLimited,
-  nextAvailableAt,
-  pickAuto
-} from './providers'
-import { getRunner } from './runners'
-import { turn } from './turn'
 import type { RunStats } from './report'
 import {
   atomicWrite,
@@ -38,7 +28,6 @@ import {
   loadRepo,
   resolveProfile,
   RunnerChoice,
-  RunnerName,
   setItemStatus,
   Settings,
   slugify,
@@ -139,58 +128,6 @@ export type RunOpts = {
 
 function makeGate(): Gate {
   return { wait: () => Promise.resolve(), ok: () => {}, abort: () => {} }
-}
-
-const POLL_MS = 25 // real ms between deadline checks
-
-// Abortable wait to a deadline on the caller's clock (RunOpts.now, or real time
-// by default); resolves true when the deadline passed, false on cancel/abort.
-// Polls in real time rather than a single setTimeout(at - now()): `now` may
-// run faster than real time (tests fast-forward a provider's real cooldown),
-// and that delta is on the caller's clock, not a real-ms duration.
-function sleepUntil(at: number, signal: AbortSignal, now: () => number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const finish = (ok: boolean): void => {
-      clearInterval(iv)
-      signal.removeEventListener('abort', onAbort)
-      resolve(ok)
-    }
-    const onAbort = (): void => finish(false)
-    signal.addEventListener('abort', onAbort, { once: true })
-    const iv = setInterval(() => {
-      if (now() >= at) finish(true)
-    }, POLL_MS)
-    if (now() >= at) finish(true)
-  })
-}
-
-// Shared by the subtask loop and every aux Turn (Review/Fix/Report, M26 §5):
-// waits for a usable provider. 'auto' fails over to the next chain member
-// immediately; a pinned choice waits out its own cooldown. Returns the
-// terminal states explicitly rather than throwing, so callers decide how to
-// fail (task vs. run) without a try/catch detour.
-export async function resolveTurnRunner(
-  choice: RunnerChoice,
-  settings: Settings,
-  ctrl: Ctrl,
-  nowMs: () => number,
-  onPause?: (resumeAt: string) => void,
-  onResume?: () => void
-): Promise<RunnerName | 'cancelled' | 'unavailable'> {
-  for (;;) {
-    if (ctrl.cancelled) return 'cancelled'
-    const next =
-      choice === 'auto'
-        ? pickAuto(settings, nowMs())
-        : isAvailable(choice, settings, nowMs())
-          ? choice
-          : null
-    if (next) return next
-    const at = nextAvailableAt(settings, choice, nowMs())
-    if (at === null) return 'unavailable'
-    onPause?.(new Date(at).toISOString())
-    if (await sleepUntil(at, ctrl.ac.signal, nowMs)) onResume?.()
-  }
 }
 
 type Pipeline = {
@@ -621,13 +558,12 @@ async function execute(
 
   // ponytail: aux tasks get one genuine-failure shot each (report.ts's
   // Report-task precedent — the review loop is itself the retry) but still
-  // fail over/wait on a rate limit or auth failure via resolveTurnRunner (M26
-  // §5), same as a subtask. They record attempts/cost so run.json and the
-  // report treat them like any other task, and they share the run's
+  // fail over/wait on a rate limit or auth failure via runTurnWithFailover
+  // (M26 §5), same as a subtask. They record attempts/cost so run.json and
+  // the report treat them like any other task, and they share the run's
   // AbortController, so cancel and the task timeout reach them too.
   const auxTask = async (title: string, prompt: string, log: string): Promise<string | null> => {
-    const choice = resolveProfile(undefined, settings).runner ?? 'claude'
-    const auto = choice === 'auto'
+    const profile = resolveProfile(undefined, settings)
     const task: TaskRun = {
       title,
       role: '',
@@ -639,97 +575,42 @@ async function execute(
     state.tasks.push(task)
     writeState()
 
-    let concrete: RunnerName | null = null
+    const outcome = await runTurnWithFailover({
+      choice: profile.runner ?? 'claude',
+      pinnedModel: profile.model,
+      pinnedEffort: profile.effort,
+      settings,
+      ctrl,
+      nowMs,
+      events,
+      runId: state.runId,
+      taskIndex: -1,
+      task,
+      maxAttempts: 1, // one shot for a genuine failure — the review loop is itself the retry
+      request: {
+        prompt,
+        cwd: state.worktree,
+        autonomous: true,
+        timeoutMs,
+        graceMs,
+        logPath: join(runDir, task.log)
+      },
+      onFailover: writeState
+    })
+
     let text: string | null = null
-    for (;;) {
-      if (ctrl.cancelled) {
-        task.status = 'Cancelled'
-        break
-      }
-      if (!concrete) {
-        const resolved = await resolveTurnRunner(
-          choice,
-          settings,
-          ctrl,
-          nowMs,
-          (resumeAt) => events.onPipeline?.('Paused', { resumeAt }),
-          () => events.onPipeline?.('Running')
-        )
-        if (resolved === 'cancelled') {
-          task.status = 'Cancelled'
-          break
-        }
-        if (resolved === 'unavailable') {
-          task.status = 'Failed'
-          task.error = 'no provider available'
-          break
-        }
-        concrete = resolved
-      }
-      const model = auto ? settings.providers?.defaults?.[concrete]?.model : settings.model
-      const effort = auto ? settings.providers?.defaults?.[concrete]?.effort : settings.effort
-      task.runner = concrete
-      task.model = model
-      task.effort = effort
-      task.attempts = (task.attempts ?? 0) + 1
-      writeState()
-
-      const release = await acquireSlot(concrete, settings)
-      let r: Awaited<ReturnType<typeof turn>>
-      try {
-        r = await turn(
-          {
-            prompt,
-            settings,
-            cwd: state.worktree,
-            runner: concrete,
-            model,
-            effort,
-            autonomous: true,
-            timeoutMs,
-            graceMs,
-            logPath: join(runDir, task.log)
-          },
-          { signal: ctrl.ac.signal }
-        )
-      } finally {
-        release()
-      }
-      Object.assign(task, r.usage)
-
-      if (ctrl.cancelled) {
-        task.status = 'Cancelled'
-        break
-      }
-      if (r.ok) {
-        markOk(concrete)
-        text = r.text || null
-        task.status = text ? 'Completed' : 'Failed'
-        if (!text) task.error = `${title.toLowerCase()} task produced no output`
-        break
-      }
-      if (r.rateLimited) {
-        markRateLimited(concrete, nowMs())
-        events.onLog(state.runId, -1, `[somni] ${concrete} rate limited — failing over`)
-        writeState()
-        concrete = null
-        continue
-      }
-      if (getRunner(concrete, settings).isAuthError?.(r.detail ?? '')) {
-        markAuthFailed(concrete)
-        events.onLog(state.runId, -1, `[somni] ${concrete} auth failed — parked`)
-        if (!auto) {
-          task.status = 'Failed'
-          task.error = `${title.toLowerCase()} task produced no output`
-          break
-        }
-        concrete = null
-        continue
-      }
-      // Genuine failure: one shot for an aux task, no retry.
+    if (outcome.ok) {
+      text = outcome.text || null
+      task.status = text ? 'Completed' : 'Failed'
+      if (!text) task.error = `${title.toLowerCase()} task produced no output`
+    } else if (outcome.reason === 'cancelled') {
+      task.status = 'Cancelled'
+    } else if (outcome.reason === 'no-provider') {
       task.status = 'Failed'
-      task.error = `${title.toLowerCase()} task produced no output`
-      break
+      task.error = 'no provider available'
+    } else {
+      task.status = 'Failed'
+      task.error ??= `${title.toLowerCase()} task produced no output`
     }
     writeState()
     return text
@@ -800,10 +681,8 @@ async function execute(
       const role = roles.find((r) => r.slug === def.role)
       // Resolved once per task, outside the attempt loop: a genuine-failure
       // retry always reuses the same concrete provider, never mixed (§5) —
-      // `concrete` below is only cleared on a rate limit or auth park.
+      // runTurnWithFailover only re-resolves after a rate limit or auth park.
       const profile = resolveProfile(role, settings)
-      const choice = profile.runner ?? 'claude'
-      const auto = choice === 'auto'
       // The superpowers plan def is already the complete prompt.
       const prompt =
         methodology === 'superpowers'
@@ -814,115 +693,47 @@ async function execute(
       task.attempts ??= 0
       writeState()
 
-      let failures = 0
-      let concrete: RunnerName | null = null
-      for (;;) {
-        await gate.wait()
-        if (ctrl.cancelled) {
-          task.status = 'Cancelled'
-          break
-        }
-        if (!concrete) {
-          // run.json must never record 'auto' (M26 §2) — this resolves it to a
-          // concrete provider before anything is written, waiting out a pinned
-          // provider's cooldown or failing over immediately for 'auto'.
-          const resolved = await resolveTurnRunner(
-            choice,
-            settings,
-            ctrl,
-            nowMs,
-            (resumeAt) => events.onPipeline?.('Paused', { resumeAt }),
-            () => events.onPipeline?.('Running')
-          )
-          if (resolved === 'cancelled') {
-            task.status = 'Cancelled'
-            break
-          }
-          if (resolved === 'unavailable') {
-            task.error = 'no provider available'
-            task.status = 'Failed'
-            break
-          }
-          concrete = resolved
-        }
-        const model = auto ? settings.providers?.defaults?.[concrete]?.model : profile.model
-        const effort = auto ? settings.providers?.defaults?.[concrete]?.effort : profile.effort
-        task.runner = concrete
-        task.model = model
-        task.effort = effort
-        task.attempts = (task.attempts ?? 0) + 1
-        writeState() // the attempt is on disk before it is made
+      await gate.wait()
+      const outcome = await runTurnWithFailover({
+        choice: profile.runner ?? 'claude',
+        pinnedModel: profile.model,
+        pinnedEffort: profile.effort,
+        settings,
+        ctrl,
+        nowMs,
+        events,
+        runId: state.runId,
+        taskIndex: i,
+        task,
+        maxAttempts: MAX_ATTEMPTS,
+        request: {
+          prompt,
+          cwd: state.worktree,
+          autonomous: true,
+          timeoutMs,
+          graceMs,
+          logPath,
+          onSession: (id) => (task.sessionId = id),
+          onText: (t) => events.onLog(state.runId, i, t),
+          onStderr: (m) => events.onLog(state.runId, i, `[stderr] ${m}`)
+        },
+        onAttempt: writeState,
+        onFailover: writeState
+      })
 
-        const release = await acquireSlot(concrete, settings)
-        let r: Awaited<ReturnType<typeof turn>>
-        try {
-          r = await turn(
-            {
-              prompt,
-              settings,
-              cwd: state.worktree,
-              runner: concrete,
-              model,
-              effort,
-              autonomous: true,
-              timeoutMs,
-              graceMs,
-              logPath,
-              onSession: (id) => (task.sessionId = id),
-              onText: (t) => events.onLog(state.runId, i, t),
-              onStderr: (m) => events.onLog(state.runId, i, `[stderr] ${m}`)
-            },
-            { signal: ctrl.ac.signal }
-          )
-        } finally {
-          release()
-        }
-
-        task.costUsd = r.usage.costUsd
-        task.promptTokens = r.usage.promptTokens
-        task.completionTokens = r.usage.completionTokens
-        task.exitCode = r.exitCode
-        task.durationMs = r.usage.durationMs
-        // Persist *why* it failed even when the CLI never produced a result event
-        // (bad PATH, crash, timeout) — otherwise the morning shows "Failed", no reason.
-        task.error = r.ok || ctrl.cancelled ? undefined : r.detail
-
-        if (ctrl.cancelled) {
-          task.status = 'Cancelled'
-          break
-        }
-        if (r.ok) {
-          markOk(concrete)
-          gate.ok()
-          task.status = 'Completed'
-          break
-        }
-        if (r.rateLimited) {
-          // Rate limits fail over (or wait) per provider instead of burning
-          // the retry (§3) — no pipeline-wide pause any more.
-          markRateLimited(concrete, nowMs())
-          events.onLog(state.runId, i, `[somni] ${concrete} rate limited — failing over`)
-          writeState()
-          concrete = null
-          continue
-        }
-        if (getRunner(concrete, settings).isAuthError?.(task.error ?? '')) {
-          markAuthFailed(concrete)
-          events.onLog(state.runId, i, `[somni] ${concrete} auth failed — parked`)
-          if (!auto) {
-            // A pinned, parked provider can never come back on its own.
-            task.status = 'Failed'
-            break
-          }
-          concrete = null
-          continue
-        }
-        if (++failures < MAX_ATTEMPTS) {
-          events.onLog(state.runId, i, `[somni] ${task.error} — retrying once`)
-          continue
-        }
+      if (outcome.ok) {
+        gate.ok()
+        task.status = 'Completed'
+      } else if (outcome.reason === 'cancelled') {
+        task.status = 'Cancelled'
+      } else if (outcome.reason === 'no-provider') {
+        task.error = 'no provider available'
         task.status = 'Failed'
-        break
+      } else {
+        // 'auth-parked' (pinned, can never come back) or 'exhausted' (genuine
+        // failures used up MAX_ATTEMPTS on the same provider) — task.error is
+        // already the last turn's detail.
+        task.status = 'Failed'
       }
       writeState()
 
@@ -951,7 +762,7 @@ async function execute(
     if (state.status === 'Completed' || state.status === 'Failed') {
       // Assigned only on success: a failed report must not clobber stats a
       // previous (resumed) run already landed in run.json.
-      const stats = await writeReport(repo, state, settings, ctrl, events).catch((err) => {
+      const stats = await writeReport(repo, state, settings, ctrl, events, nowMs).catch((err) => {
         events.onLog(state.runId, -1, `[somni] report failed: ${message(err)}`)
         return undefined
       })
