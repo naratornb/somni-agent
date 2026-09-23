@@ -5,6 +5,7 @@
 import { execFile } from 'child_process'
 import { join } from 'path'
 import { promisify } from 'util'
+import { readOnlyRunner } from './chat'
 import { runTurnWithFailover } from './failover'
 import { atomicWrite, resolveProfile, Settings } from './store'
 import { turn } from './turn'
@@ -201,7 +202,13 @@ export async function writeReport(
     ].join('\n')
     // Read-only: never an autonomous Turn here (§7 chat rules). A report must
     // never be the thing that fails a run, so any failure degrades to null.
-    const r = await turn({ prompt, settings, cwd: state.worktree, readOnly: true })
+    const r = await turn({
+      prompt,
+      settings,
+      runner: readOnlyRunner(settings),
+      cwd: state.worktree,
+      readOnly: true
+    })
     const text = r.ok && r.text ? r.text : null
     body += text ? `\n## Summary\n\n${text}\n` : '\n_(summary call failed — minimal report only)_\n'
   }

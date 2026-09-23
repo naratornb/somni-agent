@@ -2,7 +2,7 @@
 // (ipcMain.handle captures the handlers, app.getPath points at a temp userData);
 // everything below it — git, .somni/ files — is real, run against scratch repos.
 import { execFileSync } from 'child_process'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -298,6 +298,36 @@ describe('field:refine', () => {
       'do stuff'
     )
     expect(res).toEqual({ ok: false, error: 'refine failed — no reply' })
+  })
+
+  // M26 final review, fix 2: a pinned non-read-only runner (gemini has no
+  // readOnly branch in its buildArgs at all — runners.ts) must not reach
+  // turn() unweakened. field:refine now routes through readOnlyRunner
+  // (chat.ts), which falls through the chain to claude, the same as chat.
+  it("a pinned gemini runner falls through to claude — gemini's fake binary never runs", async () => {
+    const geminiMarker = join(mkdtempSync(join(tmpdir(), 'somni-marker-')), 'gemini-ran')
+    const geminiPath = join(mkdtempSync(join(tmpdir(), 'somni-bin-')), 'gemini')
+    writeFileSync(
+      geminiPath,
+      `#!/bin/sh\ntouch '${geminiMarker}'\n` +
+        'echo \'{"type":"result","status":"success","response":"WRONG"}\'\n',
+      { mode: 0o755 }
+    )
+    const claudePath = join(mkdtempSync(join(tmpdir(), 'somni-bin-')), 'claude')
+    writeFileSync(
+      claudePath,
+      '#!/bin/sh\necho \'{"type":"result","subtype":"success","is_error":false,"result":"REFINED"}\'\n',
+      { mode: 0o755 }
+    )
+    writeFileSync(
+      join(userData, 'settings.json'),
+      JSON.stringify({ runner: 'gemini', geminiBinary: geminiPath, claudeBinary: claudePath })
+    )
+    expect(await invoke('field:refine', repo, 'task', 'do stuff')).toEqual({
+      ok: true,
+      text: 'REFINED'
+    })
+    expect(existsSync(geminiMarker)).toBe(false)
   })
 })
 

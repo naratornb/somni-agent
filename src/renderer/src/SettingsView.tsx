@@ -11,7 +11,6 @@ import type {
   Settings,
   SkillsStatus
 } from '../../preload/index'
-import { NAMES as PROVIDER_NAMES } from './ProvidersSetup'
 import { RolesView } from './RolesView'
 import {
   BTN_GHOST_SM,
@@ -21,6 +20,7 @@ import {
   ICON_BTN,
   INPUT,
   LABEL,
+  RUNNER_DISPLAY_NAMES as PROVIDER_NAMES,
   STATUS_CHIP,
   STATUS_CHIP_BASE
 } from './ui'
@@ -31,6 +31,10 @@ import {
 // same reason).
 const RUNNER_NAMES: RunnerName[] = ['claude', 'antigravity', 'gemini', 'codex']
 const DEFAULT_PROVIDER_ORDER: RunnerName[] = ['claude', 'codex', 'gemini', 'antigravity']
+
+// Mirrors runners.ts's supportsReadOnly (§7: codex/gemini have no verified
+// read-only lever, so chat/refine refuse them and fall through the chain).
+const NOT_CHAT_CAPABLE = new Set<RunnerName>(['codex', 'gemini'])
 
 // The full display order: saved order first, then any provider missing from
 // it (a new adapter, or nothing saved yet) appended in the default order.
@@ -415,6 +419,11 @@ export function SettingsForm({
                     ↓
                   </button>
                 </div>
+                {NOT_CHAT_CAPABLE.has(name) && (
+                  <p className="pl-7 text-sm text-on-surface-variant">
+                    tasks only — grooming chat needs Claude Code or Antigravity
+                  </p>
+                )}
                 <div className="flex items-center gap-3 pl-7">
                   <input
                     className={`${INPUT} flex-1 font-mono-code`}

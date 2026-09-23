@@ -1,7 +1,7 @@
 // Shared UI atoms — M10-ui.md §0. Class strings, not components: the design
 // system is Tailwind utilities, and a wrapper component per button would hide
 // the exact strings the mocks are the source of truth for.
-import type { GroomState, Item } from '../../preload/index'
+import type { GroomState, Item, RunnerName } from '../../preload/index'
 
 const DISABLED = 'disabled:opacity-40 disabled:pointer-events-none'
 
@@ -21,6 +21,15 @@ export const TEXTAREA = `${INPUT} w-full p-3 font-mono-code resize-y`
 // One checkbox visual across the app: workflow tick, Keep Running, Nightly Armed.
 export const CHECKBOX =
   'w-4 h-4 rounded border-outline bg-transparent accent-[#6d5ae0] cursor-pointer'
+
+// Display names for the four runners — shared by ProvidersSetup's guided
+// setup and SettingsView's Providers panel (same label set).
+export const RUNNER_DISPLAY_NAMES: Record<RunnerName, string> = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  gemini: 'Gemini CLI',
+  antigravity: 'Antigravity'
+}
 
 export const LABEL =
   'font-mono-label text-mono-label uppercase tracking-wide text-on-surface-variant'

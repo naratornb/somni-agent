@@ -72,11 +72,13 @@ const chatPrompt = (
 ): string =>
   sessionId ? message : `${groomPreamble(roleSlugs, context, settings.methodology)}\n${message}`
 
-// Chat is always read-only (§7). A provider without verified read-only levers
-// is refused, not weakened: fall through the failover chain to one that has
-// them. The single place chat turns a RunnerChoice into a concrete runner —
-// turn.ts and the runner adapters never see 'auto'.
-export function chatRunnerName(settings: Settings): RunnerName {
+// Every read-only Turn is bound by §7: a provider without verified read-only
+// levers is refused, not weakened — fall through the failover chain to one
+// that has them. The single place any read-only call site turns a
+// RunnerChoice into a concrete runner — turn.ts and the runner adapters
+// never see 'auto'. Named for what it guards, not just chat: report.ts's
+// compact summary and repoIpc.ts's field:refine route through it too.
+export function readOnlyRunner(settings: Settings): RunnerName {
   const choice = settings.runner
   const candidates =
     !choice || choice === 'auto'
@@ -96,7 +98,7 @@ export function turnArgs(
   settings: Settings = {},
   context?: string
 ): string[] {
-  const runner = chatRunnerName({ ...settings, runner: profile.runner ?? settings.runner })
+  const runner = readOnlyRunner({ ...settings, runner: profile.runner ?? settings.runner })
   return getRunner(runner, settings).buildArgs(
     chatPrompt(message, sessionId, roleSlugs, settings, context),
     { ...profile, resumeSessionId: sessionId ?? undefined, readOnly: true }
@@ -362,7 +364,7 @@ function runTurn(
     {
       prompt,
       settings, // model/effort default from here — the chat is settings-profiled (§7)
-      runner: chatRunnerName(settings), // resolved concrete + read-only-capable — turn.ts never sees 'auto'
+      runner: readOnlyRunner(settings), // resolved concrete + read-only-capable — turn.ts never sees 'auto'
       cwd: repo,
       resumeSessionId: sessionId ?? undefined,
       readOnly: true,
@@ -447,7 +449,7 @@ async function autoTitle(
   const r = await turn({
     prompt: `${TITLE_PROMPT}\n\n---\n${question}\n\n---\n${reply}`,
     settings,
-    runner: chatRunnerName(settings),
+    runner: readOnlyRunner(settings),
     cwd: repo,
     readOnly: true
   })

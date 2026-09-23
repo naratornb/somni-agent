@@ -16,6 +16,7 @@ import { PLAN_TASK_TITLE, storyPlanPrompt } from './prompts'
 import {
   abandonRun,
   cancelPipeline,
+  DrainMode,
   findOrphanedRuns,
   isRunning,
   getDrainState,
@@ -938,6 +939,38 @@ describe('startDrain', () => {
     cancelPipeline()
     const [state] = await run
     expect(state.status).toBe('Cancelled')
+  })
+
+  // M26 final review: failover.ts's own Paused push (a per-task provider
+  // wait, not a drain-state change — unlike drainLoop's own Running/Idle
+  // pushes, it calls events.onPipeline directly, bypassing the emit() wrapper
+  // that stamps `mode`) must not carry a `mode` key of its own. index.ts's
+  // forwarder defaults `mode` from getDrainState() and only lets an explicit
+  // key in this payload win, so a stray `mode: null` here would wipe the mode
+  // chip/Keep Running mid-drain the same way the bug did. This pins the
+  // executor-side half of that contract; the forwarder itself has no test
+  // seam (Electron main, no harness).
+  it('a failover Paused wait never sends a mode key of its own', async () => {
+    fake({ FAKE_FAIL: '1', FAKE_RATE_LIMIT: '1' })
+    add(docs)
+    const infos: { resumeAt?: string; mode?: DrainMode | null }[] = []
+    let paused = (): void => {}
+    const gotPause = new Promise<void>((resolve) => {
+      paused = () => resolve()
+    })
+    const run = startDrain(repo, base, 1, {
+      ...noEvents,
+      onPipeline: (s, info) => {
+        if (s !== 'Paused') return
+        infos.push(info ?? {})
+        paused()
+      }
+    })
+    await gotPause
+    cancelPipeline()
+    await run
+    expect(infos.length).toBeGreaterThan(0)
+    expect(infos.every((i) => !('mode' in i))).toBe(true)
   })
 
   // M26: providers.ts's markOk always resets a provider's cooldown — there is

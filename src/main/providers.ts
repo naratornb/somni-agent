@@ -27,6 +27,9 @@ export function resetProviders(): void {
 
 export function markRateLimited(name: RunnerName, now = Date.now()): number {
   const h = get(name)
+  // Concurrent attempts on the same provider can both land here for one rate
+  // limit — an already-live cooldown wins rather than doubling the backoff twice.
+  if (h.cooldownUntil && h.cooldownUntil > now) return h.cooldownUntil
   h.cooldownUntil = now + h.nextCooldownMs
   h.nextCooldownMs = Math.min(h.nextCooldownMs * 2, COOLDOWN_MAX_MS)
   return h.cooldownUntil
@@ -67,7 +70,9 @@ export function nextAvailableAt(
 ): number | null {
   const chain = providerChain(settings)
   const candidates =
-    !choice || choice === 'auto' ? chain : ([choice] as RunnerName[]).filter((n) => chain.includes(n))
+    !choice || choice === 'auto'
+      ? chain
+      : ([choice] as RunnerName[]).filter((n) => chain.includes(n))
   const times = candidates
     .filter((n) => !health.get(n)?.parked)
     .map((n) => health.get(n)?.cooldownUntil ?? now)
@@ -77,7 +82,9 @@ export function nextAvailableAt(
 // Per-provider concurrency (spec §2): FIFO waiters; the global pipeline
 // concurrency stays the outer ceiling. No cap configured = never waits.
 export function acquireSlot(name: RunnerName, settings: Settings): Promise<() => void> {
-  const cap = settings.providers?.caps?.[name] ?? Infinity
+  // A hand-edited 0/negative cap must serialize, not hang forever waiting for
+  // a slot that can never open.
+  const cap = Math.max(1, settings.providers?.caps?.[name] ?? Infinity)
   let consumed = false
   const release = (): void => {
     if (consumed) return

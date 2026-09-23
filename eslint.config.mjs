@@ -7,7 +7,8 @@ import eslintPluginReactRefresh from 'eslint-plugin-react-refresh'
 
 export default defineConfig(
   // resources/skills is vendored upstream code (pinned), not ours to lint.
-  { ignores: ['**/node_modules', '**/dist', '**/out', 'resources/skills'] },
+  // .claude holds worktrees and other tool-managed state, also not ours.
+  { ignores: ['**/node_modules', '**/dist', '**/out', 'resources/skills', '.claude'] },
   tseslint.configs.recommended,
   eslintPluginReact.configs.flat.recommended,
   eslintPluginReact.configs.flat['jsx-runtime'],

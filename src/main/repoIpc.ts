@@ -7,6 +7,7 @@ import {
   ChatProposal,
   loadChat,
   newChat,
+  readOnlyRunner,
   sendChat,
   startGroom,
   workUnitTurn
@@ -299,6 +300,7 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
     const r = await turn({
       prompt: `${REFINE_PROMPTS[kind]}\n\n---\n${text}`,
       settings,
+      runner: readOnlyRunner(settings), // §7: never trust a pinned/auto choice unweakened here
       cwd: repo,
       readOnly: true
     })

@@ -1,5 +1,5 @@
 import type { ProviderHealth, RunnerName } from '../../preload/index'
-import { BTN_PRIMARY } from './ui'
+import { BTN_PRIMARY, RUNNER_DISPLAY_NAMES } from './ui'
 
 // Install/login guidance per provider (M26 §3) — pinned by the same sources as
 // runners.ts's adapters (each CLI's own docs); update alongside a new adapter.
@@ -24,14 +24,6 @@ const GUIDES: Record<RunnerName, { install: string; login: string; docs: string 
     login: 'agy login',
     docs: 'https://antigravity.google/docs/cli'
   }
-}
-
-// Exported for reuse by SettingsView's Providers panel (same label set).
-export const NAMES: Record<RunnerName, string> = {
-  claude: 'Claude Code',
-  codex: 'Codex',
-  gemini: 'Gemini CLI',
-  antigravity: 'Antigravity'
 }
 
 // Full-pane guided setup shown in place of the whole app when every provider
@@ -62,7 +54,7 @@ export function ProvidersSetup({
               className="flex flex-col gap-2 rounded-lg border border-border-subtle bg-surface-elevated p-card-padding"
             >
               <div className="flex items-center justify-between">
-                <span className="font-semibold">{NAMES[h.name]}</span>
+                <span className="font-semibold">{RUNNER_DISPLAY_NAMES[h.name]}</span>
                 {h.ok ? (
                   <span className="text-status-completed">{h.version ?? 'ok'}</span>
                 ) : (

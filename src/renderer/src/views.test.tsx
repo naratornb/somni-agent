@@ -713,10 +713,7 @@ function findButton(node: unknown): { props: { onClick?: () => void } } | undefi
 
 // Same idea as findButton, but by aria-label — the Providers panel has four
 // of everything (checkbox, ↑, ↓), so "first button" isn't enough.
-function findByLabel(
-  node: unknown,
-  label: string
-): { props: Record<string, unknown> } | undefined {
+function findByLabel(node: unknown, label: string): { props: Record<string, unknown> } | undefined {
   if (!node || typeof node !== 'object') return undefined
   const el = node as { props?: Record<string, unknown> }
   if (el.props?.['aria-label'] === label) return el as { props: Record<string, unknown> }
@@ -786,6 +783,14 @@ test('SettingsForm renders a Providers section with all four rows and the Auto r
   expect(html).toContain('Gemini CLI')
   expect(html).toContain('Antigravity')
   expect(html).toContain('Auto (failover)')
+})
+
+// M26 final review, fix 3: codex/gemini have no verified read-only lever
+// (§7) — the panel says so on their rows, and only theirs.
+test('SettingsForm notes codex/gemini as tasks-only, not claude', () => {
+  const html = renderToStaticMarkup(<>{SettingsForm(formProps())}</>)
+  const note = 'tasks only — grooming chat needs Claude Code or Antigravity'
+  expect(html.split(note).length - 1).toBe(2) // codex row + gemini row, no more
 })
 
 test('SettingsForm runner select offers Auto (failover) and writes the RunnerChoice value', () => {
@@ -869,7 +874,9 @@ test("SettingsForm's Providers cap input patches providers.caps[name]; empty or 
     })
   )
   const cap3 = findByLabel(tree3, 'gemini cap')
-  ;(cap3?.props.onChange as (e: { target: { value: string } }) => void)?.({ target: { value: '0' } })
+  ;(cap3?.props.onChange as (e: { target: { value: string } }) => void)?.({
+    target: { value: '0' }
+  })
   expect(patched?.providers?.caps).toEqual({})
 
   const tree4 = SettingsForm(
@@ -879,7 +886,9 @@ test("SettingsForm's Providers cap input patches providers.caps[name]; empty or 
     })
   )
   const cap4 = findByLabel(tree4, 'gemini cap')
-  ;(cap4?.props.onChange as (e: { target: { value: string } }) => void)?.({ target: { value: '-3' } })
+  ;(cap4?.props.onChange as (e: { target: { value: string } }) => void)?.({
+    target: { value: '-3' }
+  })
   expect(patched?.providers?.caps).toEqual({})
 })
 
