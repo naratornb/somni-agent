@@ -26,7 +26,8 @@ somni speaks two vocabularies on purpose: **work items** use the industry's Jira
 
 ## Execution engine
 
-- **Runner** — an execution backend (Claude Code, Antigravity) that runs one Subtask as a CLI process.
+- **Runner** — an execution backend (Claude Code, Codex, Gemini CLI, Antigravity) that runs one Subtask as a CLI process.
+- **Provider chain** — the ordered list of enabled Runners that `auto` execution profiles walk at task start; a rate-limited provider cools down alone, and the pipeline pauses only when no provider in the chain can return.
 - **Role** — a reusable persona (name + preamble) prepended to a Subtask's prompt. A Role may pin parts of an Execution Profile.
 - **Execution Profile** — `{runner, model, effort}` deciding who runs a Subtask and with how much brainpower. Resolves Role → repo → global; recorded on every executed Subtask.
 - **Pipeline** — one bounded-concurrency execution pass over the in-progress Stories: sequential within a Story, parallel across Stories.

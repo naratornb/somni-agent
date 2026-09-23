@@ -1,18 +1,18 @@
 # somni
 
-A macOS desktop app that puts your AI coding subscription (Claude Max, Google/Antigravity) to work while you sleep.
+A macOS desktop app that puts your AI coding subscription(s) to work while you sleep.
 
-somni orchestrates agent CLIs — **Claude Code** (`claude`) or **Google Antigravity** (`agy`, planned) — to run coding workflows in parallel, unattended, overnight. You define workflows of ordered tasks (each with a role/persona like *Senior Developer* or *Senior Tester*), tick the ones you want run, and hit **Run Pipeline**. Each workflow executes in its own git worktree; in the morning you review branches and summary reports.
+somni orchestrates agent CLIs — **Claude Code** (`claude`), **Codex** (`codex`), **Gemini CLI** (`gemini`), and **Google Antigravity** (`agy`) — to run coding workflows in parallel, unattended, overnight. You define workflows of ordered tasks (each with a role/persona like *Senior Developer* or *Senior Tester*), tick the ones you want run, and hit **Run Pipeline**. Each workflow executes in its own git worktree; in the morning you review branches and summary reports.
 
 ## How it works
 
 - **Workflows** — ordered tasks sharing one workspace; each task sees the previous task's output (files, git state).
 - **Roles** — reusable persona preambles prepended to task prompts; a role can pin its own model/effort.
-- **Runners** — pick Claude Code or Antigravity per execution profile (runner + model + effort), configurable globally, per repo, or per role.
+- **Runners** — pick Claude Code, Codex, Gemini CLI, or Antigravity per execution profile (runner + model + effort), configurable globally, per repo, or per role — or pick **Auto** to walk your provider chain instead of pinning one, failing over to the next enabled runner on a rate limit or auth failure.
 - **Draft with AI** — a chat in the workflow editor: type a rough idea and the assistant (reading your repo, read-only) refines it into a technical brief and proposes the task list; nothing is written until you hit Apply.
 - **Pipeline** — checkbox-selected workflows run sequentially-within, parallel-across, under a configurable concurrency cap.
 - **Isolation** — the app creates a dedicated worktree + `somni/<slug>-<date>` branch per workflow; merging back is up to you.
-- **Reliability** — one retry then halt-workflow on failure; rate limits pause the whole pipeline with backoff; crash-safe resume from persisted run state.
+- **Reliability** — one retry then halt-workflow on failure (same provider, never switching mid-retry); a rate limit or auth failure fails that task over to the next provider in the chain (Auto) or waits out its own cooldown (a pinned runner) — the pipeline only shows Paused when nothing in the chain can return, other tasks keep running; crash-safe resume from persisted run state.
 - **Reports** — per-workflow summaries; style configurable (Minimal / Compact / Full).
 - **Your data** — everything somni knows about a repo lives in that repo's `.somni/` folder as plain JSON/Markdown: workflow definitions, roles, run state, reports. Commit it for cross-machine continuity; raw logs are auto-gitignored.
 
@@ -21,7 +21,7 @@ somni orchestrates agent CLIs — **Claude Code** (`claude`) or **Google Antigra
 - **macOS** (primary target; the pipeline relies on `powerSaveBlocker` and is tested on macOS only).
 - **Node.js 20+** and npm — to run from source or build the app.
 - **git** — worktree isolation requires it; every target repo must be a git repository.
-- **Claude Code CLI** — [`claude`](https://docs.anthropic.com/en/docs/claude-code) installed and on your `PATH`, logged in (a Claude Max plan is what makes overnight fan-out affordable). Verify with `claude -p "hi"`.
+- **One agent CLI, at minimum** — any one of [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`), Codex (`codex`), Gemini CLI (`gemini`), or Google Antigravity (`agy`), installed, on your `PATH`, and logged in. A Claude Max plan is what makes overnight fan-out especially affordable, but any provider's subscription works, and more than one lets Auto fail over between them. somni probes all four on launch; finding none opens a guided setup screen (install + login command per provider) in place of the app's normal views, with Settings still reachable so a custom binary path fixes it without reinstalling. Verify manually with e.g. `claude -p "hi"`.
 - A **target repo** you want worked on (any git repo; somni stores its state inside it under `.somni/`).
 
 ## Run locally (development)
@@ -58,10 +58,10 @@ Open the `.dmg` and drag somni to Applications. The build is unsigned/un-notariz
 2. **Create roles** (Roles view). A role is a name + persona preamble prepended to every task that uses it, e.g. *Senior Developer*: "You are a pragmatic senior developer…". A role can optionally pin a model and effort level. somni seeds seven default SDLC roles (architect, developer, tester, reviewer, tech-writer, devops, security) the first time it opens a repo — edit or delete them freely; they never come back uninvited.
 3. **Create a workflow** (Workflows view). Ordered tasks, each with a title, a prompt (write it as a goal, not a diff — tasks may be retried or resumed), and a role. A good shape: Design → Implement → Test → Revise.
    - Or click **Draft with AI**: describe the goal in the side chat; the assistant inspects your repo read-only, asks a couple of questions, and proposes the task list. **Apply** writes it to the workflow; Dismiss discards. (Requires the workflow to be saved once first.)
-4. **Select and run** (Pipeline view). Tick the workflows to include, hit **▶ Run pipeline**. Each workflow gets a fresh worktree and `somni/<slug>-<date>` branch; tasks stream live — click a task chip to tail its output. Rate limits show as ⏸ Paused with the retry time; Cancel stops everything.
+4. **Select and run** (Pipeline view). Tick the workflows to include, hit **▶ Run pipeline**. Each workflow gets a fresh worktree and `somni/<slug>-<date>` branch; tasks stream live — click a task chip to tail its output. A task whose provider is rate-limited or auth-failed shows ⏸ Paused with the retry time on its own chip — other tasks with a usable provider keep running; Cancel stops everything.
 5. **Leave it running.** The window can be closed to the tray; the Mac is kept awake via `powerSaveBlocker` — but lid-closed sleep still needs your energy settings or `caffeinate`. If the app quits mid-run, next launch offers **Resume / Abandon** for the orphaned run.
 6. **Morning review** (Runs & Reports view). Per-run status, per-task durations/costs, and the report (`.somni/runs/<id>/report.md`). Check out the `somni/…` branch, review, merge what you like, then **Clean up worktree** — somni never force-deletes a dirty worktree or unmerged branch.
-7. **Tune it** (Settings view): max concurrency (keep it modest, 2–3 — overnight fan-out shares your plan's usage windows), task timeout, report style, default model/effort. Per-repo overrides go in `.somni/config.json`; per-role overrides in the role editor.
+7. **Tune it** (Settings view): max concurrency (keep it modest, 2–3 — overnight fan-out shares your plan's usage windows), task timeout, report style, default execution profile (pick `Auto` to walk the provider chain instead of pinning one runner). The **Providers panel** shows each runner's detected status/version, lets you enable/disable it and reorder the chain with ↑/↓, and set a per-provider default model/effort and a concurrency cap. Per-repo overrides go in `.somni/config.json`; per-role overrides in the role editor.
 
 ### Report styles
 
@@ -77,7 +77,7 @@ Electron + TypeScript + React + Vite — no database. Details in [design/archite
 
 ## Status
 
-M7 done — all phased milestones M0–M7 are complete: workflows, roles, pipeline with unattended reliability, reports & settings, run history, Draft-with-AI chat, and both runners (Claude Code `claude` and Antigravity `agy`) behind the Runner adapter, selectable per role / repo / globally. Roadmap: [architecture.md §9](design/architecture.md).
+M7 done — all phased milestones M0–M7 are complete: workflows, roles, pipeline with unattended reliability, reports & settings, run history, Draft-with-AI chat, and (as of M26) four runners — Claude Code `claude`, Codex `codex`, Gemini CLI `gemini`, Antigravity `agy` — behind the Runner adapter and a per-provider failover chain, selectable per role / repo / globally. Roadmap: [architecture.md §9](design/architecture.md).
 
 ## Note on unattended runs
 
