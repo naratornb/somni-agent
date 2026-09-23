@@ -4,7 +4,14 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { promisify } from 'util'
 import { describe, it, expect, vi } from 'vitest'
-import { antigravityRunner, claudeRunner, codexRunner, getRunner, runnerStatus } from './runners'
+import {
+  antigravityRunner,
+  claudeRunner,
+  codexRunner,
+  geminiRunner,
+  getRunner,
+  runnerStatus
+} from './runners'
 
 // Wrap the real execFile so listModels tests can assert *how* it was called
 // (the timeout ceiling) without losing the real spawn the fixture tests need.
@@ -345,5 +352,47 @@ describe('codexRunner', () => {
     expect(getRunner('codex', {}).binary).toBe('codex')
     expect(getRunner('codex', { codexBinary: '/x/codex' }).binary).toBe('/x/codex')
     expect(getRunner('auto', {}).name).toBe('claude') // safety fallback, never the real path
+  })
+})
+
+describe('geminiRunner (UNPINNED — docs-based)', () => {
+  it('builds autonomous task argv', () => {
+    expect(
+      geminiRunner.buildArgs('do it', { autonomous: true, model: 'gemini-3.1-pro', effort: 'high' })
+    ).toEqual([
+      '-p',
+      'do it',
+      '--output-format',
+      'stream-json',
+      '--approval-mode',
+      'yolo',
+      '--model',
+      'gemini-3.1-pro'
+    ])
+    // effort has no gemini-cli lever — dropped, like agy's missing cost
+  })
+
+  it('never claims read-only support', () => {
+    expect(geminiRunner.supportsReadOnly).toBe(false)
+  })
+
+  it('parses session, text and result events', () => {
+    expect(geminiRunner.parseLine('{"type":"init","session_id":"s1"}')).toEqual({
+      kind: 'session',
+      sessionId: 's1'
+    })
+    expect(geminiRunner.parseLine('{"type":"message","role":"assistant","content":"hi"}')).toEqual({
+      kind: 'text',
+      text: 'hi'
+    })
+    expect(
+      geminiRunner.parseLine('{"type":"result","status":"success","response":"done"}')
+    ).toEqual({ kind: 'result', ok: true, detail: 'done' })
+    expect(geminiRunner.parseLine('noise')).toBeNull()
+  })
+
+  it('classifies Google-shaped rate limits', () => {
+    expect(geminiRunner.isRateLimit('RESOURCE_EXHAUSTED: quota exceeded')).toBe(true)
+    expect(geminiRunner.isRateLimit('plain failure')).toBe(false)
   })
 })

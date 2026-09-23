@@ -250,10 +250,61 @@ export const codexRunner: Runner = {
   listModels: () => Promise.resolve(['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.3'])
 }
 
+// Gemini CLI (`gemini`). UNPINNED: written from the gemini-cli docs (docs/cli/
+// cli-reference.md, headless.md, session-management.md, 2026-09) — the CLI is
+// not installed on the dev machine, so no live round trip has verified these
+// shapes. The docs confirm the flags below (and that `--yolo` is deprecated
+// in favor of `--approval-mode yolo`); they list stream-json event *types*
+// (init/message/tool_use/tool_result/error/result) but publish no field-level
+// JSON example, so parseLine's key names (session_id, role/content,
+// status/response) are the plan's best-known guess, unverified either way.
+// First machine with `gemini` on PATH: pin like agy/codex and update this
+// comment + architecture.md §5. supportsReadOnly stays false until a real
+// read-only lever is verified — chat refuses gemini rather than trusting an
+// advisory mode (§7).
+export const geminiRunner: Runner = {
+  name: 'gemini',
+  binary: 'gemini',
+  binarySetting: 'geminiBinary',
+  supportsReadOnly: false,
+  buildArgs: (prompt, o) => [
+    '-p',
+    prompt,
+    '--output-format',
+    'stream-json',
+    ...(o.autonomous ? ['--approval-mode', 'yolo'] : []),
+    ...(o.resumeSessionId ? ['--resume', o.resumeSessionId] : []),
+    ...(o.model ? ['--model', o.model] : [])
+  ],
+  parseLine: (line) => {
+    const msg = json(line)
+    if (!msg) return null
+    if (msg.type === 'init' && typeof msg.session_id === 'string') {
+      return { kind: 'session', sessionId: msg.session_id }
+    }
+    if (msg.type === 'message' && msg.role === 'assistant' && typeof msg.content === 'string') {
+      return { kind: 'text', text: msg.content }
+    }
+    if (msg.type === 'result') {
+      return {
+        kind: 'result',
+        ok: msg.status === 'success',
+        detail: typeof msg.response === 'string' ? msg.response : undefined
+      }
+    }
+    return null
+  },
+  isRateLimit: (text) => /rate.?limit|quota|resource.?exhausted|too many requests|429/i.test(text),
+  isAuthError: (text) =>
+    /not (?:logged in|authenticated)|gemini login|401|unauthorized/i.test(text),
+  listModels: () => Promise.resolve(['gemini-3.1-pro', 'gemini-3-flash'])
+}
+
 const RUNNERS: Record<RunnerName, Runner> = {
   claude: claudeRunner,
   antigravity: antigravityRunner,
-  codex: codexRunner
+  codex: codexRunner,
+  gemini: geminiRunner
 }
 
 // The one place a runner name maps to an adapter. An unknown name (hand-edited

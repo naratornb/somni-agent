@@ -12,7 +12,7 @@ import type {
   RepoData,
   ResolvedSettings,
   Role,
-  RunnerName,
+  RunnerChoice,
   Settings
 } from '../main/store'
 import type { RunnerHealth } from '../main/runners'
@@ -42,6 +42,7 @@ export type {
   ReportStyle,
   ResolvedSettings,
   Role,
+  RunnerChoice,
   RunnerName,
   Settings,
   Task
@@ -108,7 +109,8 @@ const somni = {
   ): Promise<{ ok: boolean; text?: string; error?: string }> =>
     ipcRenderer.invoke('field:refine', repo, kind, text),
   // `runner` undefined = the role editor's inherit case; main resolves it.
-  listModels: (runner?: RunnerName): Promise<string[]> => ipcRenderer.invoke('models:list', runner),
+  listModels: (runner?: RunnerChoice): Promise<string[]> =>
+    ipcRenderer.invoke('models:list', runner),
   // Home quick-start chips (M23): [] means "use the static fallback".
   suggestions: (repo: string): Promise<string[]> => ipcRenderer.invoke('repo:suggestions', repo),
   // Health of the configured Runner CLI (M22) — probed fresh on each ask.
