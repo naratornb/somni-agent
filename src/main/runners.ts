@@ -5,7 +5,7 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import type { StreamEvent } from './stream'
-import type { Effort, RunnerName, Settings } from './store'
+import type { Effort, RunnerChoice, RunnerName, Settings } from './store'
 
 export type RunnerOpts = {
   model?: string
@@ -18,13 +18,19 @@ export type RunnerOpts = {
 export type Runner = {
   name: RunnerName
   binary: string // default binary name; overridden by the settings path below
-  binarySetting: 'claudeBinary' | 'antigravityBinary'
+  binarySetting: 'claudeBinary' | 'antigravityBinary' | 'geminiBinary' | 'codexBinary'
   buildArgs: (prompt: string, opts: RunnerOpts) => string[]
   parseLine: (line: string) => StreamEvent | null
   isRateLimit: (text: string) => boolean
   // Model ids to suggest for this runner. `binary` is a param (not `this.binary`)
   // so callers can point it at an overridden path — or a test fixture.
   listModels: (binary: string) => Promise<string[]>
+  // Whether the CLI has verified read-only levers for the §7 chat invariant.
+  // false ⇒ chat refuses this provider (Task 6) rather than weakening.
+  supportsReadOnly: boolean
+  // Auth failures are not rate limits: they never clear on their own, so the
+  // provider is parked until re-login instead of entering a cooldown (spec §3).
+  isAuthError?: (text: string) => boolean
 }
 
 // Non-JSON noise on stdout is ignored rather than treated as an error.
@@ -40,6 +46,7 @@ export const claudeRunner: Runner = {
   name: 'claude',
   binary: 'claude',
   binarySetting: 'claudeBinary',
+  supportsReadOnly: true,
   buildArgs: (prompt, o) => [
     '-p',
     prompt,
@@ -98,6 +105,7 @@ export const antigravityRunner: Runner = {
   name: 'antigravity',
   binary: 'agy',
   binarySetting: 'antigravityBinary',
+  supportsReadOnly: true,
   buildArgs: (prompt, o) => [
     '-p',
     prompt,
@@ -183,15 +191,76 @@ const AGY_FALLBACK_MODELS = [
   'claude-sonnet-4-6'
 ]
 
+// Codex (`codex exec`). Flags and stdout shapes pinned live against
+// codex-cli 0.154.0: `--json` emits thread.started / item.completed /
+// turn.completed JSONL; resume is `codex exec resume <thread_id>`.
+export const codexRunner: Runner = {
+  name: 'codex',
+  binary: 'codex',
+  binarySetting: 'codexBinary',
+  // Live-verified 2026-09-23: `--sandbox read-only` gates shell commands but
+  // NOT codex's own file-write tool — a direct "create this file" instruction
+  // wrote it anyway. Not a real read-only lever (§7); chat must refuse codex
+  // (Task 6) until a verified one exists.
+  supportsReadOnly: false,
+  buildArgs: (prompt, o) => [
+    'exec',
+    ...(o.resumeSessionId ? ['resume', o.resumeSessionId] : []),
+    '--json',
+    // Chat runs in the repo root but tasks run in worktrees whose gitdir
+    // pointer codex may not recognise; the executor owns isolation, not codex.
+    '--skip-git-repo-check',
+    ...(o.readOnly ? ['--sandbox', 'read-only'] : []),
+    ...(o.autonomous ? ['--dangerously-bypass-approvals-and-sandbox'] : []),
+    ...(o.model ? ['--model', o.model] : []),
+    ...(o.effort ? ['-c', `model_reasoning_effort="${o.effort}"`] : []),
+    prompt
+  ],
+  parseLine: (line) => {
+    const msg = json(line)
+    if (!msg) return null
+    if (msg.type === 'thread.started' && typeof msg.thread_id === 'string') {
+      return { kind: 'session', sessionId: msg.thread_id }
+    }
+    if (msg.type === 'item.completed') {
+      const item = msg.item as { type?: string; text?: string } | undefined
+      return item?.type === 'agent_message' && item.text ? { kind: 'text', text: item.text } : null
+    }
+    if (msg.type === 'turn.completed') {
+      const u = (msg.usage ?? {}) as Record<string, unknown>
+      const n = (k: string): number => (typeof u[k] === 'number' ? (u[k] as number) : 0)
+      // Codex reports tokens, no dollar cost (agy precedent) and no duration.
+      return {
+        kind: 'result',
+        ok: true,
+        promptTokens: n('input_tokens') + n('cached_input_tokens') || undefined,
+        completionTokens: n('output_tokens') || undefined
+      }
+    }
+    if (msg.type === 'turn.failed') {
+      const err = (msg.error as { message?: string } | undefined)?.message
+      return { kind: 'result', ok: false, detail: err }
+    }
+    return null
+  },
+  isRateLimit: (text) => /rate.?limit|usage limit|too many requests|429/i.test(text),
+  isAuthError: (text) => /not logged in|codex login|401|unauthorized/i.test(text),
+  // No models subcommand surfaced by `codex --help`; static aliases, the
+  // AGY_FALLBACK_MODELS precedent — let it drift rather than sync it.
+  listModels: () => Promise.resolve(['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.3'])
+}
+
 const RUNNERS: Record<RunnerName, Runner> = {
   claude: claudeRunner,
-  antigravity: antigravityRunner
+  antigravity: antigravityRunner,
+  codex: codexRunner
 }
 
 // The one place a runner name maps to an adapter. An unknown name (hand-edited
-// config) falls back to claude rather than failing the run.
-export function getRunner(name: RunnerName = 'claude', settings: Settings = {}): Runner {
-  const runner = RUNNERS[name] ?? claudeRunner
+// config) falls back to claude rather than failing the run. 'auto' reaching
+// here is a fallback path only — the executor and chat resolve it first.
+export function getRunner(name: RunnerChoice = 'claude', settings: Settings = {}): Runner {
+  const runner = (name !== 'auto' && RUNNERS[name]) || claudeRunner
   const path = settings[runner.binarySetting]
   return path ? { ...runner, binary: path } : runner
 }

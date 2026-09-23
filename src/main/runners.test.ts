@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { promisify } from 'util'
 import { describe, it, expect, vi } from 'vitest'
-import { antigravityRunner, claudeRunner, getRunner, runnerStatus } from './runners'
+import { antigravityRunner, claudeRunner, codexRunner, getRunner, runnerStatus } from './runners'
 
 // Wrap the real execFile so listModels tests can assert *how* it was called
 // (the timeout ceiling) without losing the real spawn the fixture tests need.
@@ -270,5 +270,80 @@ describe('runnerStatus', () => {
     await expect(runnerStatus({ claudeBinary: bin })).resolves.toMatchObject({ ok: false })
     const fixed = fixture('echo 1.0.0')
     await expect(runnerStatus({ claudeBinary: fixed })).resolves.toMatchObject({ ok: true })
+  })
+})
+
+describe('codexRunner', () => {
+  it('builds autonomous task argv with model, effort and resume', () => {
+    expect(
+      codexRunner.buildArgs('do it', {
+        autonomous: true,
+        model: 'gpt-5.3-codex',
+        effort: 'high',
+        resumeSessionId: 'abc'
+      })
+    ).toEqual([
+      'exec',
+      'resume',
+      'abc',
+      '--json',
+      '--skip-git-repo-check',
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--model',
+      'gpt-5.3-codex',
+      '-c',
+      'model_reasoning_effort="high"',
+      'do it'
+    ])
+  })
+
+  it('builds read-only chat argv with the read-only sandbox', () => {
+    expect(codexRunner.buildArgs('look', { readOnly: true })).toEqual([
+      'exec',
+      '--json',
+      '--skip-git-repo-check',
+      '--sandbox',
+      'read-only',
+      'look'
+    ])
+  })
+
+  it('parses the live-captured JSONL shapes', () => {
+    expect(
+      codexRunner.parseLine(
+        '{"type":"thread.started","thread_id":"01a0ccee-377f-7be1-a4a6-1bdb00081527"}'
+      )
+    ).toEqual({ kind: 'session', sessionId: '01a0ccee-377f-7be1-a4a6-1bdb00081527' })
+    expect(codexRunner.parseLine('{"type":"turn.started"}')).toBeNull()
+    expect(
+      codexRunner.parseLine(
+        '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"pong"}}'
+      )
+    ).toEqual({ kind: 'text', text: 'pong' })
+    expect(
+      codexRunner.parseLine(
+        '{"type":"turn.completed","usage":{"input_tokens":19508,"cached_input_tokens":11008,"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0}}'
+      )
+    ).toEqual({ kind: 'result', ok: true, promptTokens: 30516, completionTokens: 5 })
+    expect(codexRunner.parseLine('{"type":"turn.failed","error":{"message":"boom"}}')).toEqual({
+      kind: 'result',
+      ok: false,
+      detail: 'boom'
+    })
+    expect(codexRunner.parseLine('not json')).toBeNull()
+  })
+
+  it('classifies rate limits and auth errors', () => {
+    expect(codexRunner.isRateLimit('429 Too Many Requests')).toBe(true)
+    expect(codexRunner.isRateLimit("You've hit your usage limit")).toBe(true)
+    expect(codexRunner.isRateLimit('some other error')).toBe(false)
+    expect(codexRunner.isAuthError?.('Not logged in. Run codex login')).toBe(true)
+    expect(codexRunner.isAuthError?.('429')).toBe(false)
+  })
+
+  it('getRunner resolves codex and its binary override', () => {
+    expect(getRunner('codex', {}).binary).toBe('codex')
+    expect(getRunner('codex', { codexBinary: '/x/codex' }).binary).toBe('/x/codex')
+    expect(getRunner('auto', {}).name).toBe('claude') // safety fallback, never the real path
   })
 })
