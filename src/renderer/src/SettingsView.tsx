@@ -187,9 +187,12 @@ export function SettingsForm({
     })
   }
 
+  // A cap of 0 queues a provider's tasks forever (acquireSlot in providers.ts
+  // never grants a slot below 1) — treat anything below 1, same as empty, as
+  // "no cap saved" rather than let it reach settings and hang the provider.
   const patchCap = (name: RunnerName, cap: number | undefined): void => {
     const caps = { ...s.providers?.caps }
-    if (cap === undefined) delete caps[name]
+    if (cap === undefined || Number.isNaN(cap) || cap < 1) delete caps[name]
     else caps[name] = cap
     patchProviders({ caps })
   }

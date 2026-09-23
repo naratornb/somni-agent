@@ -837,7 +837,7 @@ test("SettingsForm's Providers default model/effort inputs patch providers.defau
   expect(patched?.providers?.defaults?.gemini).toEqual({ effort: 'high' })
 })
 
-test("SettingsForm's Providers cap input patches providers.caps[name], empty clears", () => {
+test("SettingsForm's Providers cap input patches providers.caps[name]; empty or below-1 clears", () => {
   let patched: Partial<Settings> | undefined
   const tree = SettingsForm(
     formProps({
@@ -858,6 +858,28 @@ test("SettingsForm's Providers cap input patches providers.caps[name], empty cle
   )
   const cap2 = findByLabel(tree2, 'gemini cap')
   ;(cap2?.props.onChange as (e: { target: { value: string } }) => void)?.({ target: { value: '' } })
+  expect(patched?.providers?.caps).toEqual({})
+
+  // A typed 0 (or negative) also clears — acquireSlot never grants a slot
+  // below 1, so a saved 0 would queue that provider's tasks forever.
+  const tree3 = SettingsForm(
+    formProps({
+      s: { ...baseSettings, providers: { caps: { gemini: 5 } } },
+      patch: (p) => (patched = p)
+    })
+  )
+  const cap3 = findByLabel(tree3, 'gemini cap')
+  ;(cap3?.props.onChange as (e: { target: { value: string } }) => void)?.({ target: { value: '0' } })
+  expect(patched?.providers?.caps).toEqual({})
+
+  const tree4 = SettingsForm(
+    formProps({
+      s: { ...baseSettings, providers: { caps: { gemini: 5 } } },
+      patch: (p) => (patched = p)
+    })
+  )
+  const cap4 = findByLabel(tree4, 'gemini cap')
+  ;(cap4?.props.onChange as (e: { target: { value: string } }) => void)?.({ target: { value: '-3' } })
   expect(patched?.providers?.caps).toEqual({})
 })
 
