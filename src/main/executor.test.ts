@@ -31,12 +31,14 @@ import {
   loadBacklog,
   loadItems,
   readyBlocker,
+  RunnerName,
   saveBacklog,
   saveItem,
   saveRole,
   setItemStatus,
   Task
 } from './store'
+import { isAvailable, markAuthFailed, resetProviders } from './providers'
 
 // A fake `claude` on PATH: emits a valid stream-json conversation and drops a
 // file in its cwd (proving it ran inside the worktree). Behaviours via env:
@@ -108,6 +110,32 @@ touch task-ran-here
 printf '%s\n' '{"event":"result","result":{"status":"SUCCESS","response":"\`\`\`somni-verdict\\n{\\"verdict\\": \\"green\\", \\"findings\\": \\"\\"}\\n\`\`\`","duration_seconds":0.005}}'
 `
 
+// A fake `codex` for the M26 failover tests: codex-cli's thread.started /
+// item.completed / turn.completed shape (runners.ts). FAKE_AUTH_FAIL emits an
+// auth-shaped turn.failed instead (codexRunner.isAuthError's wording). The
+// agent_message text carries a green somni-verdict block too — a failed-over
+// closing Review must find one just like claude's, or M16's review loop reads
+// it as red/unknown and fails the run for an unrelated reason.
+const FAKE_CODEX = `#!/bin/sh
+if [ -n "$FAKE_AUTH_FAIL" ]; then
+  echo '{"type":"turn.failed","error":{"message":"401 unauthorized: codex login required"}}'
+  exit 1
+fi
+echo '{"type":"thread.started","thread_id":"codex-s1"}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"did work\\n\`\`\`somni-verdict\\n{\\"verdict\\": \\"green\\", \\"findings\\": \\"\\"}\\n\`\`\`"}}'
+touch task-ran-here
+echo '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5}}'
+`
+
+// A fake `gemini` — geminiRunner's init/message/result shape — used as the
+// next-in-chain success behind a parked codex (auth-failover-under-auto test).
+const FAKE_GEMINI = `#!/bin/sh
+echo '{"type":"init","session_id":"gem-s1"}'
+printf '%s\n' '{"type":"message","role":"assistant","content":"did work\\n\`\`\`somni-verdict\\n{\\"verdict\\": \\"green\\", \\"findings\\": \\"\\"}\\n\`\`\`"}'
+touch task-ran-here
+echo '{"type":"result","status":"success"}'
+`
+
 let repo: string
 let feature: string
 let docs: string
@@ -125,6 +153,7 @@ function fake(vars: Record<string, string>): void {
 }
 
 beforeEach(() => {
+  resetProviders() // per-provider health is module-global (M26) — never leak between tests
   fakeEnv = []
   root = mkdtempSync(join(tmpdir(), 'somni-exec-'))
   repo = join(root, 'repo')
@@ -136,6 +165,10 @@ beforeEach(() => {
   chmodSync(join(bin, 'claude'), 0o755)
   writeFileSync(join(bin, 'agy'), FAKE_AGY)
   chmodSync(join(bin, 'agy'), 0o755)
+  writeFileSync(join(bin, 'codex'), FAKE_CODEX)
+  chmodSync(join(bin, 'codex'), 0o755)
+  writeFileSync(join(bin, 'gemini'), FAKE_GEMINI)
+  chmodSync(join(bin, 'gemini'), 0o755)
   savedPath = process.env.PATH!
   process.env.PATH = `${bin}:${savedPath}`
   const g = (...args: string[]): void => {
@@ -166,6 +199,15 @@ const add = (...ids: string[]): void => {
 }
 const statusOnDisk = (id: string): string | undefined =>
   loadItems(repo).find((i) => i.id === id)?.status
+
+// A clock that runs `scale`× real time (RunOpts.now, M26): providers.ts's
+// cooldowns are real minutes, not configurable, so a wait-then-resume test
+// fast-forwards through them without fake timers — real elapsed ms just get
+// multiplied, so a 5-minute cooldown resolves in a few tens of real ms.
+const fastClock = (scale: number): (() => Date) => {
+  const start = Date.now()
+  return () => new Date(start + (Date.now() - start) * scale)
+}
 
 afterEach(() => {
   process.env.PATH = savedPath
@@ -251,7 +293,7 @@ describe('runStory', () => {
     expect(state.tasks[0].error).toBe('claude: command not found')
   })
 
-  it('pauses on a rate limit and retries without consuming the retry', async () => {
+  it('waits out its own cooldown on a rate limit and resumes on the same (pinned) provider', async () => {
     fake({ FAKE_COUNT: join(root, 'n'), FAKE_FAIL_TIMES: '2', FAKE_RATE_LIMIT: '1' })
     const statuses: string[] = []
     const state = await runStory(
@@ -259,11 +301,12 @@ describe('runStory', () => {
       docs,
       base,
       { ...noEvents, onPipeline: (s) => statuses.push(s) },
-      { backoffMs: 10 }
+      { now: fastClock(20_000) } // 5min/10min cooldowns resolve in tens of ms
     )
     // two rate-limited attempts, neither counted as a failure → third succeeds
     expect(state.status).toBe('Completed')
     expect(state.tasks[0].attempts).toBe(3)
+    expect(state.tasks[0].runner).toBe('claude') // pinned — waited, never switched
     expect(statuses.filter((s) => s === 'Paused')).toHaveLength(2)
   })
 })
@@ -289,7 +332,7 @@ describe('antigravity runner end-to-end', () => {
     ).toContain('did work')
   })
 
-  it('pauses the pipeline on an agy rate-limit instead of burning the retry', async () => {
+  it('waits out an agy rate-limit on its own cooldown instead of burning the retry', async () => {
     saveRole(repo, {
       slug: 'agy-dev',
       name: 'AgyDev',
@@ -306,10 +349,11 @@ describe('antigravity runner end-to-end', () => {
       agy,
       base,
       { ...noEvents, onPipeline: (s) => statuses.push(s) },
-      { backoffMs: 10 }
+      { now: fastClock(20_000) }
     )
     expect(state.status).toBe('Completed')
     expect(state.tasks[0].attempts).toBe(2) // rate-limited attempt didn't count as a failure
+    expect(state.tasks[0].runner).toBe('antigravity') // pinned — waited, never switched
     expect(statuses.filter((s) => s === 'Paused')).toHaveLength(1)
   })
 
@@ -328,6 +372,104 @@ describe('antigravity runner end-to-end', () => {
     expect(state.status).toBe('Completed')
     expect(state.tasks[0].attempts).toBe(2)
     expect(state.tasks[0].runner).toBe('antigravity')
+  })
+})
+
+describe('failover (M26)', () => {
+  it('auto fails over to the next provider on a rate limit, no retry burned', async () => {
+    fake({ FAKE_FAIL: '1', FAKE_RATE_LIMIT: '1' }) // claude always rate-limits, codex always succeeds
+    // Global runner: 'auto' so both the subtask (via role fallback) and the
+    // closing Review aux task (which only ever reads global settings) fail
+    // over — a Review pinned to claude would otherwise wait out its cooldown.
+    const settings = {
+      runner: 'auto' as const,
+      providers: { defaults: { codex: { model: 'gpt-5.3-codex', effort: 'high' as const } } }
+    }
+    const state = await runStory(repo, docs, base, noEvents, { settings })
+    expect(state.status).toBe('Completed')
+    expect(state.tasks[0].runner).toBe('codex') // failed over — and never persisted 'auto'
+    expect(state.tasks[0].model).toBe('gpt-5.3-codex')
+    expect(state.tasks[0].effort).toBe('high')
+    expect(state.tasks[0].attempts).toBe(2) // claude + codex — neither burned a failure retry
+    expect(existsSync(join(state.worktree, 'task-ran-here'))).toBe(true)
+    const onDisk = JSON.parse(
+      readFileSync(join(repo, '.somni/runs', state.runId, 'run.json'), 'utf8')
+    )
+    expect(onDisk.tasks[0].runner).toBe('codex') // run.json never records 'auto'
+  })
+
+  it('a generic (non-rate-limit) failure retries on the same provider even under auto', async () => {
+    saveRole(repo, { slug: 'auto-dev', name: 'AutoDev', preamble: 'You are dev.', runner: 'auto' })
+    const s = story('AutoFlow', [
+      { title: 'Write docs', prompt: 'write docs', role: 'auto-dev', selected: true }
+    ]).id
+    fake({ FAKE_COUNT: join(root, 'n'), FAKE_FAIL_TIMES: '1' }) // claude fails once (not rate-limited), then succeeds
+    const state = await runStory(repo, s, base, noEvents)
+    expect(state.status).toBe('Completed')
+    expect(state.tasks[0].attempts).toBe(2)
+    expect(state.tasks[0].runner).toBe('claude') // retried on claude — never failed over to codex
+  })
+
+  it('fails fast when every provider in the chain is parked', async () => {
+    markAuthFailed('claude')
+    markAuthFailed('codex')
+    markAuthFailed('gemini')
+    markAuthFailed('antigravity')
+    const state = await runStory(repo, docs, base, noEvents)
+    expect(state.status).toBe('Failed')
+    expect(state.tasks[0].status).toBe('Failed')
+    expect(state.tasks[0].error).toBe('no provider available')
+    expect(state.tasks[0].attempts).toBe(0) // never even spawned a turn
+    expect(existsSync(join(state.worktree, 'task-ran-here'))).toBe(false)
+  })
+
+  it('an auth-shaped failure parks a pinned provider and fails the task immediately (never retried)', async () => {
+    saveRole(repo, {
+      slug: 'codex-dev',
+      name: 'CodexDev',
+      preamble: 'You are dev.',
+      runner: 'codex'
+    })
+    const s = story('CodexFlow', [
+      { title: 'Write docs', prompt: 'write docs', role: 'codex-dev', selected: true }
+    ]).id
+    fake({ FAKE_AUTH_FAIL: '1' })
+    const state = await runStory(repo, s, base, noEvents)
+    expect(state.status).toBe('Failed')
+    expect(state.tasks[0].status).toBe('Failed')
+    expect(state.tasks[0].attempts).toBe(1) // parked — never retried on the same, dead provider
+    expect(isAvailable('codex', {}, Date.now())).toBe(false) // parked in providers.ts too
+  })
+
+  it('an auth-shaped failure fails over to the next provider under auto', async () => {
+    fake({ FAKE_AUTH_FAIL: '1' }) // codex always auth-fails; gemini always succeeds
+    const settings = {
+      runner: 'auto' as const,
+      providers: {
+        order: ['codex', 'gemini'] as RunnerName[],
+        disabled: ['claude', 'antigravity'] as RunnerName[]
+      }
+    }
+    const state = await runStory(repo, docs, base, noEvents, { settings })
+    expect(state.status).toBe('Completed')
+    expect(state.tasks[0].runner).toBe('gemini') // failed over past the parked codex
+    expect(state.tasks[0].attempts).toBe(2) // codex (parked) + gemini — neither burned a failure retry
+    expect(isAvailable('codex', {}, Date.now())).toBe(false) // parked, not just cooled down
+  })
+
+  it('a per-provider cap serializes tasks even when drain concurrency allows overlap', async () => {
+    const second = story('Second', [
+      { title: 'Write more docs', prompt: 'write more docs', role: 'dev', selected: true }
+    ]).id
+    add(docs, second)
+    fake({ FAKE_SLEEP: '0.2' })
+    const settings = { providers: { caps: { claude: 1 } } }
+    const t0 = Date.now()
+    const results = await startDrain(repo, base, 2, noEvents, { settings })
+    expect(results.every((r) => r.status === 'Completed')).toBe(true)
+    // Every turn (both subtasks + both closing reviews, 4 total) shares the
+    // one claude slot, so they run one at a time: 4 * 200ms, not 2 in parallel.
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(700)
   })
 })
 
@@ -758,7 +900,7 @@ describe('startDrain', () => {
     expect(maxOverlap).toBeLessThanOrEqual(2) // ...but never past the bound
   })
 
-  it('cancel aborts a pause wait instead of waiting out the backoff', async () => {
+  it('cancel aborts a provider-cooldown wait instead of waiting it out', async () => {
     fake({ FAKE_FAIL: '1', FAKE_RATE_LIMIT: '1' })
     add(docs)
     let paused = (): void => {}
@@ -769,8 +911,9 @@ describe('startDrain', () => {
       repo,
       base,
       1,
-      { ...noEvents, onPipeline: (s) => s === 'Paused' && paused() },
-      { backoffMs: 60_000 } // never elapses within the test
+      { ...noEvents, onPipeline: (s) => s === 'Paused' && paused() }
+      // no fast clock: the real 5-minute cooldown never elapses — only
+      // cancel's abort can end this wait within the test.
     )
     await gotPause
     cancelPipeline()
@@ -778,11 +921,22 @@ describe('startDrain', () => {
     expect(state.status).toBe('Cancelled')
   })
 
-  it('keeps backing off when another workflow succeeds mid-pause', async () => {
-    // feature/Design is rate-limited on every attempt; docs succeeds ~100ms in,
-    // i.e. inside the first pause window. That success must not reset the backoff.
+  // M26: providers.ts's markOk always resets a provider's cooldown — there is
+  // no more pipeline-wide "a success mid-pause doesn't count" guard, because
+  // there is no more pipeline-wide pause. A same-provider success from another
+  // in-flight workflow now legitimately clears everyone's wait on it.
+  it('a same-provider success from another workflow resets the cooldown instead of compounding it', async () => {
+    // feature/Design rate-limits on every attempt (deterministically, via
+    // FAKE_RL_MATCH); docs succeeds ~100ms in and shares the same provider
+    // (claude, the default). The fast clock keeps feature's own cooldown
+    // cycles short enough (~200ms) that the second one starts after docs'
+    // markOk, so it should be freshly based rather than doubled.
     fake({ FAKE_RL_MATCH: 'design it', FAKE_SLEEP: '0.1' })
     add(feature, docs)
+    // Same clock instance passed to the drain and used to measure here: the
+    // executor's resumeAt is on this scaled clock, not the real one, so the
+    // "how far away" math must read it back through the same function.
+    const clock = fastClock(1_500)
     const waits: number[] = []
     const state = await startDrain(
       repo,
@@ -792,16 +946,15 @@ describe('startDrain', () => {
         ...noEvents,
         onPipeline: (s, info) => {
           if (s !== 'Paused' || !info?.resumeAt) return
-          waits.push(Date.parse(info.resumeAt) - Date.now())
-          // stop after the second pause (microtask: let pause() finish arming first)
+          waits.push(Date.parse(info.resumeAt) - clock().getTime())
           if (waits.length === 2) queueMicrotask(cancelPipeline)
         }
       },
-      { backoffMs: 300 }
+      { now: clock }
     )
     expect(state).toHaveLength(2)
     expect(waits).toHaveLength(2)
-    expect(waits[1]).toBeGreaterThan(waits[0] * 1.5) // doubled, not reset to base
+    expect(waits[1]).toBeLessThan(waits[0] * 1.5) // reset by docs' markOk, not doubled
   })
 
   it('a story that cannot start fails soft, the rest still run', async () => {

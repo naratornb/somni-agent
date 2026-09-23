@@ -5,9 +5,12 @@
 import { execFile } from 'child_process'
 import { join } from 'path'
 import { promisify } from 'util'
-import { atomicWrite, Settings } from './store'
+import { resolveTurnRunner } from './executor'
+import { acquireSlot, markAuthFailed, markOk, markRateLimited } from './providers'
+import { getRunner } from './runners'
+import { atomicWrite, resolveProfile, RunnerName, Settings } from './store'
 import { turn } from './turn'
-import type { RunState, TaskRun } from './executor'
+import type { Ctrl, RunEvents, RunState, TaskRun } from './executor'
 
 const git = promisify(execFile)
 
@@ -173,7 +176,9 @@ const REPORT_PROMPT =
 export async function writeReport(
   repo: string,
   state: RunState,
-  settings: Settings
+  settings: Settings,
+  ctrl: Ctrl,
+  events: RunEvents
 ): Promise<RunStats> {
   const runDir = join(repo, '.somni', 'runs', state.runId)
   const stats = await collectStats(state).catch(() => ({
@@ -205,26 +210,101 @@ export async function writeReport(
   if (settings.reportStyle === 'full') {
     // ponytail: the report task is spawned directly rather than threaded through
     // execute()'s retry/gate loop — it must never fail the run, and one shot is
-    // enough. Give it retries if report tasks turn out to flake.
+    // enough for a genuine failure. It still fails over/waits on a rate limit
+    // or auth park via resolveTurnRunner (M26 §5), same as every other Turn —
+    // and never persists 'auto' into run.json (task.runner must be concrete).
+    const choice = resolveProfile(undefined, settings).runner ?? 'claude'
+    const auto = choice === 'auto'
     const task: TaskRun = {
       title: 'Report',
       role: '',
       aux: true,
       status: 'Running',
+      attempts: 0,
       log: 'logs/report.log'
     }
-    task.runner = settings.runner
     state.tasks.push(task)
-    const r = await turn({
-      prompt: REPORT_PROMPT,
-      settings,
-      cwd: state.worktree,
-      autonomous: true,
-      logPath: join(runDir, task.log)
-    })
-    const text = r.ok && r.text ? r.text : null
-    task.status = text ? 'Completed' : 'Failed'
-    if (!text) task.error = 'report task produced no output'
+
+    let concrete: RunnerName | null = null
+    let text: string | null = null
+    for (;;) {
+      if (ctrl.cancelled) {
+        task.status = 'Cancelled'
+        break
+      }
+      if (!concrete) {
+        const resolved = await resolveTurnRunner(
+          choice,
+          settings,
+          ctrl,
+          () => Date.now(),
+          (resumeAt) => events.onPipeline?.('Paused', { resumeAt }),
+          () => events.onPipeline?.('Running')
+        )
+        if (resolved === 'cancelled') {
+          task.status = 'Cancelled'
+          break
+        }
+        if (resolved === 'unavailable') {
+          task.status = 'Failed'
+          task.error = 'no provider available'
+          break
+        }
+        concrete = resolved
+      }
+      const model = auto ? settings.providers?.defaults?.[concrete]?.model : settings.model
+      const effort = auto ? settings.providers?.defaults?.[concrete]?.effort : settings.effort
+      task.runner = concrete
+      task.model = model
+      task.effort = effort
+      task.attempts = (task.attempts ?? 0) + 1
+
+      const release = await acquireSlot(concrete, settings)
+      let r: Awaited<ReturnType<typeof turn>>
+      try {
+        r = await turn(
+          {
+            prompt: REPORT_PROMPT,
+            settings,
+            cwd: state.worktree,
+            runner: concrete,
+            model,
+            effort,
+            autonomous: true,
+            logPath: join(runDir, task.log)
+          },
+          { signal: ctrl.ac.signal }
+        )
+      } finally {
+        release()
+      }
+
+      if (r.ok) {
+        markOk(concrete)
+        text = r.text || null
+        task.status = text ? 'Completed' : 'Failed'
+        if (!text) task.error = 'report task produced no output'
+        break
+      }
+      if (r.rateLimited) {
+        markRateLimited(concrete)
+        concrete = null
+        continue
+      }
+      if (getRunner(concrete, settings).isAuthError?.(r.detail ?? '')) {
+        markAuthFailed(concrete)
+        if (!auto) {
+          task.status = 'Failed'
+          task.error = 'report task produced no output'
+          break
+        }
+        concrete = null
+        continue
+      }
+      task.status = 'Failed'
+      task.error = 'report task produced no output'
+      break
+    }
     body += text ? `\n## Summary\n\n${text}\n` : '\n_(report task failed — minimal report only)_\n'
   }
 
