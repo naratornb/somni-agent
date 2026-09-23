@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import appIcon from './assets/icon.png'
-import type { DrainState, RepoData, RunState, SkillsStatus } from '../../preload/index'
+import type {
+  DrainState,
+  ProviderHealth,
+  RepoData,
+  RunState,
+  SkillsStatus
+} from '../../preload/index'
 import { Playground } from './Playground'
 import { LogLine, PipelineView } from './PipelineView'
+import { ProvidersSetup } from './ProvidersSetup'
 import { RunsView } from './RunsView'
 import { SessionsView } from './SessionsView'
 import { SettingsView } from './SettingsView'
@@ -67,6 +74,9 @@ function App(): React.JSX.Element {
   // Dismissal is per-session, like the skills banner.
   const [runnerMissing, setRunnerMissing] = useState<string | null>(null)
   const [runnerHidden, setRunnerHidden] = useState(false)
+  // Zero-provider onboarding (M26 §3): null until the first probe resolves —
+  // the guided setup only replaces the app once every provider has failed.
+  const [providersHealth, setProvidersHealth] = useState<ProviderHealth[] | null>(null)
   // A Groom that finished while the user was elsewhere (M25.2).
   // The finished Groom to announce, and whether a background work unit did it.
   const [groomDone, setGroomDone] = useState<{ slug: string; workUnit: boolean } | null>(null)
@@ -183,6 +193,18 @@ function App(): React.JSX.Element {
     const timer = setInterval(probe, 4000)
     return () => clearInterval(timer)
   }, [view, runnerMissing, runnerHidden])
+
+  // Alongside the single-runner probe above: every provider at once, for the
+  // zero-provider guided setup. onRecheck (the setup screen's button) reruns
+  // this same probe — no separate polling loop needed.
+  const checkProviders = useCallback((): void => {
+    void window.somni.providersStatus().then(setProvidersHealth)
+  }, [])
+  useEffect(() => {
+    checkProviders()
+  }, [checkProviders])
+  const allProvidersDown =
+    providersHealth != null && providersHealth.length > 0 && providersHealth.every((h) => !h.ok)
 
   const choose = async (): Promise<void> => {
     const path = await window.somni.chooseRepo()
@@ -334,8 +356,10 @@ function App(): React.JSX.Element {
               </div>
             </div>
           ))}
-          {/* M22: the Runner CLI is the app's engine — say so when it's missing. */}
-          {runnerMissing && !runnerHidden && (
+          {/* M22: the Runner CLI is the app's engine — say so when it's missing.
+              Suppressed once every provider is down (M26 §3): ProvidersSetup
+              below replaces this banner rather than stacking under it. */}
+          {runnerMissing && !runnerHidden && !allProvidersDown && (
             <div className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface-elevated p-card-padding">
               <span>
                 Runner CLI <b>{runnerMissing}</b> not found — somni can&apos;t execute stories
@@ -375,7 +399,12 @@ function App(): React.JSX.Element {
               </div>
             </div>
           )}
-          {view === 'Playground' ? (
+          {allProvidersDown && view !== 'Settings' ? (
+            // Settings stays reachable even here — it's the escape hatch for a
+            // custom binary path (Task 8's Providers panel), not the working
+            // view the setup screen is meant to replace.
+            <ProvidersSetup health={providersHealth ?? []} onRecheck={checkProviders} />
+          ) : view === 'Playground' ? (
             <Playground />
           ) : view === 'Settings' ? (
             <SettingsView repo={repo} roles={data.roles} refresh={refresh} />

@@ -5,6 +5,7 @@ import { join } from 'path'
 import { groomPreamble } from './prompts'
 import {
   applyProposal,
+  readOnlyRunner,
   killChats,
   NEW_GROOM_NAME,
   loadChat,
@@ -177,6 +178,22 @@ describe('parseProposal', () => {
     ])
     expect(parseProposal(block(story({ roles: [{ slug: 'a', name: 'A' }] })))).toBeNull()
     expect(parseProposal(block(story({ roles: 'nope' })))).toBeNull()
+  })
+})
+
+describe('readOnlyRunner', () => {
+  it('uses the configured concrete runner when it supports read-only', () => {
+    expect(readOnlyRunner({ runner: 'claude' })).toBe('claude')
+  })
+  it("resolves 'auto' through the chain", () => {
+    expect(readOnlyRunner({ runner: 'auto' })).toBe('claude')
+  })
+  it('refuses a runner without read-only levers and falls to the chain', () => {
+    // gemini has supportsReadOnly: false — chat must not weaken §7
+    expect(readOnlyRunner({ runner: 'gemini' })).toBe('claude')
+  })
+  it('refuses codex too — its --sandbox read-only does not gate file writes (Task 2 live check)', () => {
+    expect(readOnlyRunner({ runner: 'codex' })).toBe('claude')
   })
 })
 

@@ -139,7 +139,11 @@ app.whenReady().then(() => {
       wc()?.send('run:log', { runId, taskIndex, text }),
     onPipeline: (status: PipelineStatus, info?: { resumeAt?: string; mode?: DrainMode | null }) => {
       blocker(status)
-      wc()?.send('pipeline:status', { status, ...info })
+      // failover.ts's own Paused/Running pushes (a per-task provider wait, not a
+      // drain-state change) carry no mode — default to the drain's actual mode so
+      // they don't read as "drain over" in the renderer; an explicit mode in info
+      // (executor.ts's own pushes, including the final Idle's mode: null) wins.
+      wc()?.send('pipeline:status', { mode: getDrainState().mode, ...info, status })
     }
   }
 

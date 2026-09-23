@@ -1,6 +1,25 @@
-import { describe, it, expect } from 'vitest'
-import { fileChanges, minimalReport, reviewSection, runStats, summarize } from './report'
+import { mkdtempSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { describe, expect, it, vi } from 'vitest'
 import type { RunState } from './executor'
+import type { TurnRequest } from './turn'
+
+// M26 final review (fix 2): the compact-summary turn must resolve a
+// read-only-capable runner (readOnlyRunner, chat.ts) rather than handing a
+// pinned non-read-only provider — gemini has no readOnly branch at all — an
+// unrestricted run of the user's repo. `turn` is mocked so the assertion is
+// on the request it receives, not on a real CLI round trip.
+const turnCalls: TurnRequest[] = []
+vi.mock('./turn', () => ({
+  turn: (req: TurnRequest) => {
+    turnCalls.push(req)
+    return Promise.resolve({ ok: true, text: 'summary', exitCode: 0, usage: { durationMs: 0 } })
+  }
+}))
+
+const { fileChanges, minimalReport, reviewSection, runStats, summarize, writeReport } =
+  await import('./report')
 
 describe('minimal report stats', () => {
   it('counts created/modified and spots test files', () => {
@@ -128,5 +147,37 @@ describe('review section (M16)', () => {
     const md = minimalReport(state, summarize('', ''))
     expect(md).toContain('## Review')
     expect(md).toContain('green means the agent said so')
+  })
+})
+
+describe('writeReport compact style — read-only routing (M26 final review, fix 2)', () => {
+  const noEvents = { onState: (): void => {}, onLog: (): void => {} }
+  const ctrl = { cancelled: false, ac: new AbortController() }
+
+  it('routes a pinned non-read-only runner through readOnlyRunner instead of settings.runner', async () => {
+    turnCalls.length = 0
+    const repo = mkdtempSync(join(tmpdir(), 'somni-report-'))
+    const state = {
+      runId: 'r1',
+      workflow: 'w',
+      name: 'Nightly',
+      branch: 'somni/w-1',
+      worktree: join(repo, 'missing-worktree'), // collectStats degrades gracefully (not a git repo)
+      status: 'Completed',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      tasks: []
+    } as RunState
+    // gemini has no readOnly branch in its buildArgs at all (runners.ts) —
+    // pinning it must not reach turn() unweakened.
+    await writeReport(
+      repo,
+      state,
+      { runner: 'gemini', reportStyle: 'compact' },
+      ctrl,
+      noEvents,
+      () => Date.now()
+    )
+    expect(turnCalls).toHaveLength(1)
+    expect(turnCalls[0].runner).toBe('claude') // chain's first read-only-capable member, not 'gemini'
   })
 })

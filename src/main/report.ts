@@ -5,9 +5,11 @@
 import { execFile } from 'child_process'
 import { join } from 'path'
 import { promisify } from 'util'
-import { atomicWrite, Settings } from './store'
+import { readOnlyRunner } from './chat'
+import { runTurnWithFailover } from './failover'
+import { atomicWrite, resolveProfile, Settings } from './store'
 import { turn } from './turn'
-import type { RunState, TaskRun } from './executor'
+import type { Ctrl, RunEvents, RunState, TaskRun } from './executor'
 
 const git = promisify(execFile)
 
@@ -173,7 +175,10 @@ const REPORT_PROMPT =
 export async function writeReport(
   repo: string,
   state: RunState,
-  settings: Settings
+  settings: Settings,
+  ctrl: Ctrl,
+  events: RunEvents,
+  nowMs: () => number
 ): Promise<RunStats> {
   const runDir = join(repo, '.somni', 'runs', state.runId)
   const stats = await collectStats(state).catch(() => ({
@@ -197,7 +202,13 @@ export async function writeReport(
     ].join('\n')
     // Read-only: never an autonomous Turn here (§7 chat rules). A report must
     // never be the thing that fails a run, so any failure degrades to null.
-    const r = await turn({ prompt, settings, cwd: state.worktree, readOnly: true })
+    const r = await turn({
+      prompt,
+      settings,
+      runner: readOnlyRunner(settings),
+      cwd: state.worktree,
+      readOnly: true
+    })
     const text = r.ok && r.text ? r.text : null
     body += text ? `\n## Summary\n\n${text}\n` : '\n_(summary call failed — minimal report only)_\n'
   }
@@ -205,26 +216,54 @@ export async function writeReport(
   if (settings.reportStyle === 'full') {
     // ponytail: the report task is spawned directly rather than threaded through
     // execute()'s retry/gate loop — it must never fail the run, and one shot is
-    // enough. Give it retries if report tasks turn out to flake.
+    // enough for a genuine failure. It still fails over/waits on a rate limit
+    // or auth park via runTurnWithFailover (M26 §5), same as every other Turn —
+    // and never persists 'auto' into run.json (task.runner must be concrete).
+    const profile = resolveProfile(undefined, settings)
     const task: TaskRun = {
       title: 'Report',
       role: '',
       aux: true,
       status: 'Running',
+      attempts: 0,
       log: 'logs/report.log'
     }
-    task.runner = settings.runner
     state.tasks.push(task)
-    const r = await turn({
-      prompt: REPORT_PROMPT,
+
+    const outcome = await runTurnWithFailover({
+      choice: profile.runner ?? 'claude',
+      pinnedModel: profile.model,
+      pinnedEffort: profile.effort,
       settings,
-      cwd: state.worktree,
-      autonomous: true,
-      logPath: join(runDir, task.log)
+      ctrl,
+      nowMs,
+      events,
+      runId: state.runId,
+      taskIndex: -1,
+      task,
+      maxAttempts: 1, // one shot for a genuine failure — a report must never block the run
+      request: {
+        prompt: REPORT_PROMPT,
+        cwd: state.worktree,
+        autonomous: true,
+        logPath: join(runDir, task.log)
+      }
     })
-    const text = r.ok && r.text ? r.text : null
-    task.status = text ? 'Completed' : 'Failed'
-    if (!text) task.error = 'report task produced no output'
+
+    let text: string | null = null
+    if (outcome.ok) {
+      text = outcome.text || null
+      task.status = text ? 'Completed' : 'Failed'
+      if (!text) task.error = 'report task produced no output'
+    } else if (outcome.reason === 'cancelled') {
+      task.status = 'Cancelled'
+    } else if (outcome.reason === 'no-provider') {
+      task.status = 'Failed'
+      task.error = 'no provider available'
+    } else {
+      task.status = 'Failed'
+      task.error ??= 'report task produced no output'
+    }
     body += text ? `\n## Summary\n\n${text}\n` : '\n_(report task failed — minimal report only)_\n'
   }
 

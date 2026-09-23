@@ -7,6 +7,7 @@ import {
   ChatProposal,
   loadChat,
   newChat,
+  readOnlyRunner,
   sendChat,
   startGroom,
   workUnitTurn
@@ -15,10 +16,10 @@ import { handoff } from './sessions'
 import { isRunning, loadRuns, RunState, wakeDrain } from './executor'
 import { lockedGit } from './git'
 import { diffFiles, RunStats, runStats } from './report'
-import { getRunner, runnerStatus } from './runners'
+import { getRunner, providersStatus, runnerStatus } from './runners'
 import { turn } from './turn'
 import * as store from './store'
-import { atomicWrite, RunnerName, Settings } from './store'
+import { atomicWrite, RunnerChoice, Settings } from './store'
 
 // Machine-level settings (architecture.md §4): last-opened repo + global defaults.
 const settingsPath = (): string => join(app.getPath('userData'), 'settings.json')
@@ -161,6 +162,8 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
   ipcMain.handle('settings:get', () => ({ ...store.SETTINGS_DEFAULTS, ...readSettings() }))
   // Runner health (M22): probed fresh per ask, off the settings on disk.
   ipcMain.handle('runner:status', () => runnerStatus(readSettings()))
+  // Every provider at once (M26 §3): Providers panel + zero-provider onboarding.
+  ipcMain.handle('providers:status', () => providersStatus(readSettings()))
 
   ipcMain.handle('settings:set', (_e, s: Settings) => {
     patchSettings(s)
@@ -297,6 +300,7 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
     const r = await turn({
       prompt: `${REFINE_PROMPTS[kind]}\n\n---\n${text}`,
       settings,
+      runner: readOnlyRunner(settings), // §7: never trust a pinned/auto choice unweakened here
       cwd: repo,
       readOnly: true
     })
@@ -307,7 +311,7 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
 
   // Model suggestions for the combo boxes. The inherit case (role editor sends
   // undefined) resolves to the settings runner here, never renderer-side.
-  ipcMain.handle('models:list', (_e, runnerName?: RunnerName) => {
+  ipcMain.handle('models:list', (_e, runnerName?: RunnerChoice) => {
     const settings = readSettings()
     const runner = getRunner(runnerName ?? settings.runner ?? 'claude', settings)
     const key = `${runner.name}:${runner.binary}`

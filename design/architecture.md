@@ -54,7 +54,7 @@ All of the workflow's tasks share that worktree, so each task sees the previous 
 
 **Process supervision.** One `child_process.spawn` per running task, `cwd` = the worktree. Stdout is parsed as stream-json events; raw output is also appended to a per-task log file. Completion is detected from the CLI's final `result` event (subtype `success`/`error`) plus the exit code. A per-task **timeout** setting (default 30 min) kills hung processes via `SIGTERM` then `SIGKILL`. Since M20 every prompt somni sends lives in `src/main/prompts.ts` (the Methodology seam: adding a methodology touches that file and `resources/skills/` only), and `run.json` is read/written only through the executor's `loadRun`/`loadRuns`/`saveRun`. Since M19 every runner invocation — subtasks, Review/Fix, reports, refine, grooming replies, the Playground — is one **Turn** (`src/main/turn.ts`, CONTEXT.md term): timeout, SIGKILL grace, AbortSignal cancellation, stream demux, usage capture, and the failure taxonomy (`spawn | exit | timeout | aborted`, with rate-limit classification) live behind that one seam; retries and the rate-limit gate remain Pipeline policy outside it.
 
-**Failure & retry.** A task fails on nonzero exit, an error `result`, or timeout → one automatic retry as a fresh invocation in the same worktree. Second failure → task `Failed`, the workflow's remaining tasks `Skipped`, workflow `Failed`; other workflows are unaffected. **Rate-limit errors are special-cased:** instead of burning the retry, the whole pipeline enters `Paused` and re-attempts on a backoff timer — this is what makes an overnight run survive Max-plan 5-hour usage windows.
+**Failure & retry.** A task fails on nonzero exit, an error `result`, or timeout → one automatic retry as a fresh invocation, same provider, same worktree (§5's failover chain never switches providers for a genuine failure — only for a rate limit or auth error). Second failure → task `Failed`, the workflow's remaining tasks `Skipped`, workflow `Failed`; other workflows are unaffected. **Rate-limit and auth failures are special-cased, and — since M26 — no longer pause the pipeline as a whole:** each task resolves its own provider through the failover chain (§5); a rate limit cools that provider down and, for `Auto`, fails the task over to the next chain member immediately, while a pinned runner instead waits out its own cooldown. The pipeline shows `Paused` only for a task whose every candidate provider is currently unavailable — other tasks with a usable provider keep running in the same tick. This is what makes an overnight run survive a Max-plan 5-hour usage window without stalling everything else on it too.
 
 **Crash/quit recovery.** On launch, if a repo's latest `runs/<id>/run.json` is still marked `Running`, orphaned `Running` tasks are reset to `Queued`. Their worktree holds whatever the dead process left behind — acceptable, because task prompts are stated as goals, not diffs, so a re-run continues from the current files. The user is offered **Resume pipeline** / **Abandon**.
 
@@ -98,21 +98,21 @@ All per-repo state lives **inside the target repo** at `<repo>/.somni/` as plain
 - Writes are atomic (write temp file, rename). The files are authoritative: external edits — a `git pull`, hand-editing an item — are picked up on app refresh.
 - Definitions (`roles/`, `items/`) are deliberately separate from executions (`runs/`) so history survives edits and re-runs.
 
-Run statuses: `Queued / Running / Completed / Failed / Skipped / Cancelled`, plus `Paused` at the pipeline level for rate-limit waits. (Item statuses are the board columns above — the two vocabularies never mix.)
+Run statuses: `Queued / Running / Completed / Failed / Skipped / Cancelled`, plus `Paused` for a task waiting on its failover chain (§5) — since M26 this is per waiting task, not a pipeline-wide state; other tasks with a usable provider keep running. (Item statuses are the board columns above — the two vocabularies never mix.)
 
 **App-level state** (Electron `userData`, machine-specific): global settings (claude path, default concurrency, default report style, task timeout, and the Nightly Window — `nightlyTime` "HH:MM" + `nightlyArmed`, armed state surviving restart, time surviving disarm; it drains the last-opened repo), the list of known repos, and worktrees under `<appData>/worktrees/` — worktrees are disposable local build artifacts; the `somni/…` branches are the portable part. Keep Running is deliberately not persisted.
 
 ## 5. Runners & CLI invocation
 
-somni supports two execution backends ("runners"): **Claude Code** (`claude`, Max plan) and **Google Antigravity** (`agy`, headless mode, Google subscription). Which one runs a task — and with what model and effort — is an **execution profile**:
+somni supports four execution backends ("runners"): **Claude Code** (`claude`, Max plan), **Google Antigravity** (`agy`, headless mode, Google subscription), **Codex** (`codex`, OpenAI), and **Gemini CLI** (`gemini`, Google). Which one runs a task — and with what model and effort — is an **execution profile**; a profile's runner may instead be `'auto'`, which defers to the **provider chain** (below) rather than naming one:
 
 **Binary resolution (M22).** CLI binaries resolve on PATH (Settings paths override). A Finder-launched packaged .app inherits launchd's bare PATH, so at startup (packaged only) main resolves the login shell's PATH once (`src/main/env.ts` `shellPath()`: `$SHELL -ilc`, marker-scraped, 3s timeout, Homebrew-dir fallback) and assigns `process.env.PATH` — every spawn (runner, voice, git) inherits it from that one place. A cache-free `runner:status` probe (`runnerStatus()` in runners.ts, IPC in repoIpc) backs a dismissible missing-Runner banner in the shell that re-probes while visible, so a Settings fix clears it without restart.
 
 ```
-{ runner: 'claude' | 'antigravity', model?: string, effort?: 'low'|'medium'|'high' }
+{ runner: 'claude' | 'antigravity' | 'codex' | 'gemini' | 'auto', model?: string, effort?: 'low'|'medium'|'high' }
 ```
 
-Resolution order: **role → repo `.somni/config.json` → global settings.** Roles are where "how much brainpower" lives (e.g. Senior Developer → strongest model, high effort; report writing → small fast model); a task gets its role's profile, no per-task knobs. `run.json` and chat transcripts record the profile that ran each task, for reproducibility.
+Resolution order: **role → repo `.somni/config.json` → global settings.** Roles are where "how much brainpower" lives (e.g. Senior Developer → strongest model, high effort; report writing → small fast model); a task gets its role's profile, no per-task knobs. A role that pins a concrete runner overrides `'auto'` for every task using it — it never joins the failover chain, so it never fails over and never waits on a sibling's cooldown, only its own. The seeded `developer` role pins Claude Code for exactly this reason: Antigravity cannot read `.claude/skills/`, and developer is the role most coupled to the injected skills. For an `'auto'` task, `model`/`effort` come from that attempt's concrete provider's own `settings.providers.defaults[name]` instead of the profile fields — model ids are provider-specific, so one profile can't serve every chain member. `run.json` and chat transcripts record the *concrete* provider that ran each task (never `'auto'` itself), for reproducibility.
 
 **Runner adapter.** All runner differences live behind one small interface in the main process — nothing else may branch on runner type:
 
@@ -123,7 +123,7 @@ Runner {
 }
 ```
 
-The orchestrator, chat, and stream plumbing are runner-agnostic; each adapter also classifies its own rate-limit error shape for the pipeline pause/backoff.
+The orchestrator, chat, and stream plumbing are runner-agnostic. Two more adapter fields feed policy outside this file: `isRateLimit`/`isAuthError` classify an adapter's own error text for the failover chain (below) — a rate limit cools that provider down, an auth failure parks it; `supportsReadOnly` gates the §7 chat invariant — an adapter with no verified read-only lever (Codex, Gemini) is refused for chat rather than trusted on an advisory flag, falling through the chain to the next member that has one.
 
 **ClaudeRunner** (reference implementation):
 
@@ -159,7 +159,59 @@ Flags and event shapes were pinned at implementation time against the installed 
 
 Parsed from agy's stream: `{event: "init", conversation_id}` → session, `{event: "step_update", step_update: {step_type: "agent_response", text_delta}}` → live log, `{event: "result", result: {status, response, duration_seconds}}` → success/duration.
 
-A workflow run's retry always reuses the same profile; runners are never mixed within a retry — the adapter is resolved once per task, outside the attempt loop.
+**CodexRunner:**
+
+```
+codex exec [resume <thread_id>] --json --skip-git-repo-check \
+  [--sandbox read-only] [--dangerously-bypass-approvals-and-sandbox] \
+  [--model <m>] [-c model_reasoning_effort="<effort>"] \
+  "<role preamble>\n\n---\n\n<task prompt>"
+```
+
+Pinned live against the installed CLI, codex-cli 0.154.0 — flags and event shapes are a verified round trip, not read off docs. Decisions recorded there:
+
+- **Resume is `codex exec resume <thread_id>`** — a subcommand, not a flag; `buildArgs` inserts it right after `exec`, before `--json`.
+- **`--skip-git-repo-check` is always passed.** Chat runs in the repo root, but tasks run in worktrees whose `.git` is a gitdir pointer file codex may not recognise as a repo; the executor already owns isolation, so codex's own repo check is redundant at best and wrong for worktrees at worst.
+- **`--sandbox read-only` is not a real read-only lever.** Live-verified: it gates codex's shell-command tool but not its own file-write tool — a direct "create this file" instruction wrote it anyway. `supportsReadOnly: false` — chat refuses codex (§7) rather than trusting a flag that doesn't hold for the thing that matters.
+- **No dollar cost, no duration.** Codex reports token usage only (the agy precedent), and `turn.completed` carries no timing field.
+- **Rate-limit and auth classification are both regex-inferred, not observed live**: `isRateLimit` matches `rate limit|usage limit|too many requests|429`; `isAuthError` matches `not logged in|codex login|401|unauthorized`. No live codex rate limit or logged-out run has been seen yet — the first thing to check if unattended runs start burning retries instead of cooling down, or failing outright instead of parking.
+
+Parsed from codex's stream: `{type: "thread.started", thread_id}` → session, `{type: "item.completed", item: {type: "agent_message", text}}` → live log, `{type: "turn.completed", usage: {input_tokens, cached_input_tokens, output_tokens}}` → success (codex carries no explicit ok/error flag on a completed turn — `ok: true` is assumed unless a separate `turn.failed` event arrives), `{type: "turn.failed", error: {message}}` → failure with detail.
+
+**GeminiRunner** — UNPINNED:
+
+```
+gemini -p --output-format stream-json \
+  [--approval-mode yolo] [--resume <session_id>] [--model <m>] \
+  "<role preamble>\n\n---\n\n<task prompt>"
+```
+
+Written from the gemini-cli docs (`docs/cli/cli-reference.md`, `headless.md`, `session-management.md`, 2026-09) — the CLI is not installed on the dev machine, so none of this has been verified against a live round trip the way Codex and Antigravity were. Decisions recorded there:
+
+- **`--approval-mode yolo`, not the deprecated `--yolo`.** The docs confirm the flag was renamed. Earlier design text (the M26 spec doc) still shows `--yolo` — that's a historical record of the plan as written, left as-is; this section tracks the flag the current code actually sends.
+- **`supportsReadOnly: false`** — the docs name no verified read-only lever for gemini (no per-tool allowlist, no confirmed sandboxed mode), so chat refuses gemini exactly like codex, falling through the chain (§7).
+- **`parseLine`'s field names are a guess, not a fact.** The docs enumerate stream-json event *types* (`init`/`message`/`tool_use`/`tool_result`/`error`/`result`) but publish no field-level JSON example, so `session_id`, `role`/`content`, and `status`/`response` below are the plan's best-known reading, unverified either way.
+- **Rate-limit and auth classification follow the agy precedent** (Google error shapes): `isRateLimit` matches `rate limit|quota|resource exhausted|too many requests|429`; `isAuthError` matches `not logged in|not authenticated|gemini login|401|unauthorized`.
+
+Parsed from gemini's stream (unverified): `{type: "init", session_id}` → session, `{type: "message", role: "assistant", content}` → live log, `{type: "result", status, response}` → success/detail.
+
+**Pin when installed.** The first machine with `gemini` on PATH should pin this adapter the way Codex was pinned above — a live `-p --output-format stream-json` round trip confirming the actual event field names — then update this subsection and the corresponding comment in `runners.ts` together. Until then, treat every field name above as provisional.
+
+### Failover chain (M26)
+
+A task's retry no longer pins one runner for its whole lifetime the way it did before M26. `runTurnWithFailover` (`src/main/failover.ts`) is the one body every Turn-issuing call site shares — the subtask loop, the aux Review/Fix turns, and the report task (§6's Full style) — so a rate-limit/auth-park/logging fix lands once for all three instead of drifting across copies.
+
+- **`'auto'` resolves per attempt, not once per task.** `pickAuto` walks the **provider chain** — `settings.providers.order`, with any unlisted runner appended in a default order, then filtered by `settings.providers.disabled` — and returns the first provider that is neither cooling down nor parked. A pinned (non-`'auto'`) choice never fails over to a different provider; it only ever waits on itself.
+- **Cooldown**: a rate limit starts a provider's cooldown at 5 minutes; each further rate limit on the same provider before it clears doubles the next cooldown, capped at 60 minutes. A successful turn (`markOk`) resets it fully back to 5 minutes — the doubling tracks a losing streak, not a permanent state.
+- **Parking**: an auth failure (or a missing/unresolvable binary) parks a provider indefinitely — unlike a rate limit, neither clears on its own. Parking only lifts on `markOk` (an actual successful turn) or `markPresent` (a Providers-panel re-probe, or the app-launch probe, answering `--version`). A probe proves the binary is present, not that a rate limit has lifted — it clears parking only, and **never** wipes an active cooldown; only `markOk` does that.
+- **Per-provider caps** (`settings.providers.caps[name]`) bound how many tasks run concurrently on one provider; the global `concurrency` setting stays the outer ceiling regardless of caps. No cap configured for a provider = it never queues on its own account.
+- **Waiting vs. failing.** If the chain has a candidate that will become available later (a cooldown with a future expiry — not parked), a waiting task's pipeline status is `Paused` with a `resumeAt`, and it resumes automatically once that time passes. If every chain candidate is currently parked with none due back, the task fails outright — `'no provider available'` — rather than waiting forever.
+- **Genuine (non-rate-limit, non-auth) failures** retry the same provider up to `maxAttempts` (2 for a subtask, 1 — one shot — for an aux/report turn) before giving up; only a rate limit or auth failure ever moves the attempt loop to a different provider.
+
+**Two known ceilings**, both deliberate (`providers.ts`'s own words: "a restart forgets cooldowns — the next rate limit re-teaches them, which is cheaper than persisting a clock"):
+
+- **Cooldowns and parking are in-memory only — an app restart forgets both.** Quitting mid-backoff and relaunching clears every provider's state; the next attempt tries immediately instead of respecting the remaining wait. Fine for a single-user overnight tool where a mid-run restart is already rare and deliberate, but not a durable record across sessions.
+- **The pipeline's `Paused`/`Running` status can flicker under concurrency.** Each task's wait independently calls `onPipeline('Paused' | 'Running')` (`executor.ts`) with no cross-task coordination — with `maxConcurrency` > 1, a task waiting on a cooling-down provider while a sibling task is actively running on a different one will toggle the status line between `Paused` and `Running` as first one, then the other, starts and stops waiting. Accurate per-emit, but not a single coherent "is anything blocked" signal when multiple tasks hold different waits at once.
 
 ## 6. Summary reports — `Report style` setting
 
@@ -243,7 +295,7 @@ Each milestone is shippable and exercises the one before it.
 - **Hung tasks** are covered by the per-task timeout.
 - **Prompt quality is the real ceiling.** Unattended runs live or die on task prompts and role preambles; the Design → Implement → Test → Revise → Report shape from the brief is the template to encourage. Since M18, `ensureSomni` seeds seven default SDLC roles (architect, developer, tester, reviewer, tech-writer, devops, security) into a fresh repo's `.somni/roles/` — only while the roles dir has never existed, so deletions and edits stick.
 - **Merge-back is manual by design.** The app creates branches; you merge. Auto-merge is out of scope for v1.
-- **Antigravity CLI is young.** `agy` shipped mid-2026 and its flags may drift; the adapter pins exact flags at M7 implementation against the live docs, and CI-style smoke checks of both runners' output parsing guard against CLI updates breaking overnight runs. Rate-limit detection is per-adapter (Anthropic and Google error shapes differ).
+- **Antigravity CLI is young; Gemini CLI is unpinned.** `agy` shipped mid-2026 and its flags may drift; the adapter pins exact flags at M7 implementation against the live docs. Gemini's adapter (M26 §5) is written from docs alone — no `gemini` install has verified it live yet. CI-style smoke checks of the runners' output parsing guard against CLI updates breaking overnight runs. Rate-limit and auth detection are per-adapter regexes (Anthropic, Google, and OpenAI error shapes all differ) — Codex's and Gemini's are inferred, not observed live, per §5.
 - **One machine at a time.** `.somni/` sync is via git, so running pipelines for the same repo on two machines concurrently is unsupported (last-writer-wins on `run.json`). Run overnight on one machine; review anywhere.
 - **Green-detection is the fragile joint (Phase 3).** `claude -p` exits 0 even when the work is bad, and a fenced verdict in a nondeterministic reply can be malformed or optimistic. A configured `checkCommand` is the primary deterministic signal; the verdict block is advisory. Without either, "green" means "the agent said so" — reports state that plainly. (`checkCommand` is arbitrary shell run in the worktree — the same trust boundary as autonomous task execution itself, and repo-level config the user writes; noted, not mitigated.)
 - **Skills injection touches repos somni doesn't own (Phase 3).** Mitigated by manifest-scoped writes only, never overwriting non-somni files, CONTEXT.md stubbed only-if-absent, and upgrades always deliberate. Antigravity cannot read `.claude/skills/`, so implement-stage roles default to the claude runner; inlining skill bodies into agy prompts is the noted upgrade path, not built.
