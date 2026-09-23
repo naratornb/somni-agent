@@ -72,6 +72,19 @@ const chatPrompt = (
 ): string =>
   sessionId ? message : `${groomPreamble(roleSlugs, context, settings.methodology)}\n${message}`
 
+// Chat is always read-only (§7). A provider without verified read-only levers
+// is refused, not weakened: fall through the failover chain to one that has
+// them. The single place chat turns a RunnerChoice into a concrete runner —
+// turn.ts and the runner adapters never see 'auto'.
+export function chatRunnerName(settings: Settings): RunnerName {
+  const choice = settings.runner
+  const candidates =
+    !choice || choice === 'auto'
+      ? store.providerChain(settings)
+      : [choice as RunnerName, ...store.providerChain(settings)]
+  return candidates.find((n) => getRunner(n, settings).supportsReadOnly) ?? 'claude'
+}
+
 // ponytail: sendChat goes through turn() now; this survives only because
 // chat.test.ts pins the argv contract through it — delete when those tests
 // migrate to the Turn seam.
@@ -83,7 +96,8 @@ export function turnArgs(
   settings: Settings = {},
   context?: string
 ): string[] {
-  return getRunner(profile.runner, settings).buildArgs(
+  const runner = chatRunnerName({ ...settings, runner: profile.runner ?? settings.runner })
+  return getRunner(runner, settings).buildArgs(
     chatPrompt(message, sessionId, roleSlugs, settings, context),
     { ...profile, resumeSessionId: sessionId ?? undefined, readOnly: true }
   )
@@ -347,7 +361,8 @@ function runTurn(
   return turn(
     {
       prompt,
-      settings, // runner/model/effort default from here — the chat is settings-profiled (§7)
+      settings, // model/effort default from here — the chat is settings-profiled (§7)
+      runner: chatRunnerName(settings), // resolved concrete + read-only-capable — turn.ts never sees 'auto'
       cwd: repo,
       resumeSessionId: sessionId ?? undefined,
       readOnly: true,
@@ -432,6 +447,7 @@ async function autoTitle(
   const r = await turn({
     prompt: `${TITLE_PROMPT}\n\n---\n${question}\n\n---\n${reply}`,
     settings,
+    runner: chatRunnerName(settings),
     cwd: repo,
     readOnly: true
   })
