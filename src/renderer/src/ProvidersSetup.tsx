@@ -26,7 +26,8 @@ const GUIDES: Record<RunnerName, { install: string; login: string; docs: string 
   }
 }
 
-const NAMES: Record<RunnerName, string> = {
+// Exported for reuse by SettingsView's Providers panel (same label set).
+export const NAMES: Record<RunnerName, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   gemini: 'Gemini CLI',

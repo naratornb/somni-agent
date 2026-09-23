@@ -2,14 +2,42 @@ import { useEffect, useState } from 'react'
 import type {
   Effort,
   Methodology,
+  ProviderHealth,
+  ProvidersSettings,
   ReportStyle,
   Role,
+  RunnerChoice,
   RunnerName,
   Settings,
   SkillsStatus
 } from '../../preload/index'
+import { NAMES as PROVIDER_NAMES } from './ProvidersSetup'
 import { RolesView } from './RolesView'
-import { BTN_PRIMARY, CHECKBOX, CHIP, INPUT, LABEL, STATUS_CHIP, STATUS_CHIP_BASE } from './ui'
+import {
+  BTN_GHOST_SM,
+  BTN_PRIMARY,
+  CHECKBOX,
+  CHIP,
+  ICON_BTN,
+  INPUT,
+  LABEL,
+  STATUS_CHIP,
+  STATUS_CHIP_BASE
+} from './ui'
+
+// Mirrors main/store.ts's RUNNER_NAMES/DEFAULT_PROVIDER_ORDER — hardcoded
+// here because that module also imports fs/path, which can't bundle into
+// the renderer (ProvidersSetup.tsx hardcodes its own label map for the
+// same reason).
+const RUNNER_NAMES: RunnerName[] = ['claude', 'antigravity', 'gemini', 'codex']
+const DEFAULT_PROVIDER_ORDER: RunnerName[] = ['claude', 'codex', 'gemini', 'antigravity']
+
+// The full display order: saved order first, then any provider missing from
+// it (a new adapter, or nothing saved yet) appended in the default order.
+function providerOrder(p: ProvidersSettings | undefined): RunnerName[] {
+  const order = p?.order ?? []
+  return [...order, ...DEFAULT_PROVIDER_ORDER.filter((n) => !order.includes(n))]
+}
 
 /** Label + control row — the Settings/Roles form idiom (M10-ui.md §0). */
 export function FieldRow({
@@ -111,57 +139,63 @@ function RepoSection({ repo }: { repo: string }): React.JSX.Element {
   )
 }
 
-export function SettingsView({
-  repo,
-  roles,
-  refresh
+/**
+ * The settings fields + Providers panel — pure props-in/patch-out, no hooks.
+ * SettingsView (below) owns all the state and effects; this is what makes
+ * the form body directly callable from tests, the same way ProvidersSetup is.
+ */
+export function SettingsForm({
+  s,
+  patch,
+  models,
+  health,
+  providerModels,
+  onRecheck
 }: {
-  repo: string | null
-  roles: Role[]
-  refresh: () => void
+  s: Settings
+  patch: (p: Partial<Settings>) => void
+  models: string[]
+  health: ProviderHealth[]
+  providerModels: Partial<Record<RunnerName, string[]>>
+  onRecheck: () => void
 }): React.JSX.Element {
-  const [s, setS] = useState<Settings | null>(null)
-  const [saved, setSaved] = useState(false)
-  const [models, setModels] = useState<string[]>([])
+  const order = providerOrder(s.providers)
 
-  useEffect(() => {
-    void window.somni.getSettings().then(setS)
-  }, [])
-
-  // Keyed on the unsaved form value: switching runner re-suggests immediately.
-  useEffect(() => {
-    void window.somni.listModels(s?.runner).then(setModels)
-  }, [s?.runner])
-
-  // Roles live here now (M23): configuration, not a destination. Independent
-  // of the settings fetch, so it renders in the loading state too.
-  const rolesSection = repo && (
-    <div className="mt-8 border-t border-border-subtle pt-6">
-      <h2 className={`mb-4 ${LABEL}`}>Roles</h2>
-      <RolesView repo={repo} roles={roles} refresh={refresh} />
-    </div>
-  )
-
-  if (!s)
-    return (
-      <div>
-        <p className="text-on-surface-variant">Loading…</p>
-        {rolesSection}
-      </div>
-    )
-
-  const patch = (p: Partial<Settings>): void => {
-    setS({ ...s, ...p })
-    setSaved(false)
+  const patchProviders = (p: Partial<ProvidersSettings>): void => {
+    patch({ providers: { ...s.providers, ...p } })
   }
 
-  const save = async (): Promise<void> => {
-    await window.somni.setSettings(s)
-    setSaved(true)
+  const toggleDisabled = (name: RunnerName, enabled: boolean): void => {
+    const disabled = s.providers?.disabled ?? []
+    patchProviders({ disabled: enabled ? disabled.filter((n) => n !== name) : [...disabled, name] })
+  }
+
+  // Reorder always writes the full display order (not just the saved
+  // fragment) — the first reorder is what materializes it (brief §Task 8).
+  const reorder = (name: RunnerName, dir: -1 | 1): void => {
+    const i = order.indexOf(name)
+    const j = i + dir
+    if (j < 0 || j >= order.length) return
+    const next = [...order]
+    ;[next[i], next[j]] = [next[j], next[i]]
+    patchProviders({ order: next })
+  }
+
+  const patchDefault = (name: RunnerName, d: { model?: string; effort?: Effort }): void => {
+    patchProviders({
+      defaults: { ...s.providers?.defaults, [name]: { ...s.providers?.defaults?.[name], ...d } }
+    })
+  }
+
+  const patchCap = (name: RunnerName, cap: number | undefined): void => {
+    const caps = { ...s.providers?.caps }
+    if (cap === undefined) delete caps[name]
+    else caps[name] = cap
+    patchProviders({ caps })
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl">
+    <>
       <div className="flex flex-col divide-y divide-border-subtle rounded-xl border border-border-subtle bg-surface-elevated p-6">
         <FieldRow label="Max concurrency">
           <input
@@ -241,11 +275,15 @@ export function SettingsView({
         <FieldRow label="Runner">
           <select
             className={`${INPUT} flex-1`}
+            aria-label="Runner"
             value={s.runner}
-            onChange={(e) => patch({ runner: e.target.value as RunnerName })}
+            onChange={(e) => patch({ runner: e.target.value as RunnerChoice })}
           >
+            <option value="auto">Auto (failover)</option>
             <option value="claude">Claude Code (claude)</option>
             <option value="antigravity">Antigravity (agy)</option>
+            <option value="gemini">Gemini CLI (gemini)</option>
+            <option value="codex">Codex (codex)</option>
           </select>
         </FieldRow>
         <FieldRow label="claude binary">
@@ -262,6 +300,24 @@ export function SettingsView({
             placeholder="agy (found on PATH)"
             value={s.antigravityBinary ?? ''}
             onChange={(e) => patch({ antigravityBinary: e.target.value })}
+          />
+        </FieldRow>
+        <FieldRow label="gemini binary">
+          <input
+            className={`${INPUT} flex-1 font-mono-code`}
+            placeholder="gemini (found on PATH)"
+            aria-label="gemini binary"
+            value={s.geminiBinary ?? ''}
+            onChange={(e) => patch({ geminiBinary: e.target.value })}
+          />
+        </FieldRow>
+        <FieldRow label="codex binary">
+          <input
+            className={`${INPUT} flex-1 font-mono-code`}
+            placeholder="codex (found on PATH)"
+            aria-label="codex binary"
+            value={s.codexBinary ?? ''}
+            onChange={(e) => patch({ codexBinary: e.target.value })}
           />
         </FieldRow>
         <FieldRow label="whisper binary">
@@ -301,6 +357,187 @@ export function SettingsView({
           </select>
         </FieldRow>
       </div>
+
+      {/* Providers panel (M26 §8): order/enable/defaults/caps for the
+          failover chain. ↑/↓, not drag-and-drop — ponytail: add drag if
+          someone misses it. Health is the mount-time probe plus Re-check;
+          no polling. */}
+      <div className="mt-6">
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className={LABEL}>Providers</h2>
+          <button className={BTN_GHOST_SM} onClick={onRecheck}>
+            Re-check
+          </button>
+        </div>
+        <div className="flex flex-col divide-y divide-border-subtle rounded-xl border border-border-subtle bg-surface-elevated p-6">
+          {order.map((name, i) => {
+            const h = health.find((x) => x.name === name)
+            const disabled = (s.providers?.disabled ?? []).includes(name)
+            const d = s.providers?.defaults?.[name] ?? {}
+            const cap = s.providers?.caps?.[name]
+            return (
+              <div key={name} className="flex flex-col gap-2 py-3">
+                <div className="flex items-center gap-3">
+                  <span className={h?.ok ? 'text-status-completed' : 'text-on-surface-variant'}>
+                    ●
+                  </span>
+                  <span className="w-32 font-semibold">{PROVIDER_NAMES[name]}</span>
+                  <span className="text-sm text-on-surface-variant">
+                    {h?.ok ? (h.version ?? 'ok') : 'not found'}
+                  </span>
+                  <label className="ml-auto flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className={CHECKBOX}
+                      aria-label={`Enable ${name}`}
+                      checked={!disabled}
+                      onChange={(e) => toggleDisabled(name, e.target.checked)}
+                    />
+                    Enabled
+                  </label>
+                  <button
+                    className={ICON_BTN}
+                    aria-label={`Move ${name} up`}
+                    disabled={i === 0}
+                    onClick={() => reorder(name, -1)}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    className={ICON_BTN}
+                    aria-label={`Move ${name} down`}
+                    disabled={i === order.length - 1}
+                    onClick={() => reorder(name, 1)}
+                  >
+                    ↓
+                  </button>
+                </div>
+                <div className="flex items-center gap-3 pl-7">
+                  <input
+                    className={`${INPUT} flex-1 font-mono-code`}
+                    list={`providers-model-${name}`}
+                    placeholder="CLI default"
+                    aria-label={`${name} default model`}
+                    value={d.model ?? ''}
+                    onChange={(e) => patchDefault(name, { model: e.target.value })}
+                  />
+                  <datalist id={`providers-model-${name}`}>
+                    {(providerModels[name] ?? []).map((m) => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
+                  <select
+                    className={INPUT}
+                    aria-label={`${name} default effort`}
+                    value={d.effort ?? ''}
+                    onChange={(e) =>
+                      patchDefault(name, { effort: (e.target.value || undefined) as Effort })
+                    }
+                  >
+                    <option value="">CLI default</option>
+                    <option value="low">low</option>
+                    <option value="medium">medium</option>
+                    <option value="high">high</option>
+                  </select>
+                  <input
+                    className={`${INPUT} w-20`}
+                    type="number"
+                    min="1"
+                    placeholder="cap"
+                    aria-label={`${name} cap`}
+                    value={cap ?? ''}
+                    onChange={(e) =>
+                      patchCap(name, e.target.value ? Number(e.target.value) : undefined)
+                    }
+                  />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </>
+  )
+}
+
+export function SettingsView({
+  repo,
+  roles,
+  refresh
+}: {
+  repo: string | null
+  roles: Role[]
+  refresh: () => void
+}): React.JSX.Element {
+  const [s, setS] = useState<Settings | null>(null)
+  const [saved, setSaved] = useState(false)
+  const [models, setModels] = useState<string[]>([])
+  const [health, setHealth] = useState<ProviderHealth[]>([])
+  const [providerModels, setProviderModels] = useState<Partial<Record<RunnerName, string[]>>>({})
+
+  useEffect(() => {
+    void window.somni.getSettings().then(setS)
+  }, [])
+
+  // Keyed on the unsaved form value: switching runner re-suggests immediately.
+  useEffect(() => {
+    void window.somni.listModels(s?.runner).then(setModels)
+  }, [s?.runner])
+
+  const checkProviders = (): void => {
+    void window.somni.providersStatus().then(setHealth)
+  }
+
+  // Probed once on mount, same as checkProviders — the panel's Re-check
+  // button is the only other trigger (no polling).
+  useEffect(() => {
+    checkProviders()
+    void Promise.all(RUNNER_NAMES.map((n) => window.somni.listModels(n))).then((lists) => {
+      const byName = Object.fromEntries(RUNNER_NAMES.map((n, i) => [n, lists[i]])) as Record<
+        RunnerName,
+        string[]
+      >
+      setProviderModels(byName)
+    })
+  }, [])
+
+  // Roles live here now (M23): configuration, not a destination. Independent
+  // of the settings fetch, so it renders in the loading state too.
+  const rolesSection = repo && (
+    <div className="mt-8 border-t border-border-subtle pt-6">
+      <h2 className={`mb-4 ${LABEL}`}>Roles</h2>
+      <RolesView repo={repo} roles={roles} refresh={refresh} />
+    </div>
+  )
+
+  if (!s)
+    return (
+      <div>
+        <p className="text-on-surface-variant">Loading…</p>
+        {rolesSection}
+      </div>
+    )
+
+  const patch = (p: Partial<Settings>): void => {
+    setS({ ...s, ...p })
+    setSaved(false)
+  }
+
+  const save = async (): Promise<void> => {
+    await window.somni.setSettings(s)
+    setSaved(true)
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-4xl">
+      <SettingsForm
+        s={s}
+        patch={patch}
+        models={models}
+        health={health}
+        providerModels={providerModels}
+        onRecheck={checkProviders}
+      />
       <div className="mt-4 flex items-center gap-3">
         <button className={BTN_PRIMARY} onClick={save}>
           Save

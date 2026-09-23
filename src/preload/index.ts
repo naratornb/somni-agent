@@ -38,6 +38,7 @@ export type {
   ItemKind,
   ItemStatus,
   Methodology,
+  ProvidersSettings,
   RepoData,
   ReportStyle,
   ResolvedSettings,

@@ -6,7 +6,7 @@
 // tester's. Add a DOM environment only if that gap ever bites.
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, test } from 'vitest'
-import type { Item, ProviderHealth, RunDetails, RunRow } from '../../preload/index'
+import type { Item, ProviderHealth, RunDetails, RunRow, Settings } from '../../preload/index'
 import App from './App'
 import { GroomView } from './GroomView'
 import { HomeView } from './HomeView'
@@ -18,7 +18,7 @@ import { Playground } from './Playground'
 import { RolesView } from './RolesView'
 import { RunDetailsPanel, RunsView } from './RunsView'
 import { SessionsView } from './SessionsView'
-import { SettingsView } from './SettingsView'
+import { SettingsForm, SettingsView } from './SettingsView'
 import {
   MicButton,
   ProposalPreview,
@@ -711,6 +711,23 @@ function findButton(node: unknown): { props: { onClick?: () => void } } | undefi
   return undefined
 }
 
+// Same idea as findButton, but by aria-label — the Providers panel has four
+// of everything (checkbox, ↑, ↓), so "first button" isn't enough.
+function findByLabel(
+  node: unknown,
+  label: string
+): { props: Record<string, unknown> } | undefined {
+  if (!node || typeof node !== 'object') return undefined
+  const el = node as { props?: Record<string, unknown> }
+  if (el.props?.['aria-label'] === label) return el as { props: Record<string, unknown> }
+  const children = el.props?.children
+  for (const c of Array.isArray(children) ? children : [children]) {
+    const found = findByLabel(c, label)
+    if (found) return found
+  }
+  return undefined
+}
+
 // M26 §3: the zero-provider guided setup. Every provider down (the App gate's
 // trigger condition) is the fixture; this asserts the screen itself.
 test('ProvidersSetup shows every provider install guide and re-checks on click', () => {
@@ -730,6 +747,143 @@ test('ProvidersSetup shows every provider install guide and re-checks on click',
   const button = findButton(ProvidersSetup({ health, onRecheck: () => (recheck = true) }))
   button?.props.onClick?.()
   expect(recheck).toBe(true)
+})
+
+// Task 8: the extracted (hookless) form body — SettingsView owns the effects
+// and state, SettingsForm is plain props-in/patch-out, so it's callable
+// directly here the same way ProvidersSetup is above.
+const baseSettings: Settings = {
+  runner: 'claude',
+  concurrency: 2,
+  timeoutMinutes: 30,
+  reportStyle: 'minimal',
+  methodology: 'pocock'
+}
+const baseHealth: ProviderHealth[] = [
+  { name: 'claude', ok: true, binary: 'claude', version: '1.2.3' },
+  { name: 'antigravity', ok: false, binary: 'agy' },
+  { name: 'gemini', ok: true, binary: 'gemini' },
+  { name: 'codex', ok: false, binary: 'codex' }
+]
+function formProps(
+  overrides: Partial<Parameters<typeof SettingsForm>[0]> = {}
+): Parameters<typeof SettingsForm>[0] {
+  return {
+    s: baseSettings,
+    patch: () => {},
+    models: [],
+    health: baseHealth,
+    providerModels: {},
+    onRecheck: () => {},
+    ...overrides
+  }
+}
+
+test('SettingsForm renders a Providers section with all four rows and the Auto runner option', () => {
+  const html = renderToStaticMarkup(<>{SettingsForm(formProps())}</>)
+  expect(html).toContain('Claude Code')
+  expect(html).toContain('Codex')
+  expect(html).toContain('Gemini CLI')
+  expect(html).toContain('Antigravity')
+  expect(html).toContain('Auto (failover)')
+})
+
+test('SettingsForm runner select offers Auto (failover) and writes the RunnerChoice value', () => {
+  let patched: Partial<Settings> | undefined
+  const tree = SettingsForm(formProps({ patch: (p) => (patched = p) }))
+  const select = findByLabel(tree, 'Runner')
+  ;(select?.props.onChange as (e: { target: { value: string } }) => void)?.({
+    target: { value: 'auto' }
+  })
+  expect(patched?.runner).toBe('auto')
+})
+
+test("SettingsForm's Providers row checkbox patches providers.disabled and round-trips", () => {
+  let patched: Partial<Settings> | undefined
+  const tree = SettingsForm(formProps({ patch: (p) => (patched = p) }))
+  const checkbox = findByLabel(tree, 'Enable gemini')
+  ;(checkbox?.props.onChange as (e: { target: { checked: boolean } }) => void)?.({
+    target: { checked: false }
+  })
+  expect(patched?.providers?.disabled).toEqual(['gemini'])
+
+  // Re-enabling from that resulting state removes it again.
+  const tree2 = SettingsForm(
+    formProps({
+      s: { ...baseSettings, providers: { disabled: ['gemini'] } },
+      patch: (p) => (patched = p)
+    })
+  )
+  const checkbox2 = findByLabel(tree2, 'Enable gemini')
+  ;(checkbox2?.props.onChange as (e: { target: { checked: boolean } }) => void)?.({
+    target: { checked: true }
+  })
+  expect(patched?.providers?.disabled).toEqual([])
+})
+
+test("SettingsForm's Providers default model/effort inputs patch providers.defaults[name]", () => {
+  let patched: Partial<Settings> | undefined
+  const tree = SettingsForm(formProps({ patch: (p) => (patched = p) }))
+  const model = findByLabel(tree, 'gemini default model')
+  ;(model?.props.onChange as (e: { target: { value: string } }) => void)?.({
+    target: { value: 'gemini-2.5-pro' }
+  })
+  expect(patched?.providers?.defaults?.gemini).toEqual({ model: 'gemini-2.5-pro' })
+
+  const effort = findByLabel(tree, 'gemini default effort')
+  ;(effort?.props.onChange as (e: { target: { value: string } }) => void)?.({
+    target: { value: 'high' }
+  })
+  expect(patched?.providers?.defaults?.gemini).toEqual({ effort: 'high' })
+})
+
+test("SettingsForm's Providers cap input patches providers.caps[name], empty clears", () => {
+  let patched: Partial<Settings> | undefined
+  const tree = SettingsForm(
+    formProps({
+      s: { ...baseSettings, providers: { caps: { gemini: 3 } } },
+      patch: (p) => (patched = p)
+    })
+  )
+  const cap = findByLabel(tree, 'gemini cap')
+  ;(cap?.props.onChange as (e: { target: { value: string } }) => void)?.({ target: { value: '5' } })
+  expect(patched?.providers?.caps).toEqual({ gemini: 5 })
+
+  // Empty clears the entry rather than writing NaN/0.
+  const tree2 = SettingsForm(
+    formProps({
+      s: { ...baseSettings, providers: { caps: { gemini: 5 } } },
+      patch: (p) => (patched = p)
+    })
+  )
+  const cap2 = findByLabel(tree2, 'gemini cap')
+  ;(cap2?.props.onChange as (e: { target: { value: string } }) => void)?.({ target: { value: '' } })
+  expect(patched?.providers?.caps).toEqual({})
+})
+
+test("SettingsForm's Providers ↑ button on the second row patches providers.order with the swap", () => {
+  let patched: Partial<Settings> | undefined
+  const tree = SettingsForm(formProps({ patch: (p) => (patched = p) }))
+  // Default display order is claude, codex, gemini, antigravity — codex is row 2.
+  const up = findByLabel(tree, 'Move codex up')
+  ;(up?.props.onClick as () => void)?.()
+  expect(patched?.providers?.order).toEqual(['codex', 'claude', 'gemini', 'antigravity'])
+})
+
+test('SettingsForm gemini/codex binary inputs patch geminiBinary/codexBinary', () => {
+  let patched: Partial<Settings> | undefined
+  const tree = SettingsForm(formProps({ patch: (p) => (patched = p) }))
+  const gemini = findByLabel(tree, 'gemini binary')
+  ;(gemini?.props.onChange as (e: { target: { value: string } }) => void)?.({
+    target: { value: '/usr/local/bin/gemini' }
+  })
+  expect(patched?.geminiBinary).toBe('/usr/local/bin/gemini')
+
+  const codex = findByLabel(tree, 'codex binary')
+  ;(codex?.props.onChange as (e: { target: { value: string } }) => void)?.({
+    target: { value: '/usr/local/bin/codex' }
+  })
+  expect(patched?.codexBinary).toBe('/usr/local/bin/codex')
 })
 
 // M23 #31: the auto-run path's promise — the Apply button reads "Apply & run"
