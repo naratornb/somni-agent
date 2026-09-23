@@ -68,6 +68,13 @@ describe('nextAvailableAt', () => {
     markAuthFailed('codex')
     expect(nextAvailableAt({}, 'codex', T0)).toBeNull()
   })
+
+  it('pinned-disabled provider returns null and stays unavailable', () => {
+    markOk('claude')
+    const s = { providers: { disabled: ['claude'] as const } }
+    expect(nextAvailableAt(s as never, 'claude', T0)).toBeNull()
+    expect(isAvailable('claude', s as never, T0)).toBe(false)
+  })
 })
 
 describe('acquireSlot', () => {
@@ -88,5 +95,21 @@ describe('acquireSlot', () => {
     const a = await acquireSlot('codex', {})
     const b = await acquireSlot('codex', {})
     a(); b()
+  })
+
+  it('release is idempotent; double release does not over-grant', async () => {
+    const s = { providers: { caps: { claude: 1 } } }
+    const r1 = await acquireSlot('claude', s as never)
+    r1() // first release
+    r1() // second release (should be no-op)
+    const r2 = await acquireSlot('claude', s as never)
+    let got3 = false
+    const p3 = acquireSlot('claude', s as never).then((r) => ((got3 = true), r))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(got3).toBe(false) // should still be waiting
+    r2()
+    const r3 = await p3
+    expect(got3).toBe(true)
+    r3()
   })
 })

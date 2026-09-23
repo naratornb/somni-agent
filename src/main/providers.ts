@@ -58,8 +58,9 @@ export function nextAvailableAt(
   choice: RunnerChoice | undefined,
   now = Date.now()
 ): number | null {
+  const chain = providerChain(settings)
   const candidates =
-    !choice || choice === 'auto' ? providerChain(settings) : ([choice] as RunnerName[])
+    !choice || choice === 'auto' ? chain : ([choice] as RunnerName[]).filter((n) => chain.includes(n))
   const times = candidates
     .filter((n) => !health.get(n)?.parked)
     .map((n) => health.get(n)?.cooldownUntil ?? now)
@@ -70,7 +71,10 @@ export function nextAvailableAt(
 // concurrency stays the outer ceiling. No cap configured = never waits.
 export function acquireSlot(name: RunnerName, settings: Settings): Promise<() => void> {
   const cap = settings.providers?.caps?.[name] ?? Infinity
+  let consumed = false
   const release = (): void => {
+    if (consumed) return
+    consumed = true
     running.set(name, (running.get(name) ?? 1) - 1)
     waiters.get(name)?.shift()?.()
   }
