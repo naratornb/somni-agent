@@ -18,7 +18,7 @@ import { diffFiles, RunStats, runStats } from './report'
 import { getRunner, runnerStatus } from './runners'
 import { turn } from './turn'
 import * as store from './store'
-import { atomicWrite, RunnerName, Settings } from './store'
+import { atomicWrite, RunnerChoice, Settings } from './store'
 
 // Machine-level settings (architecture.md §4): last-opened repo + global defaults.
 const settingsPath = (): string => join(app.getPath('userData'), 'settings.json')
@@ -307,7 +307,7 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
 
   // Model suggestions for the combo boxes. The inherit case (role editor sends
   // undefined) resolves to the settings runner here, never renderer-side.
-  ipcMain.handle('models:list', (_e, runnerName?: RunnerName) => {
+  ipcMain.handle('models:list', (_e, runnerName?: RunnerChoice) => {
     const settings = readSettings()
     const runner = getRunner(runnerName ?? settings.runner ?? 'claude', settings)
     const key = `${runner.name}:${runner.binary}`

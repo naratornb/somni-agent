@@ -11,7 +11,7 @@ import { join } from 'path'
 import type { WebContents } from 'electron'
 import { spawnRunner, TaskEvent } from './runner'
 import { getRunner } from './runners'
-import type { Effort, RunnerName, Settings } from './store'
+import type { Effort, RunnerChoice, Settings } from './store'
 
 export const TURN_TIMEOUT_MS = 30 * 60_000 // fallback; settings.timeoutMinutes wins
 const KILL_GRACE_MS = 5_000 // SIGTERM → SIGKILL grace
@@ -32,7 +32,7 @@ export type TurnRequest = {
   cwd: string
   // Per-turn profile overrides (Subtasks resolve role → repo → global);
   // omitted fields fall back to the settings' own runner/model/effort.
-  runner?: RunnerName
+  runner?: RunnerChoice
   model?: string
   effort?: Effort
   resumeSessionId?: string

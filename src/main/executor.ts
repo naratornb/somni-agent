@@ -27,7 +27,7 @@ import {
   loadItems,
   loadRepo,
   resolveProfile,
-  RunnerName,
+  RunnerChoice,
   setItemStatus,
   Settings,
   slugify,
@@ -58,7 +58,7 @@ export type TaskRun = {
   promptTokens?: number
   completionTokens?: number
   error?: string
-  runner?: RunnerName
+  runner?: RunnerChoice
   model?: string
   effort?: string
   log: string

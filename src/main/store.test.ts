@@ -18,6 +18,8 @@ import {
   readyBlocker,
   resolveProfile,
   resolveSettings,
+  providerChain,
+  DEFAULT_PROVIDER_ORDER,
   setItemStatus,
   archiveStaleSessions,
   reopenSession
@@ -288,6 +290,24 @@ describe('execution profile & settings resolution', () => {
   it('round-trips a runner override through role frontmatter', () => {
     saveRole(repo, { slug: 'dev', name: 'Dev', preamble: 'p', runner: 'antigravity' })
     expect(loadRepo(repo).roles[0].runner).toBe('antigravity')
+  })
+
+  it('providerChain defaults to claude-first over all four providers', () => {
+    expect(providerChain({})).toEqual(['claude', 'codex', 'gemini', 'antigravity'])
+    expect(DEFAULT_PROVIDER_ORDER).toEqual(['claude', 'codex', 'gemini', 'antigravity'])
+  })
+
+  it('providerChain honors order, appends unlisted, drops disabled and junk', () => {
+    expect(
+      providerChain({
+        providers: { order: ['codex', 'bogus' as never, 'claude'], disabled: ['antigravity'] }
+      })
+    ).toEqual(['codex', 'claude', 'gemini'])
+  })
+
+  it('resolveProfile passes auto through untouched', () => {
+    expect(resolveProfile(undefined, { runner: 'auto' }).runner).toBe('auto')
+    expect(resolveProfile({ runner: 'codex' }, { runner: 'auto' }).runner).toBe('codex')
   })
 })
 

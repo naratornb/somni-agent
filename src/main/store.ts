@@ -14,13 +14,26 @@ import { dirname, join } from 'path'
 
 export type Effort = 'low' | 'medium' | 'high'
 export type ReportStyle = 'minimal' | 'compact' | 'full'
-export type RunnerName = 'claude' | 'antigravity'
-export const RUNNER_NAMES: RunnerName[] = ['claude', 'antigravity']
+export type RunnerName = 'claude' | 'antigravity' | 'gemini' | 'codex'
+export const RUNNER_NAMES: RunnerName[] = ['claude', 'antigravity', 'gemini', 'codex']
+// 'auto' walks the provider chain at task start (M26 §2); concrete names pin.
+export type RunnerChoice = RunnerName | 'auto'
 // The selectable engineering discipline (docs/adr/0002): governs the grooming
 // and run prompts plus which vendored skills are injected — never the item model.
 export type Methodology = 'pocock' | 'superpowers'
 export const METHODOLOGIES: Methodology[] = ['pocock', 'superpowers']
-export type Profile = { runner?: RunnerName; model?: string; effort?: Effort }
+export type Profile = { runner?: RunnerChoice; model?: string; effort?: Effort }
+export type ProviderDefaults = { model?: string; effort?: Effort }
+// Failover chain config (M26): order/disabled shape the chain; defaults supply
+// the model/effort an 'auto' task uses per provider (model ids are provider-
+// specific, so a single profile model string cannot serve the chain); caps
+// bound concurrent tasks per provider (global `concurrency` stays the ceiling).
+export type ProvidersSettings = {
+  order?: RunnerName[]
+  disabled?: RunnerName[]
+  defaults?: Partial<Record<RunnerName, ProviderDefaults>>
+  caps?: Partial<Record<RunnerName, number>>
+}
 export type Settings = Profile & {
   concurrency?: number
   timeoutMinutes?: number
@@ -28,6 +41,9 @@ export type Settings = Profile & {
   // Empty = look the binary up on PATH (§8).
   claudeBinary?: string
   antigravityBinary?: string
+  geminiBinary?: string
+  codexBinary?: string
+  providers?: ProvidersSettings
   // Voice input (M12 Decision 1) — empty = look up `whisper-cli` on PATH.
   whisperBinary?: string
   // Nightly Window (M9 Decision 5): the time survives a disarm; armed persists
@@ -53,7 +69,7 @@ export const SETTINGS_DEFAULTS = {
   concurrency: 2,
   timeoutMinutes: 30,
   reportStyle: 'minimal' as ReportStyle,
-  runner: 'claude' as RunnerName,
+  runner: 'claude' as RunnerChoice,
   methodology: 'pocock' as Methodology,
   voiceAutoGroom: false
 }
@@ -267,6 +283,17 @@ export function resolveProfile(role: Profile | undefined, settings: Settings): P
     model: role?.model ?? settings.model,
     effort: role?.effort ?? settings.effort
   }
+}
+
+export const DEFAULT_PROVIDER_ORDER: RunnerName[] = ['claude', 'codex', 'gemini', 'antigravity']
+
+// The failover chain (M26 §2): configured order first, unlisted providers
+// appended in default order, disabled and unknown names dropped.
+export function providerChain(settings: Settings): RunnerName[] {
+  const order = (settings.providers?.order ?? []).filter((n) => RUNNER_NAMES.includes(n))
+  const disabled = new Set(settings.providers?.disabled ?? [])
+  const full = [...order, ...DEFAULT_PROVIDER_ORDER.filter((n) => !order.includes(n))]
+  return full.filter((n) => !disabled.has(n))
 }
 
 // Per-repo overrides layered over the machine-global settings (§4).
