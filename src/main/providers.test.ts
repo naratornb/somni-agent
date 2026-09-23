@@ -5,6 +5,7 @@ import {
   markAuthFailed,
   markMissing,
   markOk,
+  markPresent,
   markRateLimited,
   nextAvailableAt,
   pickAuto,
@@ -41,6 +42,23 @@ describe('availability', () => {
     expect(isAvailable('codex', {}, T0)).toBe(false)
     expect(isAvailable('gemini', {}, T0)).toBe(false)
     markOk('codex')
+    expect(isAvailable('codex', {}, T0)).toBe(true)
+  })
+
+  // M26 fix: a providersStatus probe answering --version proves the binary is
+  // present, not that a rate limit cleared — it must never wipe a cooldown.
+  it('markPresent after a rate limit stays cooled down, and cooldown growth survives it', () => {
+    markRateLimited('claude', T0)
+    markPresent('claude')
+    expect(isAvailable('claude', {}, T0)).toBe(false) // still cooling down
+    expect(isAvailable('claude', {}, T0 + 5 * 60_000 + 1)).toBe(true) // cooldown untouched
+    expect(markRateLimited('claude', T0) - T0).toBe(10 * 60_000) // doubled from where it was
+  })
+
+  it('markPresent clears auth-failed/missing parking like markOk does', () => {
+    markAuthFailed('codex')
+    expect(isAvailable('codex', {}, T0)).toBe(false)
+    markPresent('codex')
     expect(isAvailable('codex', {}, T0)).toBe(true)
   })
 

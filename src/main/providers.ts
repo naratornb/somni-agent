@@ -43,6 +43,13 @@ export function markOk(name: RunnerName): void {
   health.set(name, { nextCooldownMs: COOLDOWN_START_MS })
 }
 
+// A CLI answering --version proves the binary is present, not that a rate
+// limit has cleared (limits are API-level; the CLI still runs). Only clears
+// the parked flag — cooldownUntil/nextCooldownMs are markOk's turn alone.
+export function markPresent(name: RunnerName): void {
+  get(name).parked = false
+}
+
 export function isAvailable(name: RunnerName, settings: Settings, now = Date.now()): boolean {
   if (!providerChain(settings).includes(name)) return false
   const h = health.get(name)
