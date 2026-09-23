@@ -10,6 +10,7 @@ import {
   codexRunner,
   geminiRunner,
   getRunner,
+  providersStatus,
   runnerStatus
 } from './runners'
 
@@ -277,6 +278,36 @@ describe('runnerStatus', () => {
     await expect(runnerStatus({ claudeBinary: bin })).resolves.toMatchObject({ ok: false })
     const fixed = fixture('echo 1.0.0')
     await expect(runnerStatus({ claudeBinary: fixed })).resolves.toMatchObject({ ok: true })
+  })
+})
+
+// The Providers panel + zero-provider onboarding probe every provider at once
+// (M26 §3) — same fixture idiom as runnerStatus, one stub per binary.
+describe('providersStatus', () => {
+  const fixture = (body: string): string => {
+    const path = join(mkdtempSync(join(tmpdir(), 'somni-providers-')), 'bin')
+    writeFileSync(path, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+    return path
+  }
+
+  it('probes every provider and reports version; a missing binary reports not ok', async () => {
+    const stub = fixture('echo 1.0.0')
+    const all = await providersStatus({
+      claudeBinary: stub,
+      antigravityBinary: stub,
+      codexBinary: stub,
+      geminiBinary: '/nope/gemini'
+    })
+    expect(all).toHaveLength(4)
+    expect(all.find((h) => h.name === 'gemini')).toMatchObject({
+      ok: false,
+      binary: '/nope/gemini'
+    })
+    expect(all.find((h) => h.name === 'claude')).toMatchObject({
+      ok: true,
+      binary: stub,
+      version: '1.0.0'
+    })
   })
 })
 

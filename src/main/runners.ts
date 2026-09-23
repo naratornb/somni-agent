@@ -4,7 +4,9 @@
 
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { markMissing, markOk } from './providers'
 import type { StreamEvent } from './stream'
+import { RUNNER_NAMES } from './store'
 import type { Effort, RunnerChoice, RunnerName, Settings } from './store'
 
 export type RunnerOpts = {
@@ -332,4 +334,26 @@ export async function runnerStatus(settings: Settings = {}): Promise<RunnerHealt
   } catch {
     return { ok: false, binary }
   }
+}
+
+export type ProviderHealth = { name: RunnerName; ok: boolean; binary: string; version?: string }
+
+// Probe every provider in parallel — the Providers panel and the zero-provider
+// guided setup (M26 §3) both need the whole picture, not just the configured
+// runner. Side effect: each probe syncs providers.ts parking (markOk/
+// markMissing) — this doubles as the re-login "try again" for a parked provider.
+export async function providersStatus(settings: Settings = {}): Promise<ProviderHealth[]> {
+  return Promise.all(
+    RUNNER_NAMES.map(async (name): Promise<ProviderHealth> => {
+      const { binary } = getRunner(name, settings)
+      try {
+        const { stdout } = await execFileAsync(binary, ['--version'], { timeout: 10_000 })
+        markOk(name)
+        return { name, ok: true, binary, version: stdout.trim().split('\n')[0] || undefined }
+      } catch {
+        markMissing(name)
+        return { name, ok: false, binary }
+      }
+    })
+  )
 }

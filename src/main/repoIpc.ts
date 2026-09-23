@@ -15,7 +15,7 @@ import { handoff } from './sessions'
 import { isRunning, loadRuns, RunState, wakeDrain } from './executor'
 import { lockedGit } from './git'
 import { diffFiles, RunStats, runStats } from './report'
-import { getRunner, runnerStatus } from './runners'
+import { getRunner, providersStatus, runnerStatus } from './runners'
 import { turn } from './turn'
 import * as store from './store'
 import { atomicWrite, RunnerChoice, Settings } from './store'
@@ -161,6 +161,8 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
   ipcMain.handle('settings:get', () => ({ ...store.SETTINGS_DEFAULTS, ...readSettings() }))
   // Runner health (M22): probed fresh per ask, off the settings on disk.
   ipcMain.handle('runner:status', () => runnerStatus(readSettings()))
+  // Every provider at once (M26 §3): Providers panel + zero-provider onboarding.
+  ipcMain.handle('providers:status', () => providersStatus(readSettings()))
 
   ipcMain.handle('settings:set', (_e, s: Settings) => {
     patchSettings(s)

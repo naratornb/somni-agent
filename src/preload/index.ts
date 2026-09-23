@@ -15,7 +15,7 @@ import type {
   RunnerChoice,
   Settings
 } from '../main/store'
-import type { RunnerHealth } from '../main/runners'
+import type { ProviderHealth, RunnerHealth } from '../main/runners'
 import type { ModelProgress, Transcription, VoiceStatus } from '../main/voice'
 
 export type { ChatEvent, ChatMessage, ChatProposal, ChatQuestion, GroomedStory } from '../main/chat'
@@ -48,6 +48,9 @@ export type {
   Task
 } from '../main/store'
 export type { ModelProgress, Transcription, VoiceStatus } from '../main/voice'
+// ProviderHealth is named directly by the renderer (ProvidersSetup's prop),
+// unlike RunnerHealth above which only ever appears inferred.
+export type { ProviderHealth } from '../main/runners'
 
 export type PipelinePush = { status: PipelineStatus; resumeAt?: string; mode?: DrainMode | null }
 
@@ -115,6 +118,8 @@ const somni = {
   suggestions: (repo: string): Promise<string[]> => ipcRenderer.invoke('repo:suggestions', repo),
   // Health of the configured Runner CLI (M22) — probed fresh on each ask.
   runnerStatus: (): Promise<RunnerHealth> => ipcRenderer.invoke('runner:status'),
+  // Health of every provider at once (M26 §3) — Providers panel + onboarding.
+  providersStatus: (): Promise<ProviderHealth[]> => ipcRenderer.invoke('providers:status'),
   // Voice input (M12). Capture is renderer-side; everything else is main's.
   voiceStatus: (): Promise<VoiceStatus> => ipcRenderer.invoke('voice:status'),
   downloadModel: (): Promise<{ ok: boolean; error?: string }> =>

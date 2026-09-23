@@ -6,12 +6,13 @@
 // tester's. Add a DOM environment only if that gap ever bites.
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, test } from 'vitest'
-import type { Item, RunDetails, RunRow } from '../../preload/index'
+import type { Item, ProviderHealth, RunDetails, RunRow } from '../../preload/index'
 import App from './App'
 import { GroomView } from './GroomView'
 import { HomeView } from './HomeView'
 import { BoardView } from './BoardView'
 import { PipelineView } from './PipelineView'
+import { ProvidersSetup } from './ProvidersSetup'
 import { StoryPanel } from './StoryPanel'
 import { Playground } from './Playground'
 import { RolesView } from './RolesView'
@@ -694,6 +695,41 @@ test('SettingsView with a repo renders the Roles section', () => {
   const html = renderToStaticMarkup(<SettingsView repo="/repo" roles={roles} refresh={() => {}} />)
   expect(html).toContain('Roles')
   expect(html).toContain('Developer')
+})
+
+// No DOM harness in this suite (SSR only, see the file banner) — walk a
+// returned element tree by hand to find a button and invoke its onClick.
+function findButton(node: unknown): { props: { onClick?: () => void } } | undefined {
+  if (!node || typeof node !== 'object') return undefined
+  const el = node as { type?: unknown; props?: { onClick?: () => void; children?: unknown } }
+  if (el.type === 'button') return el as { props: { onClick?: () => void } }
+  const children = el.props?.children
+  for (const c of Array.isArray(children) ? children : [children]) {
+    const found = findButton(c)
+    if (found) return found
+  }
+  return undefined
+}
+
+// M26 §3: the zero-provider guided setup. Every provider down (the App gate's
+// trigger condition) is the fixture; this asserts the screen itself.
+test('ProvidersSetup shows every provider install guide and re-checks on click', () => {
+  const health: ProviderHealth[] = [
+    { name: 'claude', ok: false, binary: 'claude' },
+    { name: 'antigravity', ok: false, binary: 'agy' },
+    { name: 'gemini', ok: false, binary: 'gemini' },
+    { name: 'codex', ok: false, binary: 'codex' }
+  ]
+  const html = renderToStaticMarkup(<ProvidersSetup health={health} onRecheck={() => {}} />)
+  expect(html).toContain('npm install -g @anthropic-ai/claude-code')
+  expect(html).toContain('npm install -g @openai/codex')
+  expect(html).toContain('npm install -g @google/gemini-cli')
+  expect(html).toContain('agy login')
+
+  let recheck = false
+  const button = findButton(ProvidersSetup({ health, onRecheck: () => (recheck = true) }))
+  button?.props.onClick?.()
+  expect(recheck).toBe(true)
 })
 
 // M23 #31: the auto-run path's promise — the Apply button reads "Apply & run"
