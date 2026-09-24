@@ -38,6 +38,8 @@ somni speaks two vocabularies on purpose: **work items** use the industry's Jira
 - **Run** — the persisted execution record of one Story within one Pipeline (statuses, attempts, costs, report).
 - **Turn** — one prompt→reply exchange with a Runner: exactly one attempt, always time-bounded, always cancellable. Every AI feature (Subtask execution, Grooming replies, Review/Fix, Reports, Refine) is made of Turns; how many Turns something deserves is Pipeline or Grooming policy, never the Turn's.
 - **Report** — the morning-review summary of a Run (Minimal / Compact / Full), read at Acceptance time.
+- **Branch Review** — the merge-decision grade on a finished Run: a provider different from the implementer reads the Story's Spec and the whole branch diff (embedded, tool-free) and answers approve / needs-work / reject with reasons. Needs-work buys exactly one fix round; reject parks immediately; an unreviewable run is ungraded and never held hostage.
+- **Merge** — the user's deliberate act that lands an approved Run's branch on their checked-out work branch: plain, refused on a dirty tree, aborted on conflict — never forced. Orthogonal to Acceptance.
 
 ## Grooming machinery
 
