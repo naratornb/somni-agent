@@ -5,7 +5,10 @@ import { STATUS_CHIP, statusChip as chipClass } from './ui'
 export type LogLine = { taskIndex: number; text: string }
 
 type Props = {
-  runs: Record<string, RunState> // keyed by runId, this pipeline only
+  // keyed by runId — only this session's live-pushed runs (App.tsx filters by
+  // its liveRunIds ref before passing down), so Home's pipeline stays
+  // session-scoped instead of showing every run on disk (M29 final review).
+  runs: Record<string, RunState>
   logs: Record<string, LogLine[]>
   busy: boolean
   drain: DrainState | null

@@ -101,10 +101,12 @@ export async function mergeAndReport(repo: string, runId: string): Promise<strin
 /**
  * Runs seeding (M29 item 1): `listRuns(repo)` on load/refresh gives prior
  * runs their Board grade chip + Merge back — durable across restarts, not
- * just what this session's pipeline pushed live. Disk is the seed; a live
- * `onRunState` push is always truer than the last listRuns snapshot, so it
- * merges disk underneath whatever's already in state, never overwriting a
- * key both sides have.
+ * just what this session's pipeline pushed live. Disk is the seed; the
+ * caller passes only this session's live-pushed entries as `live` (App.tsx
+ * filters full state through `pick` first — see the stale-wins fix below),
+ * so a live `onRunState` push always wins for a key both sides have, and a
+ * key seedRuns produced on some EARLIER refresh but was never itself pushed
+ * live can never masquerade as live on a later one.
  */
 export const seedRuns = (
   fromDisk: RunRow[],
@@ -113,6 +115,21 @@ export const seedRuns = (
   ...Object.fromEntries(fromDisk.map((r) => [r.runId, r])),
   ...live
 })
+
+/**
+ * Restrict a runs map to only the given ids (M29 final review fix). Two
+ * callers: `seedRuns`'s `live` argument (App.tsx passes `pick(state,
+ * liveRunIds)`, not the raw state — the raw state is disk-seeded too after
+ * the first refresh, so passing it whole would make every past refresh look
+ * live forever and no later disk write could ever update it again) and
+ * Home's PipelineView (scoped to this session's activity, not the Board's
+ * full seeded history).
+ */
+export const pick = (
+  state: Record<string, RunState>,
+  ids: ReadonlySet<string>
+): Record<string, RunState> =>
+  Object.fromEntries(Object.entries(state).filter(([id]) => ids.has(id)))
 
 export const KIND_CHIP: Record<'idea' | 'story' | 'epic', string> = {
   idea: CHIP,

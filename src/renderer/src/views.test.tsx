@@ -47,6 +47,7 @@ import {
   mergeAndReport,
   nextRounds,
   paletteResults,
+  pick,
   railOrder,
   reorderBacklog,
   saveCapture,
@@ -688,6 +689,42 @@ test('seedRuns merges disk under live state — a live push always wins over the
   expect(merged.r1.status).toBe('Running')
   // r2 only exists on disk — it still comes through.
   expect(merged.r2.status).toBe('Completed')
+})
+
+// M29 final review fix: `runs` state left over from an EARLIER seedRuns is
+// not "live" just because it's in state — only what onRunState has actually
+// pushed this session is. `pick` is that filter; App.tsx runs it over the
+// current `runs` map before handing it to seedRuns as the `live` argument.
+test('pick keeps only the given ids — a stale seeded key never masquerades as live', () => {
+  const state: Record<string, RunState> = {
+    r1: { runId: 'r1', status: 'Running' } as RunState, // seeded, never pushed live
+    r2: { runId: 'r2', status: 'Running' } as RunState // pushed live via onRunState
+  }
+  expect(pick(state, new Set(['r2']))).toEqual({ r2: state.r2 })
+})
+
+// The concrete bug this fix closes: Abandon on a crash-orphaned run writes
+// Cancelled to disk with no live push. Without `pick` gating seedRuns's
+// `live` argument, r1's stale seeded-Running entry would outrank the disk
+// write forever, showing a phantom glowing Running card. With it: disk wins
+// for r1 (never live), the live push still wins for r2, and Home's pipeline
+// slice (also `pick`-filtered) only ever contains r2.
+test('pick + seedRuns: disk wins for a seeded-but-never-live run; the pipeline slice excludes it', () => {
+  const disk: RunRow[] = [
+    { runId: 'r1', status: 'Cancelled' } as RunRow, // Abandon wrote this straight to disk
+    { runId: 'r2', status: 'Completed' } as RunRow
+  ]
+  const liveIds = new Set(['r2'])
+  const staleState: Record<string, RunState> = {
+    r1: { runId: 'r1', status: 'Running' } as RunState, // a prior refresh's seed — never live
+    r2: { runId: 'r2', status: 'Running' } as RunState
+  }
+  const board = seedRuns(disk, pick(staleState, liveIds))
+  expect(board.r1.status).toBe('Cancelled') // no phantom Running card
+  expect(board.r2.status).toBe('Running') // live push still wins over disk
+
+  const pipelineSlice = pick(board, liveIds)
+  expect(pipelineSlice).toEqual({ r2: board.r2 }) // r1 never reaches Home's pipeline
 })
 
 // M15 §1: one shared helper builds the captured item — first line is the name,
@@ -1635,8 +1672,18 @@ test('shouldOfferAskMore fires only at the rounds cap, idle, with no pending pro
 // The one-shot bypass: spends `{interactive: true}` on exactly the send it
 // was set for, then reverts — a second consume (the flag already cleared by
 // the first) is a normal turn again.
+//
+// Extended (M29 final review fix): Propose Now routes its fixed message
+// through this same `send`, but must never hijack an armed flag for it —
+// GroomView calls `send(text, false)` for that button specifically, which
+// takes the `consumeAskMore(false)` branch below regardless of whatever
+// `askMoreNext` currently holds: the flag is cleared (already true here,
+// since consumeAskMore always resets to `next: false`), not consumed as
+// `interactive: true`, and the proposal turn takes its normal route.
 test('consumeAskMore spends interactive:true exactly once, then resets', () => {
   expect(consumeAskMore(true)).toEqual({ opts: { interactive: true }, next: false })
+  // Propose Now's call shape: an armed flag passed as `false` clears without
+  // arming `interactive` — the fixed message never consumes the bypass.
   expect(consumeAskMore(false)).toEqual({ opts: undefined, next: false })
 })
 

@@ -33,8 +33,12 @@ const POLL_MS = 25 // real ms between availability checks
 // recomputes and either proceeds or hits its existing null → 'unavailable'
 // fail-fast; this wait never duplicates that check, just stops blocking it.
 // False only on cancel/abort. Polls (not a fixed deadline) so a sibling's
-// markOk — or a slot freed by acquireSlot's release — wakes this wait
-// immediately instead of at the old cooldown deadline. Real-time polling
+// markOk wakes this wait immediately instead of at the old cooldown deadline
+// (fix, M29 final review: a freed cap slot can't wake it — pickAuto's
+// all-capped fallback returns `available[0]` rather than null, so
+// slot-fullness never makes it into `done()` here; a capped task blocks
+// inside acquireSlot's own FIFO instead, entirely separate from this wait).
+// Real-time polling
 // rather than a single setTimeout: `now` may run faster than real time
 // (tests fast-forward a provider's real cooldown), and that delta is on the
 // caller's clock, not a real-ms duration.

@@ -206,14 +206,19 @@ export function GroomView({
     listRef.current?.scrollTo(0, listRef.current.scrollHeight)
   }, [messages.length, streaming])
 
-  const send = async (text: string): Promise<void> => {
+  // `useAskMore` defaults to the armed flag for a normal turn, but Propose
+  // Now (below) passes `false` explicitly: a fixed proposal-now message is
+  // never the interactive answer the flag was armed for, so it must CLEAR
+  // the flag, not consume it — consumeAskMore(false) does exactly that
+  // (proposal turns take their normal, non-interactive route either way).
+  const send = async (text: string, useAskMore = askMoreNext): Promise<void> => {
     if (!text.trim() || sending) return
     setError(null)
     setLastUser(text)
     setMessages((m) => [...m, { role: 'user', text, ts: new Date().toISOString() }])
     setStreaming('')
     setState(null) // main clears the session state on every send (M25.3)
-    const { opts, next } = consumeAskMore(askMoreNext)
+    const { opts, next } = consumeAskMore(useAskMore)
     setAskMoreNext(next)
     const res = await window.somni.sendChat(repo, slug, text, opts)
     if (!res.ok) {
@@ -433,7 +438,9 @@ export function GroomView({
           </button>
           <button
             className={BTN_GHOST}
-            onClick={() => void send(window.somni.proposeNow)}
+            // Fix (M29 final review): pass `false` — Propose Now must clear an
+            // armed ask-more flag, not spend it on this fixed message.
+            onClick={() => void send(window.somni.proposeNow, false)}
             disabled={sending}
           >
             Propose Now
