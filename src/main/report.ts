@@ -127,10 +127,30 @@ export function reviewSection(state: RunState): string[] {
   ]
 }
 
+// The merge-decision grade (M28 §4), at the top of every report style — every
+// style's body starts from minimalReport, so one prepend here covers all three.
+export function gradeLine(state: RunState): string[] {
+  const r = state.review
+  if (!r) return []
+  const notes = [
+    r.sameProvider ? 'same provider' : null,
+    r.diffTruncated ? 'diff truncated' : null,
+    r.fixRound ? 'fix round' : null
+  ].filter(Boolean)
+  const reasons = r.reasons.join(', ')
+  return [
+    `**Merge review: ${r.grade.toUpperCase()}** (${r.provider})` +
+      (reasons ? ` — ${reasons}` : '') +
+      (notes.length ? ` (${notes.join(', ')})` : ''),
+    ''
+  ]
+}
+
 export function minimalReport(state: RunState, stats: Stats): string {
   const total = state.tasks.reduce((c, t) => c + (t.costUsd ?? 0), 0)
   const time = state.tasks.reduce((c, t) => c + (t.durationMs ?? 0), 0)
   return [
+    ...gradeLine(state),
     `# ${state.name} — ${state.status}`,
     '',
     `- Run: \`${state.runId}\` · branch \`${state.branch}\``,

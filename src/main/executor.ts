@@ -8,6 +8,15 @@ import { execFile } from 'child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { promisify } from 'util'
+import {
+  BRANCH_FIX_PROMPT,
+  BRANCH_REVIEW_PROMPT,
+  BranchReview,
+  capDiff,
+  implementerOf,
+  parseReview,
+  pickReviewer
+} from './branchReview'
 import { runTurnWithFailover } from './failover'
 import { lockedGit } from './git'
 import { writeReport } from './report'
@@ -22,12 +31,14 @@ import {
 import type { RunStats } from './report'
 import {
   atomicWrite,
+  Effort,
   Item,
   ItemStatus,
   loadItems,
   loadRepo,
   resolveProfile,
   RunnerChoice,
+  RunnerName,
   setItemStatus,
   Settings,
   slugify,
@@ -75,6 +86,7 @@ export type RunState = {
   finishedAt?: string
   tasks: TaskRun[]
   reviews?: ReviewCycle[] // the closing review loop, one entry per cycle (M16)
+  review?: BranchReview // the merge-decision grade (M28) — set only on a green, uncancelled run
   stats?: RunStats // written at report time; see report.ts (architecture.md §4)
 }
 
@@ -226,6 +238,28 @@ function parseVerdict(text: string): { verdict: 'green' | 'red'; findings: strin
 }
 
 const TAIL_CHARS = 4000
+
+// Plain, unlocked git reads for the branch review's diff (M28 §2) — the mutex
+// in git.ts is for mutations; report.ts's collectStats is the same idiom.
+const gitRead = promisify(execFile)
+
+async function branchDiff(
+  worktree: string,
+  base: string
+): Promise<{ stat: string; files: { file: string; diff: string }[] }> {
+  // The runCheckCommand precedent: an unbounded diff must not reject on
+  // Node's 1MB default and take the whole run down with it.
+  const opts = { maxBuffer: 10 << 20 }
+  const [{ stdout: stat }, { stdout: raw }] = await Promise.all([
+    gitRead('git', ['-C', worktree, 'diff', '--stat', base], opts),
+    gitRead('git', ['-C', worktree, 'diff', base], opts)
+  ])
+  const files = raw
+    .split(/^diff --git /m)
+    .filter(Boolean)
+    .map((piece) => ({ file: piece.split('\n', 1)[0], diff: `diff --git ${piece}` }))
+  return { stat, files }
+}
 
 /** The deterministic half of the green signal (§10). Undefined = not configured. */
 async function runCheckCommand(
@@ -415,7 +449,9 @@ export function loadRuns(repo: string): RunState[] {
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
 }
 
-function saveRun(repo: string, state: RunState): void {
+// Exported for runs:merge (M28 §4) — stamping review.merged reuses this same
+// read-tolerant/write-atomic path rather than a hand-rolled JSON write.
+export function saveRun(repo: string, state: RunState): void {
   atomicWrite(
     join(repo, '.somni', 'runs', state.runId, 'run.json'),
     JSON.stringify(state, null, 2) + '\n'
@@ -562,8 +598,17 @@ async function execute(
   // (M26 §5), same as a subtask. They record attempts/cost so run.json and
   // the report treat them like any other task, and they share the run's
   // AbortController, so cancel and the task timeout reach them too.
-  const auxTask = async (title: string, prompt: string, log: string): Promise<string | null> => {
+  // Branch Review (M28 §3) pins the reviewer's own runner/model/effort rather
+  // than the run's default profile, and its turn is `plain` — neither readOnly
+  // nor autonomous, since it's asked to grade from the prompt alone, no tools.
+  const auxTask = async (
+    title: string,
+    prompt: string,
+    log: string,
+    override?: { runner: RunnerName; model?: string; effort?: Effort; plain?: true }
+  ): Promise<string | null> => {
     const profile = resolveProfile(undefined, settings)
+    const runner = override?.runner ?? profile.runner ?? 'claude'
     const task: TaskRun = {
       title,
       role: '',
@@ -575,11 +620,24 @@ async function execute(
     state.tasks.push(task)
     writeState()
 
+    // A pinned override never falls back to the DEFAULT profile's model —
+    // profile.model is that other provider's model id, and handing it to a
+    // different runner's CLI is a cross-provider leak (M28 review fix: the
+    // unpinned cross-provider reviewer/fix-turn silently invoked its CLI
+    // with a foreign model id and errored out ungraded every time). turn.ts
+    // itself re-falls-back an omitted model to `settings.model` (the same
+    // global default), so the override call gets its OWN settings object
+    // with that field already resolved — never the shared one.
+    const pinnedModel = override
+      ? (override.model ?? settings.providers?.defaults?.[override.runner]?.model)
+      : profile.model
+    const turnSettings = override ? { ...settings, model: pinnedModel } : settings
+
     const outcome = await runTurnWithFailover({
-      choice: profile.runner ?? 'claude',
-      pinnedModel: profile.model,
-      pinnedEffort: profile.effort,
-      settings,
+      choice: runner,
+      pinnedModel,
+      pinnedEffort: override?.effort ?? profile.effort,
+      settings: turnSettings,
       ctrl,
       nowMs,
       events,
@@ -590,7 +648,7 @@ async function execute(
       request: {
         prompt,
         cwd: state.worktree,
-        autonomous: true,
+        autonomous: !override?.plain,
         timeoutMs,
         graceMs,
         logPath: join(runDir, task.log)
@@ -648,6 +706,111 @@ async function execute(
         `fix-${cycle + 1}.log`
       )
     }
+  }
+
+  // Branch Review (M28): the merge-decision grade, cross-provider by default —
+  // runs only after the closing review loop landed green (§1). `approve` and
+  // `ungraded` land the run exactly like green does today; `reject` or a final
+  // `needs-work` feed the same `failed` signal reviewGreen=false already uses,
+  // so routing to needs-attention is the one existing mechanism, not a second
+  // one (§6). Cancellation mid-review returns true (not-failed) without ever
+  // writing state.review — the aux task's own Cancelled status is what decides
+  // the run's fate (§7); no grade is invented either way.
+  const branchReview = async (): Promise<boolean> => {
+    const implementer = implementerOf(
+      state.tasks.filter((t) => !t.aux).map((t) => t.runner as RunnerName | undefined)
+    )
+    const reviewer = pickReviewer(settings, implementer)
+    const subtaskPrompts = defs.map((d) => d.prompt)
+    let truncated = false
+    let reviewN = 0
+
+    // Never returns null: a git failure or a dead turn both grade 'ungraded'
+    // with the real reason folded in — a review outage never holds a green,
+    // finished branch hostage (§6), and never invents a fabricated wording
+    // when the TaskRun already recorded what actually went wrong.
+    const review = async (): Promise<Pick<BranchReview, 'grade' | 'reasons' | 'findings'>> => {
+      let diff: { stat: string; files: { file: string; diff: string }[] }
+      try {
+        diff = await branchDiff(state.worktree, state.baseSha ?? 'HEAD')
+      } catch (err) {
+        return { grade: 'ungraded', reasons: [`branch diff failed: ${message(err)}`], findings: [] }
+      }
+      const capped = capDiff(diff.stat, diff.files)
+      truncated ||= capped.truncated
+      const text = await auxTask(
+        'Branch review',
+        BRANCH_REVIEW_PROMPT(story?.spec ?? '', subtaskPrompts, capped.body),
+        `branch-review-${++reviewN}.log`,
+        { runner: reviewer.runner, model: reviewer.model, effort: reviewer.effort, plain: true }
+      )
+      if (text) return parseReview(text)
+      const task = state.tasks[state.tasks.length - 1] // the 'Branch review' TaskRun just pushed
+      return {
+        grade: 'ungraded',
+        reasons: [task?.error ?? 'the branch review turn produced no reply'],
+        findings: []
+      }
+    }
+
+    const land = (r: BranchReview): boolean => {
+      state.review = r
+      writeState()
+      return r.grade === 'approve' || r.grade === 'ungraded'
+    }
+    const base = (
+      partial: Pick<BranchReview, 'grade' | 'reasons' | 'findings'>,
+      fixRound?: true
+    ): BranchReview => ({
+      ...partial,
+      provider: reviewer.runner,
+      sameProvider: reviewer.sameProvider,
+      diffTruncated: truncated || undefined,
+      ...(fixRound ? { fixRound } : {})
+    })
+
+    const first = await review()
+    if (ctrl.cancelled) return true // §7: cancellation invents no grade
+    if (first.grade !== 'needs-work') return land(base(first))
+
+    // needs-work: ONE fix round (§5), then a re-review by the same reviewer.
+    // Pinned to the implementer (spec §3, not the run's default profile) —
+    // still the failover machinery (bounded, cancellable, cooldown-waiting),
+    // just never a free cross-provider failover for this one turn.
+    events.onLog(state.runId, -1, '[somni] branch review needs-work — one fix round')
+    const fixText = await auxTask(
+      'Address merge review',
+      BRANCH_FIX_PROMPT(first.findings),
+      'branch-fix.log',
+      { runner: implementer }
+    )
+    if (ctrl.cancelled) return true
+    // A fix turn that never ran at all parks with the ORIGINAL findings — this
+    // is not the whole-run-failed path (§5).
+    if (fixText === null)
+      return land(
+        base({ ...first, reasons: [...first.reasons, 'fix round did not complete'] }, true)
+      )
+
+    const check = await runCheckCommand(settings.checkCommand, state.worktree, timeoutMs)
+    if (ctrl.cancelled) return true
+    if (check && !check.ok)
+      return land(
+        base(
+          {
+            ...first,
+            reasons: [
+              ...first.reasons,
+              `checkCommand \`${check.command}\` failed after the fix round`
+            ]
+          },
+          true
+        )
+      )
+
+    const second = await review()
+    if (ctrl.cancelled) return true
+    return land(base(second, true))
   }
 
   // A dead process left these Running; they get re-attempted from scratch.
@@ -747,11 +910,24 @@ async function execute(
 
     // The closing review loop (M16 §9). Only when every subtask landed — a run
     // that already failed has nothing honest to review.
+    const subtasksOk = state.tasks.filter((t) => !t.aux).every((t) => t.status === 'Completed')
     let reviewGreen = true
-    if (!ctrl.cancelled && state.tasks.filter((t) => !t.aux).every((t) => t.status === 'Completed'))
-      reviewGreen = await reviewLoop()
+    if (!ctrl.cancelled && subtasksOk) reviewGreen = await reviewLoop()
 
-    const failed = state.tasks.some((t) => t.status === 'Failed') || !reviewGreen
+    // Branch Review (M28 §1): only on a green, uncancelled run — a red run
+    // already has its verdict. Feeds the exact `failed` signal reviewGreen=false
+    // already routes through, rather than a second needs-attention path (§6).
+    let branchOk = true
+    if (subtasksOk && reviewGreen && !ctrl.cancelled) branchOk = await branchReview()
+
+    // Subtask failures only: an aux task's own status never independently fails
+    // the run — the closing review loop and Branch Review each carry their own
+    // green/ok signal (a "turn died" branch review is ungraded, not failed) and
+    // are OR'd in explicitly below.
+    const failed =
+      state.tasks.filter((t) => !t.aux).some((t) => t.status === 'Failed') ||
+      !reviewGreen ||
+      !branchOk
     const cancelled = state.tasks.some((t) => t.status === 'Cancelled')
     state.status = cancelled ? 'Cancelled' : failed ? 'Failed' : 'Completed'
     // Land the final status on disk *before* generating the report: a full-style

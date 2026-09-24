@@ -67,6 +67,8 @@ export type Settings = Profile & {
   // the director default is applied at resolution sites (personaOf), not baked
   // into SETTINGS_DEFAULTS.
   persona?: Persona
+  // Branch Review (M28): who grades finished branches; empty = cross-provider default.
+  reviewer?: Profile
 }
 
 // What settings:get / resolveSettings hand out: every defaulted field present.

@@ -52,6 +52,29 @@ import { isAvailable, markAuthFailed, resetProviders } from './providers'
 //   FAKE_RL_MATCH=<s> rate-limit only invocations whose args contain <s>
 //   FAKE_VERDICT=red|none  the somni-verdict block the closing Review emits (M16)
 //   FAKE_ARGV=<file>  dump argv to <file> (the discipline-preamble assertion)
+//   FAKE_REVIEW_ARGV=<file>  dump ONLY the Branch Review/merge-reviewer call's
+//     argv to <file> — isolates the grading turn from the closing Review and
+//     any fix-round call sharing the same FAKE_ARGV file, so the
+//     no-model/no-dangerously-flag security-seam assertions aren't tripped by
+//     an unrelated, legitimately-autonomous call.
+//   FAKE_FIX_ARGV=<file>  dump ONLY the "Address merge review" fix-round
+//     call's argv (matched on its "came back needs-work" prompt text) —
+//     isolates it from the closing Review call, which legitimately carries
+//     the run's top-level model/provider pairing on the same shared binary.
+//   FAKE_REVIEW=<grade[,grade]>  the somni-review block a Branch Review turn
+//     emits (M28), keyed off the argv carrying the merge-reviewer prompt so
+//     ordinary subtask/closing-Review calls through this same binary are
+//     unaffected. Defaults to "approve" (like FAKE_VERDICT defaults green) so
+//     every other test's already-green run stays Completed once M28 always
+//     runs a branch review. A comma list answers successive review calls (the
+//     re-review after a fix round — supply one entry per expected call).
+//     "fail" makes that call die with no reply. FAKE_REVIEW_COUNT=<file> tracks
+//     which list entry is next. FAKE_REVIEW_HANG=<file> (gemini's copy only):
+//     touch <file> then hang, so a test can wait for the marker and cancel
+//     mid-turn deterministically.
+//   FAKE_COMMIT  after touching task-ran-here, git add+commit it too — a real
+//     tracked change for a Branch Review's `git diff <base>` to find non-empty
+//     (M28 §2 diff-split coverage).
 const FAKE_CLAUDE = `#!/bin/sh
 n=1
 if [ -n "$FAKE_COUNT" ]; then
@@ -59,6 +82,29 @@ if [ -n "$FAKE_COUNT" ]; then
   echo "$n" > "$FAKE_COUNT"
 fi
 if [ -n "$FAKE_ARGV" ]; then printf '%s\n' "$@" >> "$FAKE_ARGV"; fi
+if [ -n "$FAKE_FIX_ARGV" ]; then
+  case "$*" in
+    *"came back needs-work"*) printf '%s\n' "$@" >> "$FAKE_FIX_ARGV" ;;
+  esac
+fi
+case "$*" in
+  *"merge reviewer for an unattended coding run"*)
+    if [ -n "$FAKE_REVIEW_ARGV" ]; then printf '%s\n' "$@" >> "$FAKE_REVIEW_ARGV"; fi
+    rn=1
+    if [ -n "$FAKE_REVIEW_COUNT" ]; then
+      rn=$(( $(cat "$FAKE_REVIEW_COUNT" 2>/dev/null || echo 0) + 1 ))
+      echo "$rn" > "$FAKE_REVIEW_COUNT"
+    fi
+    grade=$(printf '%s' "\${FAKE_REVIEW:-approve}" | cut -d, -f"$rn")
+    if [ "$grade" = "fail" ]; then
+      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom"}'
+      exit 1
+    fi
+    echo '{"type":"system","subtype":"init","session_id":"rev-s1"}'
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"duration_ms":5,"result":"\`\`\`somni-review\\n{\\"grade\\": \\"'"$grade"'\\", \\"reasons\\": [\\"r\\"], \\"findings\\": [\\"f\\"]}\\n\`\`\`"}'
+    exit 0
+    ;;
+esac
 if [ -n "$FAKE_HANG" ]; then exec sleep 30; fi
 if [ -n "$FAKE_TRAP" ]; then trap '' TERM; while :; do sleep 0.05; done; fi
 if [ -n "$FAKE_RL_MATCH" ]; then
@@ -81,6 +127,10 @@ if [ -n "$FAKE_SLEEP" ]; then sleep "$FAKE_SLEEP"; fi
 echo '{"type":"system","subtype":"init","session_id":"s1"}'
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"did work"}]}}'
 touch task-ran-here
+if [ -n "$FAKE_COMMIT" ]; then
+  git add task-ran-here
+  git -c user.email=t@t -c user.name=t commit -q -m fake
+fi
 case "\${FAKE_VERDICT:-green}" in
   red) printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"duration_ms":5,"result":"\`\`\`somni-verdict\\n{\\"verdict\\": \\"red\\", \\"findings\\": \\"no tests\\"}\\n\`\`\`"}';;
   none) printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"duration_ms":5,"result":"Looks fine to me."}';;
@@ -118,10 +168,35 @@ printf '%s\n' '{"event":"result","result":{"status":"SUCCESS","response":"\`\`\`
 // closing Review must find one just like claude's, or M16's review loop reads
 // it as red/unknown and fails the run for an unrelated reason.
 const FAKE_CODEX = `#!/bin/sh
+if [ -n "$FAKE_ARGV" ]; then printf '%s\n' "$@" >> "$FAKE_ARGV"; fi
+if [ -n "$FAKE_FIX_ARGV" ]; then
+  case "$*" in
+    *"came back needs-work"*) printf '%s\n' "$@" >> "$FAKE_FIX_ARGV" ;;
+  esac
+fi
 if [ -n "$FAKE_AUTH_FAIL" ]; then
   echo '{"type":"turn.failed","error":{"message":"401 unauthorized: codex login required"}}'
   exit 1
 fi
+case "$*" in
+  *"merge reviewer for an unattended coding run"*)
+    if [ -n "$FAKE_REVIEW_ARGV" ]; then printf '%s\n' "$@" >> "$FAKE_REVIEW_ARGV"; fi
+    rn=1
+    if [ -n "$FAKE_REVIEW_COUNT" ]; then
+      rn=$(( $(cat "$FAKE_REVIEW_COUNT" 2>/dev/null || echo 0) + 1 ))
+      echo "$rn" > "$FAKE_REVIEW_COUNT"
+    fi
+    grade=$(printf '%s' "\${FAKE_REVIEW:-approve}" | cut -d, -f"$rn")
+    if [ "$grade" = "fail" ]; then
+      echo '{"type":"turn.failed","error":{"message":"boom"}}'
+      exit 1
+    fi
+    echo '{"type":"thread.started","thread_id":"codex-rev"}'
+    printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"\`\`\`somni-review\\n{\\"grade\\": \\"'"$grade"'\\", \\"reasons\\": [\\"r\\"], \\"findings\\": [\\"f\\"]}\\n\`\`\`"}}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5}}'
+    exit 0
+    ;;
+esac
 echo '{"type":"thread.started","thread_id":"codex-s1"}'
 printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"did work\\n\`\`\`somni-verdict\\n{\\"verdict\\": \\"green\\", \\"findings\\": \\"\\"}\\n\`\`\`"}}'
 touch task-ran-here
@@ -131,6 +206,31 @@ echo '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5}}'
 // A fake `gemini` — geminiRunner's init/message/result shape — used as the
 // next-in-chain success behind a parked codex (auth-failover-under-auto test).
 const FAKE_GEMINI = `#!/bin/sh
+if [ -n "$FAKE_ARGV" ]; then printf '%s\n' "$@" >> "$FAKE_ARGV"; fi
+if [ -n "$FAKE_FIX_ARGV" ]; then
+  case "$*" in
+    *"came back needs-work"*) printf '%s\n' "$@" >> "$FAKE_FIX_ARGV" ;;
+  esac
+fi
+case "$*" in
+  *"merge reviewer for an unattended coding run"*)
+    if [ -n "$FAKE_REVIEW_ARGV" ]; then printf '%s\n' "$@" >> "$FAKE_REVIEW_ARGV"; fi
+    rn=1
+    if [ -n "$FAKE_REVIEW_COUNT" ]; then
+      rn=$(( $(cat "$FAKE_REVIEW_COUNT" 2>/dev/null || echo 0) + 1 ))
+      echo "$rn" > "$FAKE_REVIEW_COUNT"
+    fi
+    grade=$(printf '%s' "\${FAKE_REVIEW:-approve}" | cut -d, -f"$rn")
+    if [ "$grade" = "fail" ]; then
+      exit 1
+    fi
+    if [ -n "$FAKE_REVIEW_HANG" ]; then touch "$FAKE_REVIEW_HANG"; exec sleep 30; fi
+    echo '{"type":"init","session_id":"gem-rev"}'
+    printf '%s\n' '{"type":"message","role":"assistant","content":"\`\`\`somni-review\\n{\\"grade\\": \\"'"$grade"'\\", \\"reasons\\": [\\"r\\"], \\"findings\\": [\\"f\\"]}\\n\`\`\`"}'
+    echo '{"type":"result","status":"success"}'
+    exit 0
+    ;;
+esac
 echo '{"type":"init","session_id":"gem-s1"}'
 printf '%s\n' '{"type":"message","role":"assistant","content":"did work\\n\`\`\`somni-verdict\\n{\\"verdict\\": \\"green\\", \\"findings\\": \\"\\"}\\n\`\`\`"}'
 touch task-ran-here
@@ -222,9 +322,15 @@ describe('runStory', () => {
     const state = await runStory(repo, feature, base, noEvents)
     expect(state.status).toBe('Completed')
     // deselected task is excluded entirely
-    // M16 appends the closing Review; the subtasks are the non-aux ones.
+    // M16 appends the closing Review, M28 appends the Branch review; the
+    // subtasks are the non-aux ones.
     expect(state.tasks.filter((t) => !t.aux).map((t) => t.title)).toEqual(['Design', 'Build'])
-    expect(state.tasks.map((t) => t.status)).toEqual(['Completed', 'Completed', 'Completed'])
+    expect(state.tasks.map((t) => t.status)).toEqual([
+      'Completed',
+      'Completed',
+      'Completed',
+      'Completed'
+    ])
     expect(state.tasks[0].sessionId).toBe('s1')
     expect(state.tasks[0].costUsd).toBe(0.01)
     // ran inside the worktree, on the somni branch
@@ -247,7 +353,7 @@ describe('runStory', () => {
     fake({ FAKE_COUNT: join(root, 'n'), FAKE_FAIL_TIMES: '1' })
     const state = await runStory(repo, feature, base, noEvents)
     expect(state.status).toBe('Completed')
-    expect(state.tasks.map((t) => t.attempts)).toEqual([2, 1, 1])
+    expect(state.tasks.map((t) => t.attempts)).toEqual([2, 1, 1, 1])
     expect(state.tasks[0].error).toBeUndefined()
   })
 
@@ -1192,7 +1298,8 @@ describe('the closing review loop', () => {
   it('green verdict lands the story in review', async () => {
     const state = await runStory(repo, docs, base, noEvents)
     expect(state.status).toBe('Completed')
-    expect(reviewTitles(state)).toEqual(['Review'])
+    // M28's Branch review always follows a green closing loop.
+    expect(reviewTitles(state)).toEqual(['Review', 'Branch review'])
     expect(state.reviews).toHaveLength(1)
     expect(state.reviews?.[0]).toMatchObject({ cycle: 1, verdict: 'green', green: true })
     setItemStatus(repo, docs, 'review') // the drain does this; runStory's caller path
@@ -1245,6 +1352,230 @@ describe('the closing review loop', () => {
     expect(state.reviews?.[0]).toMatchObject({ verdict: 'green', green: false })
     expect(state.reviews?.[0].findings).toContain('nope')
     expect(statusOnDisk(docs)).toBe('needs-attention')
+  })
+})
+
+describe('branch review (M28)', () => {
+  const reviewTitles = (state: RunState): string[] =>
+    state.tasks.filter((t) => t.aux).map((t) => t.title)
+
+  it('approve completes the run; the review is recorded against the cross-provider reviewer', async () => {
+    const argv = join(root, 'argv.log')
+    const reviewArgv = join(root, 'review-argv.log')
+    fake({ FAKE_REVIEW: 'approve', FAKE_ARGV: argv, FAKE_REVIEW_ARGV: reviewArgv })
+    const state = await runStory(repo, docs, base, noEvents)
+    expect(state.status).toBe('Completed')
+    expect(reviewTitles(state)).toEqual(['Review', 'Branch review'])
+    // docs' one subtask ran on the default runner (claude); pickReviewer picks
+    // the next chain member — codex — so this proves the cross-provider pick,
+    // not just that a review happened.
+    expect(state.review).toMatchObject({ grade: 'approve', provider: 'codex', sameProvider: false })
+    expect(state.tasks.find((t) => t.title === 'Branch review')?.runner).toBe('codex')
+    expect(readFileSync(argv, 'utf8')).toContain('merge reviewer for an unattended coding run')
+    // Security seam: the review turn is `plain`, never autonomous — it must
+    // never carry the codex sandbox-bypass flag (M28 review fix pin). Scoped
+    // to FAKE_REVIEW_ARGV — the shared FAKE_ARGV file also carries the
+    // closing Review call, which legitimately runs autonomous.
+    const reviewArgvText = readFileSync(reviewArgv, 'utf8')
+    expect(reviewArgvText).not.toContain('--dangerously')
+    expect(reviewArgvText).not.toContain('--approval-mode yolo')
+    // run.json round-trips the review field, not just the in-memory state.
+    const onDisk = JSON.parse(
+      readFileSync(join(repo, '.somni/runs', state.runId, 'run.json'), 'utf8')
+    )
+    expect(onDisk.review).toMatchObject({
+      grade: 'approve',
+      provider: 'codex',
+      sameProvider: false
+    })
+  })
+
+  it('a top-level model never crosses providers — neither the reviewer nor the fix turn receives it', async () => {
+    // The implementer runs on 'claude' via a role pin carrying its OWN model,
+    // so its subtask call is not itself evidence either way. settings.runner/
+    // model point at a different provider (gemini) entirely — the run's
+    // unrelated default profile, which the closing Review call legitimately
+    // uses (same provider as settings.runner — not a leak). Before the fix,
+    // auxTask's override branch fell back to that default profile's model
+    // for BOTH the cross-provider reviewer (codex) and the
+    // same-provider-as-implementer fix turn — a 'gemini' model id handed to
+    // codex's and claude's CLIs. FAKE_REVIEW_ARGV/FAKE_FIX_ARGV isolate those
+    // two calls from the closing Review's legitimate use of the same string.
+    saveRole(repo, {
+      slug: 'imp',
+      name: 'Implementer',
+      preamble: 'implements.',
+      runner: 'claude',
+      model: 'claude-in-house'
+    })
+    const leak = story('Leak check', [
+      { title: 'Write it', prompt: 'write it', role: 'imp', selected: true }
+    ]).id
+    const reviewArgv = join(root, 'leak-review-argv.log')
+    const fixArgv = join(root, 'leak-fix-argv.log')
+    const reviewCount = join(root, 'leak-review-count')
+    fake({
+      FAKE_REVIEW_ARGV: reviewArgv,
+      FAKE_FIX_ARGV: fixArgv,
+      FAKE_REVIEW: 'needs-work,approve',
+      FAKE_REVIEW_COUNT: reviewCount
+    })
+    const state = await runStory(repo, leak, base, noEvents, {
+      settings: { runner: 'gemini', model: 'gemini-top-level-leak' }
+    })
+    expect(state.status).toBe('Completed')
+    expect(state.review).toMatchObject({ grade: 'approve', provider: 'codex', fixRound: true })
+    expect(readFileSync(reviewArgv, 'utf8')).not.toContain('gemini-top-level-leak')
+    const fixArgvText = readFileSync(fixArgv, 'utf8')
+    expect(fixArgvText).toContain('came back needs-work') // proves the file caught the right call
+    expect(fixArgvText).not.toContain('gemini-top-level-leak')
+  })
+
+  it('needs-work runs one fix round carrying the findings, then approves on re-review with fixRound recorded', async () => {
+    const argv = join(root, 'fix-argv.log')
+    const reviewArgv = join(root, 'fix-review-argv.log')
+    const reviewCount = join(root, 'review-count')
+    fake({
+      FAKE_ARGV: argv,
+      FAKE_REVIEW_ARGV: reviewArgv,
+      FAKE_REVIEW: 'needs-work,approve',
+      FAKE_REVIEW_COUNT: reviewCount
+    })
+    const state = await runStory(repo, docs, base, noEvents, {
+      settings: { reviewer: { runner: 'gemini' } }
+    })
+    expect(state.status).toBe('Completed')
+    expect(reviewTitles(state)).toEqual([
+      'Review',
+      'Branch review',
+      'Address merge review',
+      'Branch review'
+    ])
+    expect(state.review).toMatchObject({ grade: 'approve', provider: 'gemini', fixRound: true })
+    // BRANCH_FIX_PROMPT lists each finding as "- <finding>" — "f" is the
+    // finding FAKE_REVIEW's needs-work reply carries.
+    expect(readFileSync(argv, 'utf8')).toContain('- f')
+    // Security seam, gemini reviewer case: still no sandbox-bypass flag.
+    // Scoped to FAKE_REVIEW_ARGV — the shared FAKE_ARGV file also carries the
+    // closing Review and the fix round, both legitimately autonomous.
+    const reviewArgvText = readFileSync(reviewArgv, 'utf8')
+    expect(reviewArgvText).not.toContain('--dangerously')
+    expect(reviewArgvText).not.toContain('--approval-mode yolo')
+  })
+
+  it('a final needs-work after the fix round lands needs-attention, the same mechanism as reviewGreen=false', async () => {
+    const reviewCount = join(root, 'review-count-2')
+    fake({ FAKE_REVIEW: 'needs-work,needs-work', FAKE_REVIEW_COUNT: reviewCount })
+    add(docs)
+    const [state] = await startDrain(repo, base, 1, noEvents, {
+      settings: { reviewer: { runner: 'gemini' } }
+    })
+    expect(state.status).toBe('Failed')
+    expect(state.review).toMatchObject({ grade: 'needs-work', fixRound: true })
+    expect(statusOnDisk(docs)).toBe('needs-attention')
+  })
+
+  it('reject parks immediately — no fix round is spawned', async () => {
+    fake({ FAKE_REVIEW: 'reject' })
+    const state = await runStory(repo, docs, base, noEvents, {
+      settings: { reviewer: { runner: 'gemini' } }
+    })
+    expect(state.status).toBe('Failed')
+    expect(reviewTitles(state)).toEqual(['Review', 'Branch review'])
+    expect(state.tasks.filter((t) => t.title === 'Address merge review')).toHaveLength(0)
+    expect(state.review).toMatchObject({ grade: 'reject' })
+    expect(state.review?.fixRound).toBeUndefined()
+    expect(statusOnDisk(docs)).toBe('needs-attention')
+  })
+
+  it('a reviewer turn that dies with no reply grades ungraded, carrying the real TaskRun error', async () => {
+    fake({ FAKE_REVIEW: 'fail' })
+    const state = await runStory(repo, docs, base, noEvents, {
+      settings: { reviewer: { runner: 'gemini' } }
+    })
+    expect(state.status).toBe('Completed')
+    expect(reviewTitles(state)).toEqual(['Review', 'Branch review'])
+    expect(state.review?.grade).toBe('ungraded')
+    // The honest reason, not a fixed placeholder: the fake dies with exit 1 and
+    // no result event, so the TaskRun's own recorded error is "exited with code 1".
+    const branchTask = state.tasks.find((t) => t.title === 'Branch review')
+    expect(branchTask?.error).toBeTruthy()
+    expect(state.review?.reasons).toEqual([branchTask?.error])
+  })
+
+  it('a git diff failure grades ungraded with the real error, never failing an otherwise-green run', async () => {
+    const first = await runStory(repo, docs, base, noEvents)
+    expect(first.status).toBe('Completed')
+    // Poison baseSha so `git diff <base>` fails — a review outage (bad ref,
+    // oversized diff) must never hold a finished, green branch hostage (§6).
+    const path = join(repo, '.somni/runs', first.runId, 'run.json')
+    const s = JSON.parse(readFileSync(path, 'utf8')) as RunState
+    s.status = 'Running'
+    s.baseSha = 'not-a-real-sha'
+    s.tasks = s.tasks.filter((t) => !t.aux) // re-run the subtask; drop the prior Review/Branch review
+    s.tasks[0].status = 'Running'
+    s.reviews = []
+    delete s.review
+    writeFileSync(path, JSON.stringify(s, null, 2))
+
+    const [state] = await resumePipeline(repo, [first.runId], 1, noEvents)
+    expect(state.status).toBe('Completed')
+    // branchDiff threw before any turn ran — no Branch review aux task at all.
+    expect(reviewTitles(state)).toEqual(['Review'])
+    expect(state.review?.grade).toBe('ungraded')
+    expect(state.review?.reasons[0]).toContain('branch diff failed')
+  })
+
+  it('the fix round is pinned to the implementer, never the run default or the reviewer', async () => {
+    // The role pins its own runner — different from both settings.runner (the
+    // naive "default profile") and the reviewer, so a wrong pin is visible.
+    saveRole(repo, { slug: '', name: 'Dev', preamble: 'You are dev.', runner: 'claude' })
+    const reviewCount = join(root, 'review-count-pin')
+    fake({ FAKE_REVIEW: 'needs-work,approve', FAKE_REVIEW_COUNT: reviewCount })
+    const state = await runStory(repo, docs, base, noEvents, {
+      settings: { runner: 'gemini', reviewer: { runner: 'codex' } }
+    })
+    expect(state.status).toBe('Completed')
+    const fixTask = state.tasks.find((t) => t.title === 'Address merge review')
+    expect(fixTask?.runner).toBe('claude')
+  })
+
+  it('a real, non-empty diff is split and reaches the reviewer prompt', async () => {
+    const argv = join(root, 'diff-argv.log')
+    fake({ FAKE_COMMIT: '1', FAKE_REVIEW: 'approve', FAKE_ARGV: argv })
+    const state = await runStory(repo, docs, base, noEvents, {
+      settings: { reviewer: { runner: 'gemini' } }
+    })
+    expect(state.status).toBe('Completed')
+    // Proves the split + capDiff path ran on real content, not an empty diff:
+    // the fake's own touched-and-committed file shows up as a real "diff --git"
+    // hunk in the reviewer's prompt.
+    expect(readFileSync(argv, 'utf8')).toContain('diff --git')
+  })
+
+  it('a single-provider chain reviews with the same provider as the implementer', async () => {
+    fake({ FAKE_REVIEW: 'approve' })
+    const state = await runStory(repo, docs, base, noEvents, {
+      settings: { providers: { disabled: ['codex', 'gemini', 'antigravity'] } }
+    })
+    expect(state.status).toBe('Completed')
+    expect(state.review).toMatchObject({ grade: 'approve', provider: 'claude', sameProvider: true })
+  })
+
+  it('cancellation mid branch-review lands Cancelled with no grade invented', async () => {
+    const marker = join(root, 'reviewing.marker')
+    fake({ FAKE_REVIEW: 'approve', FAKE_REVIEW_HANG: marker })
+    setKeepRunning(true) // cancel must clear this, or the drain never ends
+    add(docs)
+    const run = startDrain(repo, base, 1, noEvents, {
+      settings: { reviewer: { runner: 'gemini' } }
+    })
+    while (!existsSync(marker)) await new Promise((r) => setTimeout(r, 5))
+    cancelPipeline()
+    const [state] = await run
+    expect(state.status).toBe('Cancelled')
+    expect(state.review).toBeUndefined()
+    expect(state.tasks.find((t) => t.title === 'Branch review')?.status).toBe('Cancelled')
   })
 })
 

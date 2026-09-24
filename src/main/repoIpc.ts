@@ -13,7 +13,7 @@ import {
   workUnitTurn
 } from './chat'
 import { handoff } from './sessions'
-import { isRunning, loadRuns, RunState, wakeDrain } from './executor'
+import { isRunning, loadRun, loadRuns, RunState, saveRun, wakeDrain } from './executor'
 import { lockedGit } from './git'
 import { diffFiles, RunStats, runStats } from './report'
 import { getRunner, providersStatus, runnerStatus } from './runners'
@@ -42,6 +42,7 @@ export function repoSettings(repo: string): Settings & typeof store.SETTINGS_DEF
 }
 
 export type IpcResult = { ok: boolean; error?: string }
+export type MergeResult = { ok: boolean; error?: string; conflicts?: string[] }
 
 export type RunRow = RunState & { worktreeExists: boolean }
 export type RunDetails = { stats: RunStats | null; branchExists: boolean }
@@ -251,6 +252,52 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
   ipcMain.handle('runs:report', (_e, repo: string, runId: string) => {
     const path = join(repo, '.somni', 'runs', runId, 'report.md')
     return existsSync(path) ? readFileSync(path, 'utf8') : null
+  })
+
+  // Merge (M28 §4): user-triggered only, plain merge, never forced. Runs in
+  // whatever branch the user has checked out in the target repo — that is the
+  // merge target, never a checkout/rebase somni picks for them.
+  ipcMain.handle('runs:merge', async (_e, repo: string, runId: string): Promise<MergeResult> => {
+    const run = listRuns(repo).find((r) => r.runId === runId)
+    if (!run) return { ok: false, error: 'run not found' }
+    if (run.review?.grade !== 'approve') return { ok: false, error: 'only approved runs merge' }
+    // The clean-tree check protects the user's own code, never somni's own
+    // bookkeeping — .somni/ churns on every run transition (including the
+    // merged-stamp this handler writes below), so it's excluded from the
+    // dirty check whether it's gitignored or committed (README's recommendation).
+    const { stdout: dirty } = (await lockedGit([
+      '-C',
+      repo,
+      'status',
+      '--porcelain',
+      '--',
+      '.',
+      ':!.somni'
+    ])) as { stdout: string }
+    if (dirty.trim()) return { ok: false, error: 'working tree has uncommitted changes' }
+    try {
+      await lockedGit(['-C', repo, 'merge', '--no-edit', run.branch])
+    } catch (err) {
+      const { stdout } = (await lockedGit([
+        '-C',
+        repo,
+        'diff',
+        '--name-only',
+        '--diff-filter=U'
+      ]).catch(() => ({ stdout: '' }))) as { stdout: string }
+      await lockedGit(['-C', repo, 'merge', '--abort']).catch(() => {})
+      return {
+        ok: false,
+        error: gitError(err),
+        conflicts: stdout.trim().split('\n').filter(Boolean)
+      }
+    }
+    const state = loadRun(repo, runId)
+    if (state?.review) {
+      state.review = { ...state.review, merged: new Date().toISOString() }
+      saveRun(repo, state)
+    }
+    return { ok: true }
   })
 
   // Cleanup (§3): plain removes — dirty worktrees and unmerged branches are

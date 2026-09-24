@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { RunDetails, RunRow } from '../../preload/index'
-import { statusChip } from './ui'
+import { CHIP, gradeChip, GRADE_LABELS, mergeAndReport, statusChip } from './ui'
 
 const DASH = '—'
 
@@ -65,7 +65,9 @@ export function RunDetailsPanel({
   report,
   onSwitchBranch,
   onReveal,
-  onCleanup
+  onCleanup,
+  onMerge,
+  mergeError
 }: {
   run: RunRow
   details: RunDetails | null
@@ -73,6 +75,8 @@ export function RunDetailsPanel({
   onSwitchBranch: () => void
   onReveal: () => void
   onCleanup: () => void
+  onMerge: () => void
+  mergeError?: string
 }): React.JSX.Element {
   const stats = details?.stats
   const summary = summarySection(report)
@@ -80,6 +84,32 @@ export function RunDetailsPanel({
   const heldByWorktree = run.worktreeExists && details?.branchExists === true
   return (
     <div className="flex flex-col gap-6 bg-surface-dim p-6">
+      {/* Branch review (M28 §4): grade + reasons, Merge only while it's
+          approved and unmerged, a merged tag once it's landed. */}
+      {run.review && (
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className={gradeChip(run.review.grade)}>{GRADE_LABELS[run.review.grade]}</span>
+            {run.review.grade === 'approve' && !run.review.merged && (
+              <button
+                className="rounded-lg bg-primary-container px-3 py-1 text-xs font-semibold text-on-primary-container transition-colors hover:bg-primary-container/90"
+                onClick={() => onMerge()}
+              >
+                Merge
+              </button>
+            )}
+            {run.review.merged && <span className={CHIP}>Merged</span>}
+          </div>
+          {run.review.reasons.length > 0 && (
+            <ul className="list-disc pl-5 text-sm text-on-surface-variant">
+              {run.review.reasons.map((r, i) => (
+                <li key={i}>{r}</li>
+              ))}
+            </ul>
+          )}
+          {mergeError && <p className="text-sm text-error whitespace-pre-wrap">{mergeError}</p>}
+        </div>
+      )}
       <div className="grid grid-cols-4 gap-4">
         <Tile label="Duration" value={wallClock(run)} />
         <Tile label="Cost" value={money(stats?.totalCostUsd)} />
@@ -210,6 +240,7 @@ export function RunsView({ repo }: { repo: string }): React.JSX.Element {
   const [report, setReport] = useState<string | null>(null)
   const [details, setDetails] = useState<RunDetails | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [mergeErr, setMergeErr] = useState<Record<string, string>>({})
 
   const load = useCallback((): void => {
     void window.somni.listRuns(repo).then(setRuns)
@@ -237,6 +268,20 @@ export function RunsView({ repo }: { repo: string }): React.JSX.Element {
   const switchBranch = async (branch: string): Promise<void> => {
     const res = await window.somni.switchBranch(repo, branch)
     setNotice(res.error ?? `Switched to ${branch}.`)
+  }
+
+  // Merge (M28 §4): mergeAndReport is the tiny helper the Board's Review-column
+  // card shares — success reloads runs (the merged stamp now on disk), a
+  // conflict/error renders verbatim under this run's row instead.
+  const merge = async (runId: string): Promise<void> => {
+    const feedback = await mergeAndReport(repo, runId)
+    setMergeErr((m) => {
+      const next = { ...m }
+      if (feedback) next[runId] = feedback
+      else delete next[runId]
+      return next
+    })
+    if (!feedback) load()
   }
 
   if (runs.length === 0)
@@ -291,6 +336,8 @@ export function RunsView({ repo }: { repo: string }): React.JSX.Element {
                 onSwitchBranch={() => switchBranch(r.branch)}
                 onReveal={() => void window.somni.revealWorktree(r.worktree)}
                 onCleanup={() => cleanup(r.runId)}
+                onMerge={() => merge(r.runId)}
+                mergeError={mergeErr[r.runId]}
               />
             )}
           </div>

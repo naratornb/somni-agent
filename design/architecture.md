@@ -90,6 +90,7 @@ All per-repo state lives **inside the target repo** at `<repo>/.somni/` as plain
     report.md           # the summary report (committable)
 ```
 
+- `run.json`'s `review` field (M28, written only after a green, uncancelled run): `{ grade: 'approve'|'needs-work'|'reject'|'ungraded', reasons, findings, provider, sameProvider?, diffTruncated?, fixRound?, merged? }` — the Branch Review grade (§9-adjacent subsection below). Absent means not reviewed yet: still running, failed before the gate, cancelled, or a run from before M28.
 - **Committable**: definitions, items, `run.json`, reports — commit `.somni/` for cross-machine continuity. **Gitignored**: raw logs (somni writes `.somni/.gitignore` itself).
 - Items and Roles are Markdown because specs and preambles are prose; subtask sidecars are JSON because they're structured. Frontmatter is parsed by the same hand-rolled parser as roles — no YAML dependency.
 - Ids are `SOM-<n>`: fixed prefix, one sequence across all kinds (Jira-style), unpadded — code sorts numerically.
@@ -291,6 +292,24 @@ The **Grooming view** (M14) survives as a routed surface reached from Quick Star
 
 Each milestone is shippable and exercises the one before it.
 
+### Branch Review (M28)
+
+A finished, green Story earns one more gate before Review: a **Branch Review** grades the whole branch and either clears it for one-click Merge or parks it in Needs Attention with findings. `branchReview.ts` is the pure half (parsing, reviewer selection, diff capping, prompts); the executor's `branchReview()` stage owns the turns and routing — the same split the closing review loop (M16, above) already uses.
+
+**Review-by-embedded-diff.** The review turn's prompt carries everything it needs: the Story's Spec, the subtask prompts, and the branch's `git diff <baseSha>` (an unlocked git read in the worktree — §5's mutex is for mutations — bounded to a 10MB buffer; a git failure grades `ungraded` with the real error rather than failing the run). It is told not to run commands or touch files, and the turn itself carries neither `readOnly` nor `autonomous` — tool-free by prompt alone, not by CLI flag. That's deliberate: an in-worktree read-only review would exclude Codex and Gemini (§5 — `supportsReadOnly` has no verified lever for either), and Branch Review's whole point is a second opinion from a provider *different* from the implementer, so all four runners have to stay eligible.
+
+**Reviewer selection** (`pickReviewer`). Default: the first provider-chain member that isn't the implementer — `implementerOf` takes the majority runner across the Story's subtask runners, ties going to first seen — and is available; nobody-else-available falls back honestly to the same provider with `sameProvider` noted, rather than manufacturing a second opinion that isn't one. `Settings.reviewer` pins a runner/model/effort outright (an `'auto'` pin falls through to this same default); a pinned-but-cooling reviewer waits its turn like any other pinned turn — no free failover for this one seat.
+
+**One fix round.** `needs-work` — including a malformed or missing `` ```somni-review `` fence, which parses as `needs-work` too (the §10 "malformed is red" precedent) — buys exactly one fix turn, pinned to the *implementer* rather than the run's default profile, then `checkCommand` if configured (authoritative: a failing check overrides whatever the fix turn claims), then one re-review by the same reviewer over a freshly recomputed diff. `reject` on the first review skips the fix round outright. Final grade routes `approve`/`ungraded` → Review, `needs-work`/`reject` → Needs Attention with findings; a fix turn that never completes parks with the *original* findings rather than inventing new ones.
+
+**Ungraded never blocks.** A review that couldn't run at all — dead turn, no reply — grades `ungraded` with the TaskRun's own error folded into `reasons`, and `ungraded` lands the run exactly like `approve` does: a review outage never holds a finished, green branch hostage. It just shows no Merge button.
+
+**Merge** (`runs:merge`). Gated server-side on `review.grade === 'approve'` even though the UI only ever offers the button then. The dirty-tree check excludes `.somni/` (pathspec `:!.somni`) so somni's own bookkeeping churn never blocks merging the user's code, whether `.somni/` is gitignored or committed. A plain `git merge --no-edit <run.branch>` lands onto whatever branch is currently checked out — never one somni picks — aborts and returns the verbatim conflicting-file list on conflict, leaving the repo exactly as it was; success stamps `review.merged` (an ISO timestamp) through `saveRun`. Cleanup and Acceptance are unrelated actions; Merge touches neither.
+
+**Recorded ceilings:**
+- `DIFF_CAP` (150,000 chars) keeps whole-file hunks until the cap and names the dropped files in the prompt instead of truncating mid-hunk, so a large branch still gets a reviewer that knows what it didn't see (`diffTruncated` rides along on the grade) — not a silently partial read.
+- Board grades are session-scoped: the Board's Review-column grade chip reads a `runs` prop of *this session's own* live runs, never disk, so a run that finished in an earlier session shows no grade there even though Runs & Reports — which reloads from disk — has it. Runs & Reports is the durable surface; the Board's chip is a same-session convenience with this known gap.
+
 ## 10. Risks & open questions
 
 - **`--dangerously-skip-permissions` is genuinely dangerous.** Worktrees contain *file* changes, not shell side effects — a task can still run arbitrary commands, install packages, or hit the network. Mitigation for v1: personal machine, personal repos, review-in-the-morning workflow. macOS sandboxing (`sandbox-exec`, containers) is a future hardening option, not v1 scope.
@@ -298,7 +317,7 @@ Each milestone is shippable and exercises the one before it.
 - **The Mac must stay awake.** `powerSaveBlocker` prevents app suspension, but lid-closed sleep needs user-side energy settings or `caffeinate` — document in the README.
 - **Hung tasks** are covered by the per-task timeout.
 - **Prompt quality is the real ceiling.** Unattended runs live or die on task prompts and role preambles; the Design → Implement → Test → Revise → Report shape from the brief is the template to encourage. Since M18, `ensureSomni` seeds seven default SDLC roles (architect, developer, tester, reviewer, tech-writer, devops, security) into a fresh repo's `.somni/roles/` — only while the roles dir has never existed, so deletions and edits stick.
-- **Merge-back is manual by design.** The app creates branches; you merge. Auto-merge is out of scope for v1.
+- **Merge-back was manual by design, until M28.** The app still only creates branches — nothing merges without a Branch Review grade of `approve` and a user click; a `needs-work`/`reject`/`ungraded` run, or one you'd rather inspect first, still merges by hand exactly as before.
 - **Antigravity CLI is young; Gemini CLI is unpinned.** `agy` shipped mid-2026 and its flags may drift; the adapter pins exact flags at M7 implementation against the live docs. Gemini's adapter (M26 §5) is written from docs alone — no `gemini` install has verified it live yet. CI-style smoke checks of the runners' output parsing guard against CLI updates breaking overnight runs. Rate-limit and auth detection are per-adapter regexes (Anthropic, Google, and OpenAI error shapes all differ) — Codex's and Gemini's are inferred, not observed live, per §5.
 - **One machine at a time.** `.somni/` sync is via git, so running pipelines for the same repo on two machines concurrently is unsupported (last-writer-wins on `run.json`). Run overnight on one machine; review anywhere.
 - **Green-detection is the fragile joint (Phase 3).** `claude -p` exits 0 even when the work is bad, and a fenced verdict in a nondeterministic reply can be malformed or optimistic. A configured `checkCommand` is the primary deterministic signal; the verdict block is advisory. Without either, "green" means "the agent said so" — reports state that plainly. (`checkCommand` is arbitrary shell run in the worktree — the same trust boundary as autonomous task execution itself, and repo-level config the user writes; noted, not mitigated.)

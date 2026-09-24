@@ -202,6 +202,17 @@ export function SettingsForm({
     patchProviders({ caps })
   }
 
+  // Merge reviewer (M28 §4): same runner/model/effort shape as the top-level
+  // fields, in the patchCap idiom — each call deletes its own empty keys, and
+  // an entirely-empty result clears the block rather than saving `{}`.
+  const patchReviewer = (p: Partial<NonNullable<Settings['reviewer']>>): void => {
+    const next: NonNullable<Settings['reviewer']> = { ...s.reviewer, ...p }
+    for (const k of Object.keys(next) as (keyof typeof next)[]) {
+      if (!next[k]) delete next[k]
+    }
+    patch({ reviewer: Object.keys(next).length ? next : undefined })
+  }
+
   return (
     <>
       <div className="flex flex-col divide-y divide-border-subtle rounded-xl border border-border-subtle bg-surface-elevated p-6">
@@ -372,6 +383,47 @@ export function SettingsForm({
             className={`${INPUT} flex-1`}
             value={s.effort ?? ''}
             onChange={(e) => patch({ effort: (e.target.value || undefined) as Effort })}
+          >
+            <option value="">CLI default</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+          </select>
+        </FieldRow>
+        {/* Merge reviewer (M28 §4): who grades a branch before Merge appears
+            on it — empty runner is the cross-provider default (pickReviewer
+            in branchReview.ts falls through the same as an unset pin). */}
+        <FieldRow label="Merge reviewer">
+          <select
+            className={INPUT}
+            aria-label="Merge reviewer runner"
+            value={s.reviewer?.runner ?? ''}
+            onChange={(e) => patchReviewer({ runner: e.target.value as RunnerChoice })}
+          >
+            <option value="">Auto — cross-provider default</option>
+            <option value="claude">Claude Code (claude)</option>
+            <option value="antigravity">Antigravity (agy)</option>
+            <option value="gemini">Gemini CLI (gemini)</option>
+            <option value="codex">Codex (codex)</option>
+          </select>
+          <input
+            className={`${INPUT} flex-1 font-mono-code`}
+            list="reviewer-model-list"
+            placeholder="CLI default"
+            aria-label="Merge reviewer model"
+            value={s.reviewer?.model ?? ''}
+            onChange={(e) => patchReviewer({ model: e.target.value })}
+          />
+          <datalist id="reviewer-model-list">
+            {(providerModels[s.reviewer?.runner as RunnerName] ?? []).map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+          <select
+            className={INPUT}
+            aria-label="Merge reviewer effort"
+            value={s.reviewer?.effort ?? ''}
+            onChange={(e) => patchReviewer({ effort: e.target.value as Effort })}
           >
             <option value="">CLI default</option>
             <option value="low">low</option>

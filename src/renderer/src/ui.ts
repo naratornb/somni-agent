@@ -1,7 +1,14 @@
 // Shared UI atoms — M10-ui.md §0. Class strings, not components: the design
 // system is Tailwind utilities, and a wrapper component per button would hide
 // the exact strings the mocks are the source of truth for.
-import type { ChatProposal, GroomState, Item, Persona, RunnerName } from '../../preload/index'
+import type {
+  BranchGrade,
+  ChatProposal,
+  GroomState,
+  Item,
+  Persona,
+  RunnerName
+} from '../../preload/index'
 
 const DISABLED = 'disabled:opacity-40 disabled:pointer-events-none'
 
@@ -56,6 +63,38 @@ export const STATUS_CHIP: Record<string, string> = {
 }
 export const statusChip = (status = 'Queued'): string =>
   `${STATUS_CHIP_BASE} ${STATUS_CHIP[status] ?? STATUS_CHIP.Queued}`
+
+// Branch review grade chip (M28 §4) — text + an existing status color, no new
+// iconography. Reuses the STATUS_CHIP palette: approve reads as Completed
+// (green), needs-work as Cancelled (amber), reject as Failed (red), ungraded
+// as Skipped (gray).
+export const GRADE_LABELS: Record<BranchGrade, string> = {
+  approve: 'APPROVE',
+  'needs-work': 'NEEDS WORK',
+  reject: 'REJECT',
+  ungraded: 'UNGRADED'
+}
+const GRADE_COLOR: Record<BranchGrade, string> = {
+  approve: STATUS_CHIP.Completed,
+  'needs-work': STATUS_CHIP.Cancelled,
+  reject: STATUS_CHIP.Failed,
+  ungraded: STATUS_CHIP.Skipped
+}
+export const gradeChip = (grade: BranchGrade): string => `${STATUS_CHIP_BASE} ${GRADE_COLOR[grade]}`
+
+/**
+ * The Merge click (M28 §4) — the one call RunsView's row and the Board's
+ * Review-column card both make, so the conflict/error formatting lives once.
+ * Returns null on success (the caller reloads or marks its own local
+ * "merged" state); otherwise the text to render verbatim under the row/card.
+ */
+export async function mergeAndReport(repo: string, runId: string): Promise<string | null> {
+  const res = await window.somni.mergeRun(repo, runId)
+  if (res.ok) return null
+  return res.conflicts?.length
+    ? `Merge conflict — resolve or merge by hand: ${res.conflicts.join(', ')}`
+    : (res.error ?? 'Merge failed.')
+}
 
 export const KIND_CHIP: Record<'idea' | 'story' | 'epic', string> = {
   idea: CHIP,
