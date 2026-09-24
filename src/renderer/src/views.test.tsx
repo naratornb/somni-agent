@@ -14,6 +14,7 @@ import type {
   ProviderHealth,
   RunDetails,
   RunRow,
+  RunState,
   Settings
 } from '../../preload/index'
 import App from './App'
@@ -41,14 +42,17 @@ import {
   approveRunIds,
   briefSummary,
   captureItem,
+  consumeAskMore,
   GRADE_LABELS,
   mergeAndReport,
   paletteResults,
   railOrder,
   reorderBacklog,
   saveCapture,
+  seedRuns,
   sessionGroups,
   shouldAutoHandoff,
+  shouldOfferAskMore,
   shouldSeedProposal,
   togglePersona
 } from './ui'
@@ -601,6 +605,33 @@ test('RunDetailsPanel shows Merge only for an approved, unmerged run; merged run
   expect(merged).toContain('Merged')
 })
 
+// M29 item 2: Merge is hidden only once `details` are IN and say the branch
+// is gone — absent details (not loaded yet, the row hasn't been expanded)
+// keeps the button; the Task 3 server refusal is the real authority.
+test('RunDetailsPanel hides Merge only when loaded details say the branch is gone', () => {
+  const approved = {
+    grade: 'approve' as const,
+    reasons: [],
+    findings: [],
+    provider: 'claude' as const
+  }
+  const panel = (details: RunDetails | null): string =>
+    renderToStaticMarkup(
+      <RunDetailsPanel
+        run={{ ...run, review: approved }}
+        details={details}
+        report={null}
+        onSwitchBranch={() => {}}
+        onReveal={() => {}}
+        onCleanup={() => {}}
+        onMerge={() => {}}
+      />
+    )
+  expect(hasMergeButton(panel(null))).toBe(true)
+  expect(hasMergeButton(panel({ stats: null, branchExists: true }))).toBe(true)
+  expect(hasMergeButton(panel({ stats: null, branchExists: false }))).toBe(false)
+})
+
 test('RunDetailsPanel renders a merge conflict/error verbatim under the row', () => {
   const html = detailsPanel(
     { grade: 'approve', reasons: [], findings: [], provider: 'claude' },
@@ -640,6 +671,22 @@ test('mergeAndReport calls mergeRun with the run id and reduces the result to on
 
   // restore the SSR-wide somni proxy the rest of this file depends on
   Object.assign(globalThis, { window: { somni } })
+})
+
+// M29 item 1: durable Board grades — listRuns(repo) seeds prior-session runs
+// on load/refresh, merged so a live onRunState push always wins over the
+// disk snapshot for a key both sides have.
+test('seedRuns merges disk under live state — a live push always wins over the disk seed', () => {
+  const disk: RunRow[] = [
+    { runId: 'r1', status: 'Completed' } as RunRow,
+    { runId: 'r2', status: 'Completed' } as RunRow
+  ]
+  const live: Record<string, RunState> = { r1: { runId: 'r1', status: 'Running' } as RunState }
+  const merged = seedRuns(disk, live)
+  // r1 exists on both sides — the live push (Running) wins, not the disk seed.
+  expect(merged.r1.status).toBe('Running')
+  // r2 only exists on disk — it still comes through.
+  expect(merged.r2.status).toBe('Completed')
 })
 
 // M15 §1: one shared helper builds the captured item — first line is the name,
@@ -833,6 +880,19 @@ test('HomeView renders the quick-start box, fallback chips, and its children', (
   expect(html).toContain('What do you want done overnight?')
   expect(html).toContain('Clean up TODOs in the codebase')
   expect(html).toContain('ACTIVITY')
+})
+
+// M29 item 8 follow-up: the Quick Start chip's default follows App's
+// resolveSettings(repo) prop, not the local raw-global fetch — director
+// with no prop, owner once App resolves one (repo override or global).
+test('HomeView Quick Start chip default follows the resolved persona prop', () => {
+  const director = renderToStaticMarkup(<HomeView repo="/repo" onStart={() => {}} />)
+  expect(director).toContain('Technical Director')
+
+  const owner = renderToStaticMarkup(
+    <HomeView repo="/repo" onStart={() => {}} defaultPersona="owner" />
+  )
+  expect(owner).toContain('Project Owner')
 })
 
 // M23 #32: Roles are configuration now — they render inside Settings, even
@@ -1100,6 +1160,19 @@ test("SettingsForm's Merge reviewer row patches reviewer.runner/model/effort and
     target: { value: '' }
   })
   expect(patched?.reviewer).toBeUndefined()
+})
+
+// M29 item 6: Auto (no runner pinned) has no CLI to point a model/effort
+// at — pickReviewer falls through the failover chain regardless, so those
+// two fields are disabled while the runner select is empty.
+test("SettingsForm's Merge reviewer model/effort inputs are disabled iff the runner is Auto", () => {
+  const auto = SettingsForm(formProps())
+  expect(findByLabel(auto, 'Merge reviewer model')?.props.disabled).toBe(true)
+  expect(findByLabel(auto, 'Merge reviewer effort')?.props.disabled).toBe(true)
+
+  const pinned = SettingsForm(formProps({ s: { ...baseSettings, reviewer: { runner: 'codex' } } }))
+  expect(findByLabel(pinned, 'Merge reviewer model')?.props.disabled).toBe(false)
+  expect(findByLabel(pinned, 'Merge reviewer effort')?.props.disabled).toBe(false)
 })
 
 test("SettingsForm's Providers ↑ button on the second row patches providers.order with the swap", () => {
@@ -1545,6 +1618,25 @@ test('shouldAutoHandoff fires only for an idle, fresh, content-bearing owner gro
   expect(shouldAutoHandoff('owner', 1, false, null, 'Search is slow', '')).toBe(false) // not fresh
   expect(shouldAutoHandoff('owner', 0, true, null, 'Search is slow', '')).toBe(false) // busy
   expect(shouldAutoHandoff('owner', 0, false, 'needs-review', 'Search is slow', '')).toBe(false)
+})
+
+// M29 item 9: Ask-more — the interview cap (questionRounds >= 3) otherwise
+// silently routes the next answer into a background draft; the affordance
+// only makes sense idle, with nothing already parked for review.
+test('shouldOfferAskMore fires only at the rounds cap, idle, with no pending proposal', () => {
+  expect(shouldOfferAskMore(3, false, false)).toBe(true)
+  expect(shouldOfferAskMore(5, false, false)).toBe(true) // any rounds at/above the cap
+  expect(shouldOfferAskMore(2, false, false)).toBe(false) // under the cap
+  expect(shouldOfferAskMore(3, true, false)).toBe(false) // busy
+  expect(shouldOfferAskMore(3, false, true)).toBe(false) // a proposal's already on the table
+})
+
+// The one-shot bypass: spends `{interactive: true}` on exactly the send it
+// was set for, then reverts — a second consume (the flag already cleared by
+// the first) is a normal turn again.
+test('consumeAskMore spends interactive:true exactly once, then resets', () => {
+  expect(consumeAskMore(true)).toEqual({ opts: { interactive: true }, next: false })
+  expect(consumeAskMore(false)).toEqual({ opts: undefined, next: false })
 })
 
 // §6: the brief Summary extractor — pure text slicing, no proposal shape needed.

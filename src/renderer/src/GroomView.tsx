@@ -22,8 +22,10 @@ import {
   BUBBLE_AI,
   BUBBLE_USER,
   CHIP,
+  consumeAskMore,
   ERROR_BANNER,
   shouldAutoHandoff,
+  shouldOfferAskMore,
   shouldSeedProposal
 } from './ui'
 
@@ -155,6 +157,12 @@ export function GroomView({
   const [applying, setApplying] = useState(false)
   const [input, setInput] = useState('')
   const [lastUser, setLastUser] = useState('')
+  // Ask-more (M29 item 9): interview rounds already spent, from loadChat —
+  // the cap that would otherwise silently route the NEXT answer into a
+  // background draft. `askMoreNext` is the one-shot local opt-out; consumed
+  // and cleared by `send` regardless of whether it was actually set.
+  const [rounds, setRounds] = useState(0)
+  const [askMoreNext, setAskMoreNext] = useState(false)
   const loaded = useRef(false)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -198,7 +206,9 @@ export function GroomView({
     setMessages((m) => [...m, { role: 'user', text, ts: new Date().toISOString() }])
     setStreaming('')
     setState(null) // main clears the session state on every send (M25.3)
-    const res = await window.somni.sendChat(repo, slug, text)
+    const { opts, next } = consumeAskMore(askMoreNext)
+    setAskMoreNext(next)
+    const res = await window.somni.sendChat(repo, slug, text, opts)
     if (!res.ok) {
       setStreaming(null)
       setError(res.error ?? 'chat failed')
@@ -211,6 +221,7 @@ export function GroomView({
     loaded.current = true
     void window.somni.loadChat(repo, slug).then((c) => {
       setMessages(c.messages)
+      setRounds(c.questionRounds)
       // A Turn still in flight (M25.2): main replays what it has streamed so
       // far, so re-entering the view shows the partial reply, not an idle one.
       if (c.busy) setStreaming(c.partial)
@@ -273,6 +284,8 @@ export function GroomView({
     setQuestion(null)
     setProposal(null)
     setInput('')
+    setRounds(0)
+    setAskMoreNext(false)
   }
 
   const handoff = async (): Promise<void> => {
@@ -379,6 +392,17 @@ export function GroomView({
           Interrupted when somni quit — the conversation is intact.
           <button className={BTN_GHOST} onClick={() => void resume()}>
             Resume
+          </button>
+        </p>
+      )}
+      {/* Ask-more (M29 item 9): the interview cap otherwise routes the next
+          answer straight into a background draft with no warning — this is
+          the opt-out, spending one send's worth of `interactive: true`. */}
+      {shouldOfferAskMore(rounds, sending, proposal !== null) && (
+        <p className="flex shrink-0 items-center gap-3 rounded-lg bg-surface-container px-4 py-3 text-on-surface-variant">
+          Three rounds in — the next answer drafts a proposal. Keep talking instead?
+          <button className={BTN_GHOST} onClick={() => setAskMoreNext(true)}>
+            Ask more questions
           </button>
         </p>
       )}

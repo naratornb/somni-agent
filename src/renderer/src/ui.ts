@@ -7,7 +7,9 @@ import type {
   GroomState,
   Item,
   Persona,
-  RunnerName
+  RunnerName,
+  RunRow,
+  RunState
 } from '../../preload/index'
 
 const DISABLED = 'disabled:opacity-40 disabled:pointer-events-none'
@@ -95,6 +97,22 @@ export async function mergeAndReport(repo: string, runId: string): Promise<strin
     ? `Merge conflict — resolve or merge by hand: ${res.conflicts.join(', ')}`
     : (res.error ?? 'Merge failed.')
 }
+
+/**
+ * Runs seeding (M29 item 1): `listRuns(repo)` on load/refresh gives prior
+ * runs their Board grade chip + Merge back — durable across restarts, not
+ * just what this session's pipeline pushed live. Disk is the seed; a live
+ * `onRunState` push is always truer than the last listRuns snapshot, so it
+ * merges disk underneath whatever's already in state, never overwriting a
+ * key both sides have.
+ */
+export const seedRuns = (
+  fromDisk: RunRow[],
+  live: Record<string, RunState>
+): Record<string, RunState> => ({
+  ...Object.fromEntries(fromDisk.map((r) => [r.runId, r])),
+  ...live
+})
 
 export const KIND_CHIP: Record<'idea' | 'story' | 'epic', string> = {
   idea: CHIP,
@@ -187,6 +205,31 @@ export const shouldSeedProposal = (
   proposal: ChatProposal | null,
   groomStateAtMount?: GroomState
 ): boolean => proposal != null && alreadyParkedForReview(groomStateAtMount)
+
+/**
+ * Ask-more (M29 item 9): the interview cap (chat.ts's questionRounds >= 3)
+ * silently routes the next answer into a background draft — this is the
+ * affordance that lets the user opt out first. Idle and no proposal on the
+ * table are the same guards `sending`/`proposal` already give the composer.
+ */
+export const shouldOfferAskMore = (
+  rounds: number,
+  sending: boolean,
+  hasProposal: boolean
+): boolean => rounds >= 3 && !sending && !hasProposal
+
+/**
+ * The one-shot bypass (M29 item 9): `askNext` only ever buys ONE send its
+ * `{interactive: true}` — consuming it always resets to false, whether or
+ * not it was actually set, so a stray double-consume can never leak the
+ * bypass into a second Turn.
+ */
+export const consumeAskMore = (
+  askNext: boolean
+): { opts?: { interactive: true }; next: false } => ({
+  opts: askNext ? { interactive: true } : undefined,
+  next: false
+})
 
 // ── Pure renderer helpers (M15) ──────────────────────────────────────────────
 // Not atoms, but they live here for the same reason `appendText` does: the

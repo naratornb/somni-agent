@@ -19,7 +19,7 @@ import { BoardView } from './BoardView'
 import { GroomView } from './GroomView'
 import { HomeView } from './HomeView'
 import { CaptureModal, CommandPalette } from './capture'
-import { approveRunIds, BTN_PRIMARY, saveCapture, type PaletteResult } from './ui'
+import { approveRunIds, BTN_PRIMARY, saveCapture, seedRuns, type PaletteResult } from './ui'
 
 // Material Symbols glyph per routable view. Home reuses the freed `speed`
 // glyph — the icon font is a subset (main.css), so new ligatures render as
@@ -85,9 +85,12 @@ function App(): React.JSX.Element {
   // Fix (M27 final review): GroomView's header chip and shouldAutoHandoff must
   // see the settings-level persona too — item?.persona ?? settings.persona ??
   // 'director', the same order main resolves it in (chat.ts's personaOf).
-  // Fetched once, like HomeView's own settings fetch; a save doesn't push here
-  // live (no settings:changed event exists yet) — reopening Settings mid-app
-  // rarely races grooming a still-unstamped item.
+  // M29: switched to resolveSettings(repo) — the repo's .somni/config.json can
+  // override persona too, and this is the same resolution chat:send uses
+  // internally, so the chip/default and the actual grooming behavior agree.
+  // Refetched on every refresh(), same as the rest of the repo-scoped state —
+  // a save doesn't push here live (no settings:changed event exists yet), so
+  // reopening Settings mid-app rarely races grooming a still-unstamped item.
   const [settings, setSettings] = useState<ResolvedSettings | null>(null)
 
   // Every door into a Groom (Board, Sessions, Home, Capture, the toast, a
@@ -107,13 +110,14 @@ function App(): React.JSX.Element {
       void window.somni.skillsStatus(path).then(setSkills)
       // runs left Running on disk belong to a somni that quit or crashed
       void window.somni.orphanedRuns(path).then(setOrphans)
+      // Durable Board grades + Merge (M29 item 1): every prior run, not just
+      // what this session's pipeline pushed live — seedRuns merges disk under
+      // whatever onRunState has already pushed, so a live push always wins.
+      void window.somni.listRuns(path).then((rows) => setRuns((r) => seedRuns(rows, r)))
+      void window.somni.resolveSettings(path).then(setSettings)
     },
     [repo]
   )
-
-  useEffect(() => {
-    void window.somni.getSettings().then(setSettings)
-  }, [])
 
   useEffect(() => {
     void window.somni.lastRepo().then((path) => {
@@ -443,6 +447,7 @@ function App(): React.JSX.Element {
                 openGroom(item)
               }}
               onViewAll={() => setView('Sessions')}
+              defaultPersona={settings?.persona}
             >
               <PipelineView
                 runs={runs}
