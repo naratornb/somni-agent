@@ -280,7 +280,9 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
   ipcMain.handle('chat:load', (_e, repo: string, slug: string) => loadChat(repo, slug))
   ipcMain.handle('chat:new', (_e, repo: string, slug: string) => newChat(repo, slug))
   // Every Groom is an Item from birth (M25.1): the door creates it, main-side.
-  ipcMain.handle('groom:start', (_e, repo: string) => startGroom(repo))
+  ipcMain.handle('groom:start', (_e, repo: string, persona?: store.Persona) =>
+    startGroom(repo, persona)
+  )
   ipcMain.handle('chat:send', (_e, repo: string, slug: string, text: string) => {
     // Only a story currently executing is refused; a fresh groom and unrelated
     // items stay usable during a pipeline (Decision 9).

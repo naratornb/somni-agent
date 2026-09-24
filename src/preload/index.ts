@@ -9,6 +9,7 @@ import type { SkillsStatus } from '../main/skills'
 import type {
   Item,
   ItemStatus,
+  Persona,
   RepoData,
   ResolvedSettings,
   Role,
@@ -38,6 +39,7 @@ export type {
   ItemKind,
   ItemStatus,
   Methodology,
+  Persona,
   ProvidersSettings,
   RepoData,
   ReportStyle,
@@ -157,7 +159,8 @@ const somni = {
     ipcRenderer.invoke('item:setStatus', repo, id, status),
   // Opens a from-scratch Groom: main creates the Item first (M25.1) and the
   // conversation is keyed on its real id.
-  startGroom: (repo: string): Promise<Item> => ipcRenderer.invoke('groom:start', repo),
+  startGroom: (repo: string, persona?: Persona): Promise<Item> =>
+    ipcRenderer.invoke('groom:start', repo, persona),
   // Archived session → plain active conversation again (M25.3). The same clear
   // backs dismissing a needs-review Proposal (M25.5).
   reopenSession: (repo: string, id: string): Promise<Item> =>
@@ -187,7 +190,7 @@ const somni = {
     repo: string,
     key: string,
     proposal: ChatProposal
-  ): Promise<{ ok: true; item: Item } | { ok: false; error: string }> =>
+  ): Promise<{ ok: true; item: Item; children: Item[] } | { ok: false; error: string }> =>
     ipcRenderer.invoke('proposal:apply', repo, key, proposal),
   onChatEvent: (cb: (ev: ChatEvent) => void): (() => void) =>
     on('chat:event', (p) => cb(p as ChatEvent)),
