@@ -278,6 +278,24 @@ const sessionOf = (lines: Line[]): string | null => {
   return null
 }
 
+// The user text a work unit still owes a Turn (M27): whatever trailing user
+// line(s) follow the last assistant reply. A routed send durably appends its
+// text before handoff (sendChat) — if the job is later re-handed-off with
+// only the generic HANDOFF_MESSAGE (a resume, its own closure long gone after
+// interruptSessions), this is how the real text still reaches the model.
+function pendingText(lines: Line[]): string {
+  const messages = lines.filter((l): l is ChatMessage => 'role' in l)
+  let after = 0
+  messages.forEach((m, i) => {
+    if (m.role === 'assistant') after = i + 1
+  })
+  return messages
+    .slice(after)
+    .filter((m) => m.role === 'user')
+    .map((m) => m.text)
+    .join('\n')
+}
+
 export function loadChat(
   repo: string,
   slug: string
@@ -326,9 +344,13 @@ export function sendChat(
   // Hands-off routing (M27): an owner's groom drafts itself from birth; any
   // interview ends after three rounds. Everything else is a normal turn.
   if ((birth && personaOf(item, settings) === 'owner') || questionRounds(repo, slug) >= 3) {
+    // Durable before handoff: queued (cap full) or discarded by a quit before
+    // ever running (interruptSessions drops the job closure), the text must
+    // survive on disk either way — the closure is not the source of truth.
+    appendLine(repo, slug, { role: 'user', text, ts: new Date().toISOString() })
     return handoff(repo, slug, {
       emit: onEvent,
-      run: () => workUnitTurn(repo, slug, settings, roleSlugs, onEvent, text)
+      run: () => workUnitTurn(repo, slug, settings, roleSlugs, onEvent, text, true)
     })
   }
   void runTurn(repo, slug, text, settings, roleSlugs, onEvent, false)
@@ -350,9 +372,12 @@ export function workUnitTurn(
   settings: Settings,
   roleSlugs: string[],
   onEvent: (ev: ChatEvent) => void,
-  message: string = HANDOFF_MESSAGE
+  message: string = HANDOFF_MESSAGE,
+  // The routed path already wrote `message` to the transcript itself, durably,
+  // before ever handing off (see sendChat) — runTurn must not double-log it.
+  prelogged = false
 ): Promise<void> {
-  return runTurn(repo, slug, message, settings, roleSlugs, onEvent, true)
+  return runTurn(repo, slug, message, settings, roleSlugs, onEvent, true, prelogged)
 }
 
 function runTurn(
@@ -362,7 +387,8 @@ function runTurn(
   settings: Settings,
   roleSlugs: string[],
   onEvent: (ev: ChatEvent) => void,
-  workUnit: boolean
+  workUnit: boolean,
+  prelogged = false
 ): Promise<void> {
   // One Turn per session, whichever path asked for it — a second would
   // interleave the same transcript. Claimed synchronously, before any write:
@@ -372,7 +398,8 @@ function runTurn(
   inFlight.set(slug, ac)
   const lines = readLines(repo, slug)
   let sessionId = sessionOf(lines)
-  appendLine(repo, slug, { role: 'user', text, ts: new Date().toISOString() })
+  // The routed path already wrote this line durably before handing off.
+  if (!prelogged) appendLine(repo, slug, { role: 'user', text, ts: new Date().toISOString() })
   // Every groom is keyed on a real item (M25.1): turn 1 is seeded with the item
   // as it stands, and each turn flips it into Grooming and stamps its last
   // activity. Nothing else is written until Apply.
@@ -398,11 +425,16 @@ function runTurn(
   // A work unit resumes the same session with the assume-and-continue rules on
   // top; a handoff before the first turn still needs the grooming contract. A
   // routed message (the cap, or Propose Now) rides above the contract too —
-  // the plain HANDOFF_MESSAGE alone needs nothing extra above it.
+  // the plain HANDOFF_MESSAGE alone needs nothing extra above it. A resume
+  // (quit dropped the queued job's own closure) hands us only HANDOFF_MESSAGE
+  // too, so recover any pending routed text from the durable transcript itself
+  // — the trailing user line(s) after the last assistant reply, never yet fed
+  // to a Turn.
+  const routedText = text !== HANDOFF_MESSAGE ? text : pendingText(lines)
   const prompt = workUnit
     ? [
         sessionId ? '' : groomPreamble(roleSlugs, context, settings.methodology),
-        text === HANDOFF_MESSAGE ? '' : text,
+        routedText,
         WORK_UNIT_PROMPT
       ]
         .filter(Boolean)

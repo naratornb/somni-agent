@@ -21,7 +21,7 @@ import {
   turnArgs,
   workUnitTurn
 } from './chat'
-import { handoff, queuedIds, resetSessions } from './sessions'
+import { handoff, interruptSessions, queuedIds, resetSessions, WORK_UNIT_CAP } from './sessions'
 import type { ChatEvent } from './chat'
 import { existsSync, readdirSync } from 'fs'
 import {
@@ -1165,6 +1165,84 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     // unrelated auto-handoff muddying this assertion — this test is about birth routing only
     const events2 = await send(noSettings.id, 'go')
     expect(events2.some((e) => e.kind === 'state')).toBe(false) // director: no routing at all
+  })
+
+  // ---- M27 fix: routed text survives the queue and a quit ---------------
+
+  it('a routed send that queues at the cap has its text durably on disk while still queued', async () => {
+    const fillers = ['A', 'B', 'C'].map((n) => saveItem(repo, { name: n, kind: 'idea' }).id)
+    for (const id of fillers)
+      expect(
+        handoff(repo, id, { emit: () => {}, run: () => new Promise<void>(() => {}) }).ok
+      ).toBe(true)
+    expect(WORK_UNIT_CAP).toBe(fillers.length) // the cap this test relies on being full
+
+    const item = startGroom(repo, 'owner')
+    const res = sendChat(repo, item.id, 'seed text', {}, ['dev'], () => {})
+    expect(res.ok).toBe(true)
+    expect(queuedIds()).toEqual([item.id]) // cap full: queued, not started
+    expect(loadChat(repo, item.id).messages).toEqual([
+      expect.objectContaining({ role: 'user', text: 'seed text' })
+    ])
+  })
+
+  it('a queued routed job survives interruptSessions() — resume carries the pending text', async () => {
+    const fillers = ['A', 'B', 'C'].map((n) => saveItem(repo, { name: n, kind: 'idea' }).id)
+    for (const id of fillers)
+      expect(
+        handoff(repo, id, { emit: () => {}, run: () => new Promise<void>(() => {}) }).ok
+      ).toBe(true)
+
+    const item = startGroom(repo, 'owner')
+    expect(sendChat(repo, item.id, 'seed text', {}, ['dev'], () => {}).ok).toBe(true)
+    expect(queuedIds()).toEqual([item.id])
+
+    interruptSessions() // quit: drops every job closure, including the routed text
+    expect(queuedIds()).toEqual([])
+
+    // Resume, exactly like the real session:resume IPC handler: no text passed,
+    // just workUnitTurn's bare defaults — the pending text must come off disk.
+    let running!: Promise<void>
+    const res = handoff(repo, item.id, {
+      emit: () => {},
+      run: () => (running = workUnitTurn(repo, item.id, {}, ['dev'], () => {}))
+    })
+    expect(res.ok).toBe(true)
+    pending.push(running)
+    await running
+
+    const [call] = callsLogged()
+    expect(call[1]).toContain('seed text')
+  })
+
+  it('a routed job that runs normally after dequeuing logs its text exactly once', async () => {
+    let releaseFiller!: () => void
+    const fillerRuns = [
+      () => new Promise<void>((resolve) => (releaseFiller = resolve)),
+      () => new Promise<void>(() => {}),
+      () => new Promise<void>(() => {})
+    ]
+    const fillers = ['A', 'B', 'C'].map((n) => saveItem(repo, { name: n, kind: 'idea' }).id)
+    fillers.forEach((id, i) =>
+      expect(handoff(repo, id, { emit: () => {}, run: fillerRuns[i] }).ok).toBe(true)
+    )
+
+    fake({ FAKE_TEXT: qBlock('{"question":"Q","options":["a"],"recommended":"a"}') })
+    const item = startGroom(repo, 'owner')
+    const done = new Promise<void>((resolve) => {
+      const res = sendChat(repo, item.id, 'seed text', {}, ['dev'], (ev) => {
+        if (ev.kind === 'done' || ev.kind === 'error') resolve()
+      })
+      expect(res.ok).toBe(true)
+    })
+    pending.push(done)
+    expect(queuedIds()).toEqual([item.id]) // cap full: queued
+
+    releaseFiller() // frees a slot — startNext() dequeues and runs the routed job for real
+    await done
+
+    const copies = loadChat(repo, item.id).messages.filter((m) => m.text === 'seed text')
+    expect(copies).toHaveLength(1)
   })
 })
 
