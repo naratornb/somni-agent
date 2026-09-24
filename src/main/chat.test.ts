@@ -460,6 +460,10 @@ if (process.env.FAKE_FAIL) {
 }
 process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: process.env.FAKE_SESSION }) + '\\n')
 process.stdout.write(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: process.env.FAKE_TEXT }] } }) + '\\n')
+if (process.env.FAKE_FAIL_AFTER_TEXT) {
+  process.stderr.write('claude: rate limited\\n')
+  process.exit(1)
+}
 process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false }) + '\\n')
 `
 
@@ -1130,14 +1134,34 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     // the session actually transitioned (started, or queued behind a full cap)
     // rather than being refused for a false "still busy" reading of chatBusy
     expect(
-      events.some(
-        (e) => e.kind === 'state' && (e.state === 'working' || e.state === 'queued')
-      )
+      events.some((e) => e.kind === 'state' && (e.state === 'working' || e.state === 'queued'))
     ).toBe(true)
     expect(callsLogged()).toHaveLength(2) // the interactive turn + the auto-handed-off work unit
     const messages = loadChat(repo, item.id).messages
     expect(messages.filter((m) => m.role === 'user')).toHaveLength(2)
     expect(messages.at(-1)).toMatchObject({ role: 'assistant' })
+  })
+
+  // Fix (M27 final review): a rate-limited/killed turn can still stream
+  // fenceless prose before dying — the old code only checked `reply.trim()`,
+  // ignoring the exit code, so this used to hand off into a background work
+  // unit that (on the same cooling provider) would fail again and park a
+  // confusing needs-review over what was really just a dropped turn.
+  it('a failed exit with a fenceless partial reply does not auto-hand-off', async () => {
+    const item = saveItem(repo, { name: 'Thing', kind: 'idea' })
+    fake({ FAKE_TEXT: 'just some plain chat, no fences at all', FAKE_FAIL_AFTER_TEXT: '1' })
+    const events: ChatEvent[] = []
+    const p = new Promise<void>((resolve) => {
+      sendChat(repo, item.id, 'hi', {}, ['dev'], (ev) => {
+        events.push(ev)
+        if (ev.kind === 'done' || ev.kind === 'error') resolve()
+      })
+    })
+    pending.push(p)
+    await p
+    await new Promise((r) => setTimeout(r, 50)) // prove nothing fires in the background
+    expect(callsLogged()).toHaveLength(1) // the failed turn only — no auto-handed-off work unit
+    expect(events.some((e) => e.kind === 'state')).toBe(false) // never parked needs-review
   })
 
   it('an interactive reply with a proposal fence does not auto-hand-off', async () => {
@@ -1192,9 +1216,9 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
   it('a routed send that queues at the cap has its text durably on disk while still queued', async () => {
     const fillers = ['A', 'B', 'C'].map((n) => saveItem(repo, { name: n, kind: 'idea' }).id)
     for (const id of fillers)
-      expect(
-        handoff(repo, id, { emit: () => {}, run: () => new Promise<void>(() => {}) }).ok
-      ).toBe(true)
+      expect(handoff(repo, id, { emit: () => {}, run: () => new Promise<void>(() => {}) }).ok).toBe(
+        true
+      )
     expect(WORK_UNIT_CAP).toBe(fillers.length) // the cap this test relies on being full
 
     const item = startGroom(repo, 'owner')
@@ -1209,9 +1233,9 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
   it('a queued routed job survives interruptSessions() — resume carries the pending text', async () => {
     const fillers = ['A', 'B', 'C'].map((n) => saveItem(repo, { name: n, kind: 'idea' }).id)
     for (const id of fillers)
-      expect(
-        handoff(repo, id, { emit: () => {}, run: () => new Promise<void>(() => {}) }).ok
-      ).toBe(true)
+      expect(handoff(repo, id, { emit: () => {}, run: () => new Promise<void>(() => {}) }).ok).toBe(
+        true
+      )
 
     const item = startGroom(repo, 'owner')
     expect(sendChat(repo, item.id, 'seed text', {}, ['dev'], () => {}).ok).toBe(true)

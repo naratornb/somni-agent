@@ -5,6 +5,7 @@ import type {
   Persona,
   ProviderHealth,
   RepoData,
+  ResolvedSettings,
   RunState,
   SkillsStatus
 } from '../../preload/index'
@@ -81,6 +82,13 @@ function App(): React.JSX.Element {
   // A Groom that finished while the user was elsewhere (M25.2).
   // The finished Groom to announce, and whether a background work unit did it.
   const [groomDone, setGroomDone] = useState<{ slug: string; workUnit: boolean } | null>(null)
+  // Fix (M27 final review): GroomView's header chip and shouldAutoHandoff must
+  // see the settings-level persona too — item?.persona ?? settings.persona ??
+  // 'director', the same order main resolves it in (chat.ts's personaOf).
+  // Fetched once, like HomeView's own settings fetch; a save doesn't push here
+  // live (no settings:changed event exists yet) — reopening Settings mid-app
+  // rarely races grooming a still-unstamped item.
+  const [settings, setSettings] = useState<ResolvedSettings | null>(null)
 
   // Every door into a Groom (Board, Sessions, Home, Capture, the toast, a
   // clicked notification) opens it the same way: plain conversation, no seed,
@@ -102,6 +110,10 @@ function App(): React.JSX.Element {
     },
     [repo]
   )
+
+  useEffect(() => {
+    void window.somni.getSettings().then(setSettings)
+  }, [])
 
   useEffect(() => {
     void window.somni.lastRepo().then((path) => {
@@ -456,12 +468,19 @@ function App(): React.JSX.Element {
             <RunsView repo={repo} />
           ) : view === 'Groom' && groom ? (
             <GroomView
+              // Fix (M27 final review): distinct grooms are distinct instances — a
+              // groom-to-groom transition (the toast's Open button, a clicked
+              // notification) must never reuse the previous session's mount-time
+              // state (loaded ref, transcript, persona override) against a new
+              // itemId.
+              key={groom.id}
               repo={repo}
               roles={data.roles}
               itemId={groom.id}
               itemName={groom.name}
               groomState={data.items.find((i) => i.id === groom.id)?.groomState}
               item={data.items.find((i) => i.id === groom.id)}
+              defaultPersona={settings?.persona}
               seed={groomSeed ?? undefined}
               applyLabel={autoRun ? 'Apply & run' : undefined}
               onApplied={(item, children) => {

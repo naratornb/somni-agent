@@ -41,6 +41,11 @@ type Props = {
   // a groom just created this tick (App hasn't refreshed data.items yet); the
   // chip then shows the director fallback until the next refresh.
   item?: Item
+  // Fix (M27 final review): the settings-level persona, resolved the same way
+  // main does (chat.ts's personaOf: item stamp → settings → director) — an
+  // unstamped item (Board/Capture, never persona-stamped) must not silently
+  // fall to the director default when a Project Owner is set in Settings.
+  defaultPersona?: Persona
   // Home quick-start (M23): sent as the first message when the transcript is
   // empty, so the Interview starts from what the user already typed.
   seed?: string
@@ -121,6 +126,7 @@ export function GroomView({
   itemName,
   groomState,
   item,
+  defaultPersona,
   seed,
   applyLabel = 'Apply',
   onApplied
@@ -128,9 +134,14 @@ export function GroomView({
   const slug = itemId
   const [name, setName] = useState(itemName)
   const [state, setState] = useState<GroomState | null>(groomState ?? null)
-  // Header persona chip (§4): the renderer's own director fallback — never
-  // settings-aware, per the ruling that persona stays out of SETTINGS_DEFAULTS.
-  const [persona, setPersona] = useState<Persona>(item?.persona ?? 'director')
+  // Header persona chip (§4): resolved fresh every render from the current
+  // props, not seeded once via useState — a quick-start's `item` prop arrives
+  // after mount (App hasn't refreshed data.items yet on the first render), and
+  // a useState initializer never re-runs to pick it up. `personaOverride` holds
+  // only an explicit flip (flipPersona below); once the item prop catches up
+  // (App's refresh after saveItem), the stamped value on `item` wins again.
+  const [personaOverride, setPersonaOverride] = useState<Persona | null>(null)
+  const persona: Persona = item?.persona ?? personaOverride ?? defaultPersona ?? 'director'
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -298,7 +309,7 @@ export function GroomView({
   const flipPersona = (): void => {
     if (!item) return
     const next: Persona = persona === 'owner' ? 'director' : 'owner'
-    setPersona(next)
+    setPersonaOverride(next)
     void window.somni.saveItem(repo, { ...item, persona: next })
   }
 

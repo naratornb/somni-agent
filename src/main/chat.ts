@@ -516,8 +516,12 @@ function runTurn(
     })
     // A reply that neither asks nor proposes is done talking (M27): the session
     // drafts itself rather than idling. Misfires are cheap — the brief's
-    // Assumptions section carries whatever was left open (spec §9).
-    if (!workUnit && item && !parseProposal(finalText) && !parseQuestion(finalText)) {
+    // Assumptions section carries whatever was left open (spec §9). Fix (final
+    // review): gated on a clean turn (`r.ok`) — a rate-limited/killed turn that
+    // streamed fenceless partial prose before dying must not hand off; that
+    // background draft would run on the same cooling provider, fail again, and
+    // park a confusing needs-review over what was really just a dropped turn.
+    if (!workUnit && r.ok && item && !parseProposal(finalText) && !parseQuestion(finalText)) {
       handoff(repo, slug, {
         emit: onEvent,
         run: () => workUnitTurn(repo, slug, settings, roleSlugs, onEvent)

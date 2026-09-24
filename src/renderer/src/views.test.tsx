@@ -1300,6 +1300,43 @@ test('GroomView header chip shows the resolved persona, falling back to director
   expect(fallback).toContain('Technical Director')
 })
 
+// Fix (M27 final review): the chip must fall through to the settings-level
+// persona — not straight to the director default — for an unstamped item
+// (Board/Capture never stamps persona). item?.persona still wins when both
+// are present; no item and no defaultPersona keeps the director fallback.
+test('GroomView header chip falls through to defaultPersona (settings) before director', () => {
+  const settingsOwner = renderToStaticMarkup(
+    <GroomView
+      repo="/repo"
+      roles={roles}
+      itemId="SOM-1"
+      itemName="x"
+      item={{ ...items[0], id: 'SOM-1' }} // no persona stamp
+      defaultPersona="owner"
+      onApplied={() => {}}
+    />
+  )
+  expect(settingsOwner).toContain('Project Owner')
+
+  const itemStampWins = renderToStaticMarkup(
+    <GroomView
+      repo="/repo"
+      roles={roles}
+      itemId="SOM-1"
+      itemName="x"
+      item={{ ...items[0], id: 'SOM-1', persona: 'director' }}
+      defaultPersona="owner"
+      onApplied={() => {}}
+    />
+  )
+  expect(itemStampWins).toContain('Technical Director')
+
+  const noSettingsNoItem = renderToStaticMarkup(
+    <GroomView repo="/repo" roles={roles} itemId="SOM-1" itemName="x" onApplied={() => {}} />
+  )
+  expect(noSettingsNoItem).toContain('Technical Director')
+})
+
 // §5: the owner mount-handoff decision, extracted pure so it's testable without
 // running GroomView's load effect. A truly empty owner groom (no name pick, no
 // spec) is spec §2's fallback — the user types, and chat.ts's birth routing

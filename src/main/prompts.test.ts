@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { FIX_PROMPT, groomPreamble, REVIEW_PROMPT, subtaskPrompt, WORK_UNIT_PROMPT } from './prompts'
+import {
+  FIX_PROMPT,
+  groomPreamble,
+  REVIEW_PROMPT,
+  subtaskPrompt,
+  WORK_UNIT_PROMPT
+} from './prompts'
 
 describe('subtaskPrompt', () => {
   it('keeps the role preamble optional and the order stable', () => {
