@@ -1,7 +1,7 @@
 // Shared UI atoms — M10-ui.md §0. Class strings, not components: the design
 // system is Tailwind utilities, and a wrapper component per button would hide
 // the exact strings the mocks are the source of truth for.
-import type { GroomState, Item, Persona, RunnerName } from '../../preload/index'
+import type { ChatProposal, GroomState, Item, Persona, RunnerName } from '../../preload/index'
 
 const DISABLED = 'disabled:opacity-40 disabled:pointer-events-none'
 
@@ -136,6 +136,18 @@ export const shouldAutoHandoff = (
  */
 export const alreadyParkedForReview = (groomStateAtMount?: GroomState): boolean =>
   groomStateAtMount === 'needs-review'
+
+/**
+ * Reopened-brief mount seed (M27 §7 round-3 fix): a fence sitting in the
+ * transcript is not enough on its own — Dismiss clears groomState
+ * (session:reopen) while leaving that fence text right where it was, so a
+ * dismissed proposal must never resurrect just because it's still there. Only
+ * seed when the session is STILL parked needs-review at mount.
+ */
+export const shouldSeedProposal = (
+  proposal: ChatProposal | null,
+  groomStateAtMount?: GroomState
+): boolean => proposal != null && alreadyParkedForReview(groomStateAtMount)
 
 // ── Pure renderer helpers (M15) ──────────────────────────────────────────────
 // Not atoms, but they live here for the same reason `appendText` does: the

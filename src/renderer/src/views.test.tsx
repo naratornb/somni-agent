@@ -46,6 +46,7 @@ import {
   saveCapture,
   sessionGroups,
   shouldAutoHandoff,
+  shouldSeedProposal,
   togglePersona
 } from './ui'
 
@@ -1454,6 +1455,23 @@ test('reopened brief: a loaded proposal + already-parked groomState together pro
   expect(section.props.applyLabel).toBe('Approve & run')
   expect(section.props.summary).toBe('Ship a greeting.')
   expect(section.props.secondaryLabel).toBe('Apply')
+})
+
+// Fix round 3: Dismiss clears groomState (session:reopen) while leaving the
+// fence text sitting in the transcript — a fence existing is not enough, the
+// session must still BE parked needs-review, or a dismissed proposal
+// resurrects on reopen. GroomView's mount effect gates the proposal seed on
+// exactly this function (`shouldSeedProposal(c.proposal, groomState)`); when
+// it's false, `setProposal` is never called, `proposal` stays null, and
+// `{proposal && <ProposalSection/>}` renders nothing — the SSR harness can't
+// observe that absence any more directly than the real gate itself (same
+// ceiling as the round-2 composition test above: no DOM/act, no jsdom
+// dependency available to add).
+test('shouldSeedProposal: a fence still in the transcript never reseeds without a parked groomState', () => {
+  const loadedProposal = storyProposalM27 // stands in for the fence left in the transcript
+  expect(shouldSeedProposal(loadedProposal, undefined)).toBe(false) // dismissed, then reopened
+  expect(shouldSeedProposal(loadedProposal, 'needs-review')).toBe(true) // (b) still seeds
+  expect(shouldSeedProposal(null, 'needs-review')).toBe(false) // no fence at all, never seeds
 })
 
 // ProposalPreview's rendering half of the same feature: the summary block

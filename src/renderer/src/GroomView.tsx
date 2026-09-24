@@ -23,7 +23,8 @@ import {
   BUBBLE_USER,
   CHIP,
   ERROR_BANNER,
-  shouldAutoHandoff
+  shouldAutoHandoff,
+  shouldSeedProposal
 } from './ui'
 
 type Props = {
@@ -204,13 +205,14 @@ export function GroomView({
       if (c.busy) setStreaming(c.partial)
       // Reopened brief (M27 §7 fix): a needs-review session gets no live
       // 'done' event to carry its proposal on this mount, so main replays it
-      // from the transcript. Only when nothing live has set one already —
-      // `prev ?? c.proposal` never clobbers a live event that (impossibly
-      // fast, but just in case) beat this load. fromWorkUnit needs no touch
-      // here: whenever a proposal reached the transcript at all, chat.ts had
-      // already parked the item needs-review, so the mount seed above
-      // (`alreadyParkedForReview(groomState)`) is already correct.
-      if (c.proposal) setProposal((prev) => prev ?? c.proposal)
+      // from the transcript — but only when the session is STILL parked
+      // needs-review at mount (ui.ts's shouldSeedProposal). Dismiss clears
+      // groomState (session:reopen) while leaving the fence text sitting in
+      // the transcript, so a dismissed proposal must never resurrect just
+      // because it's still there (round-3 fix). `prev ?? c.proposal` also
+      // never clobbers a live event that (impossibly fast, but just in case)
+      // beat this load.
+      if (shouldSeedProposal(c.proposal, groomState)) setProposal((prev) => prev ?? c.proposal)
       // The seed is the quick-start's first message. Each groom owns its own
       // transcript now, so a fresh one is always empty — but never re-send into
       // a transcript that already has turns.
