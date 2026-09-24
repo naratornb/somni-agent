@@ -7,6 +7,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, test } from 'vitest'
 import type {
+  BranchGrade,
   GroomState,
   Item,
   Persona,
@@ -40,6 +41,8 @@ import {
   approveRunIds,
   briefSummary,
   captureItem,
+  GRADE_LABELS,
+  mergeAndReport,
   paletteResults,
   railOrder,
   reorderBacklog,
@@ -230,6 +233,7 @@ const views: [string, React.JSX.Element][] = [
       onSwitchBranch={() => {}}
       onReveal={() => {}}
       onCleanup={() => {}}
+      onMerge={() => {}}
     />
   ],
   ['Roles', <RolesView key="ro" repo="/repo" roles={roles} refresh={() => {}} />],
@@ -436,6 +440,41 @@ test('Board cards carry their column affordance and drag rules', () => {
   expect(html.match(/draggable="true"/g)).toHaveLength(5)
 })
 
+// M28 §4: the Review-column card (SOM-6, status 'review') gets the same grade
+// chip as RunsView, and Merge only for an approved, unmerged run — sharing
+// mergeAndReport rather than a card-local clone of the conflict formatting.
+test('Board Review-column card shows a grade chip and Merge only for an approved, unmerged run', () => {
+  const reviewRun = { ...run, runId: 'r6', workflow: 'SOM-6' }
+  const board = (review: RunRow['review']): string =>
+    renderToStaticMarkup(
+      <BoardView
+        repo="/repo"
+        items={items}
+        backlog={[]}
+        roles={roles}
+        runs={{ r6: { ...reviewRun, review } as never }}
+        refresh={() => {}}
+        onGroom={() => {}}
+      />
+    )
+  const base = { reasons: [] as string[], findings: [] as string[], provider: 'claude' as const }
+
+  const approved = board({ ...base, grade: 'approve' })
+  expect(approved).toContain('APPROVE')
+  expect(approved).toMatch(/>Merge</)
+
+  const rejected = board({ ...base, grade: 'reject' })
+  expect(rejected).toContain('REJECT')
+  expect(rejected).not.toMatch(/>Merge</)
+
+  const merged = board({ ...base, grade: 'approve', merged: '2026-09-24T00:00:00.000Z' })
+  expect(merged).not.toMatch(/>Merge</)
+  expect(merged).toContain('Merged')
+
+  // Accept stays put regardless — Merge/merged is additive, not a replacement.
+  expect(approved).toContain('Accept')
+})
+
 // The expanded card is the runs_reports mock: tiles, summary, per-file list.
 test('RunDetailsPanel shows tiles, summary and files', () => {
   const html = renderToStaticMarkup(
@@ -446,6 +485,7 @@ test('RunDetailsPanel shows tiles, summary and files', () => {
       onSwitchBranch={() => {}}
       onReveal={() => {}}
       onCleanup={() => {}}
+      onMerge={() => {}}
     />
   )
   expect(html).toContain('1m 39s')
@@ -473,6 +513,7 @@ test('Switch to Branch is disabled with a reason while the worktree holds the br
       onSwitchBranch={() => {}}
       onReveal={() => {}}
       onCleanup={() => {}}
+      onMerge={() => {}}
     />
   )
   expect(html).toContain('Branch is checked out in the run&#x27;s worktree — Clean up first')
@@ -488,6 +529,7 @@ test('Switch to Branch enables once the worktree is cleaned up', () => {
       onSwitchBranch={() => {}}
       onReveal={() => {}}
       onCleanup={() => {}}
+      onMerge={() => {}}
     />
   )
   expect(html).not.toContain('Clean up first')
@@ -503,11 +545,89 @@ test('RunDetailsPanel falls back to em-dashes and the minimal-style hint', () =>
       onSwitchBranch={() => {}}
       onReveal={() => {}}
       onCleanup={() => {}}
+      onMerge={() => {}}
     />
   )
   expect(html).toContain('report style is Minimal')
   expect(html).toContain('—')
   expect(html).toContain('Files Changed (0)')
+})
+
+// ── M28: branch review — grade chip, Merge, merged tag ──────────────────────
+
+const detailsPanel = (review: RunRow['review'], mergeError?: string): string =>
+  renderToStaticMarkup(
+    <RunDetailsPanel
+      run={{ ...run, review }}
+      details={runDetails}
+      report={null}
+      onSwitchBranch={() => {}}
+      onReveal={() => {}}
+      onCleanup={() => {}}
+      onMerge={() => {}}
+      mergeError={mergeError}
+    />
+  )
+
+// A button match, not a substring one — "Merge" must not fire on "Merged".
+const hasMergeButton = (html: string): boolean => />Merge</.test(html)
+
+test('RunDetailsPanel renders a grade chip per grade, with its reasons, and none when review is absent', () => {
+  const grades: BranchGrade[] = ['approve', 'needs-work', 'reject', 'ungraded']
+  for (const grade of grades) {
+    const html = detailsPanel({ grade, reasons: ['Because reasons.'], findings: [], provider: 'claude' })
+    expect(html).toContain(GRADE_LABELS[grade])
+    expect(html).toContain('Because reasons.')
+  }
+  const bare = detailsPanel(undefined)
+  for (const label of Object.values(GRADE_LABELS)) expect(bare).not.toContain(label)
+  expect(hasMergeButton(bare)).toBe(false)
+})
+
+test('RunDetailsPanel shows Merge only for an approved, unmerged run; merged runs show a merged tag instead', () => {
+  const base = { reasons: [] as string[], findings: [] as string[], provider: 'claude' as const }
+  expect(hasMergeButton(detailsPanel({ ...base, grade: 'approve' }))).toBe(true)
+  expect(hasMergeButton(detailsPanel({ ...base, grade: 'needs-work' }))).toBe(false)
+  expect(hasMergeButton(detailsPanel({ ...base, grade: 'reject' }))).toBe(false)
+  expect(hasMergeButton(detailsPanel({ ...base, grade: 'ungraded' }))).toBe(false)
+
+  const merged = detailsPanel({ ...base, grade: 'approve', merged: '2026-09-24T00:00:00.000Z' })
+  expect(hasMergeButton(merged)).toBe(false)
+  expect(merged).toContain('Merged')
+})
+
+test('RunDetailsPanel renders a merge conflict/error verbatim under the row', () => {
+  const html = detailsPanel(
+    { grade: 'approve', reasons: [], findings: [], provider: 'claude' },
+    'src/a.ts, src/b.ts'
+  )
+  expect(html).toContain('src/a.ts, src/b.ts')
+})
+
+test('mergeAndReport calls mergeRun with the run id and reduces the result to one display string', async () => {
+  const calls: unknown[] = []
+  Object.assign(globalThis, {
+    window: {
+      somni: {
+        mergeRun: (...args: unknown[]) => (
+          calls.push(args), Promise.resolve({ ok: false, conflicts: ['a.ts', 'b.ts'] })
+        )
+      }
+    }
+  })
+  expect(await mergeAndReport('/repo', 'r1')).toBe('a.ts, b.ts')
+  expect(calls[0]).toEqual(['/repo', 'r1'])
+
+  Object.assign(globalThis, {
+    window: { somni: { mergeRun: () => Promise.resolve({ ok: false, error: 'only approved runs merge' }) } }
+  })
+  expect(await mergeAndReport('/repo', 'r1')).toBe('only approved runs merge')
+
+  Object.assign(globalThis, { window: { somni: { mergeRun: () => Promise.resolve({ ok: true }) } } })
+  expect(await mergeAndReport('/repo', 'r1')).toBeNull()
+
+  // restore the SSR-wide somni proxy the rest of this file depends on
+  Object.assign(globalThis, { window: { somni } })
 })
 
 // M15 §1: one shared helper builds the captured item — first line is the name,
@@ -904,6 +1024,70 @@ test("SettingsForm's Providers cap input patches providers.caps[name]; empty or 
     target: { value: '-3' }
   })
   expect(patched?.providers?.caps).toEqual({})
+})
+
+// M28 §4: the Merge reviewer row (Settings.reviewer) — same runner/model/effort
+// shape as the top-level fields, in the patchCap idiom: each onChange patches
+// through one function that deletes empty keys, clearing the whole block once
+// nothing is left set.
+test("SettingsForm's Merge reviewer row patches reviewer.runner/model/effort and clears on empty", () => {
+  let patched: Partial<Settings> | undefined
+  const tree = SettingsForm(formProps({ patch: (p) => (patched = p) }))
+  const runner = findByLabel(tree, 'Merge reviewer runner')
+  ;(runner?.props.onChange as (e: { target: { value: string } }) => void)?.({
+    target: { value: 'codex' }
+  })
+  expect(patched?.reviewer).toEqual({ runner: 'codex' })
+
+  const tree2 = SettingsForm(
+    formProps({
+      s: { ...baseSettings, reviewer: { runner: 'codex' } },
+      patch: (p) => (patched = p)
+    })
+  )
+  const model = findByLabel(tree2, 'Merge reviewer model')
+  ;(model?.props.onChange as (e: { target: { value: string } }) => void)?.({
+    target: { value: 'gpt-5' }
+  })
+  expect(patched?.reviewer).toEqual({ runner: 'codex', model: 'gpt-5' })
+
+  const tree3 = SettingsForm(
+    formProps({
+      s: { ...baseSettings, reviewer: { runner: 'codex', model: 'gpt-5' } },
+      patch: (p) => (patched = p)
+    })
+  )
+  const effort = findByLabel(tree3, 'Merge reviewer effort')
+  ;(effort?.props.onChange as (e: { target: { value: string } }) => void)?.({
+    target: { value: 'high' }
+  })
+  expect(patched?.reviewer).toEqual({ runner: 'codex', model: 'gpt-5', effort: 'high' })
+
+  // Clearing one field (select back to Auto) drops only that key.
+  const tree4 = SettingsForm(
+    formProps({
+      s: { ...baseSettings, reviewer: { runner: 'codex', model: 'gpt-5' } },
+      patch: (p) => (patched = p)
+    })
+  )
+  const runner4 = findByLabel(tree4, 'Merge reviewer runner')
+  ;(runner4?.props.onChange as (e: { target: { value: string } }) => void)?.({
+    target: { value: '' }
+  })
+  expect(patched?.reviewer).toEqual({ model: 'gpt-5' })
+
+  // Clearing the last remaining field drops the whole reviewer block.
+  const tree5 = SettingsForm(
+    formProps({
+      s: { ...baseSettings, reviewer: { model: 'gpt-5' } },
+      patch: (p) => (patched = p)
+    })
+  )
+  const model5 = findByLabel(tree5, 'Merge reviewer model')
+  ;(model5?.props.onChange as (e: { target: { value: string } }) => void)?.({
+    target: { value: '' }
+  })
+  expect(patched?.reviewer).toBeUndefined()
 })
 
 test("SettingsForm's Providers ↑ button on the second row patches providers.order with the swap", () => {

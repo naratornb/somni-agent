@@ -19,6 +19,9 @@ import type {
 import type { ProviderHealth, RunnerHealth } from '../main/runners'
 import type { ModelProgress, Transcription, VoiceStatus } from '../main/voice'
 
+// Persona-style re-export (M28): the grade/review shape round-trips through
+// RunRow/RunState already — this just names it for the renderer.
+export type { BranchGrade, BranchReview } from '../main/branchReview'
 export type { ChatEvent, ChatMessage, ChatProposal, ChatQuestion, GroomedStory } from '../main/chat'
 export type {
   DrainMode,

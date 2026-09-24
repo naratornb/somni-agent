@@ -11,9 +11,12 @@ import {
   CHIP,
   CHIP_SM,
   ERROR_BANNER,
+  gradeChip,
+  GRADE_LABELS,
   ICON_BTN,
   KIND_CHIP,
   LABEL,
+  mergeAndReport,
   reorderBacklog
 } from './ui'
 
@@ -104,6 +107,11 @@ export function BoardView({
   const [editing, setEditing] = useState<Item | null>(null)
   const [refused, setRefused] = useState<{ col: string; error: string } | null>(null)
   const [ringing, setRinging] = useState<string | null>(null)
+  // Merge (M28 §4): the merge IPC has no push event, and this view never
+  // re-lists runs from disk (unlike RunsView), so a successful merge is
+  // remembered locally for the rest of the session rather than re-fetched.
+  const [merged, setMerged] = useState<Set<string>>(new Set())
+  const [mergeErr, setMergeErr] = useState<Record<string, string>>({})
 
   const flashRefused = (status: ItemStatus, error: string): void => {
     const col = colOf(status)
@@ -130,6 +138,19 @@ export function BoardView({
     const { refused: why } = await window.somni.addToPipeline(repo, [id])
     if (why.length) flashRefused('in-progress', why[0])
     refresh()
+  }
+
+  // Merge (M28 §4) — shares mergeAndReport with RunsView's row rather than
+  // cloning the conflict/error formatting.
+  const doMerge = async (runId: string): Promise<void> => {
+    const feedback = await mergeAndReport(repo, runId)
+    setMergeErr((m) => {
+      const next = { ...m }
+      if (feedback) next[runId] = feedback
+      else delete next[runId]
+      return next
+    })
+    if (!feedback) setMerged((s) => new Set(s).add(runId))
   }
 
   // Latest run for a story, for the In Progress / Needs Attention metadata.
@@ -176,6 +197,7 @@ export function BoardView({
   const card = (item: Item, status: ItemStatus): React.JSX.Element => {
     const blocked = blockers(item)
     const run = runOf(item.id)
+    const review = run?.review
     const subtaskCount = item.kind === 'story' ? item.tasks.length : 0
     const childStories = items.filter((i) => i.epic === item.id)
     // In Progress is executor-owned and Done is one-way — neither is draggable (§2).
@@ -281,12 +303,35 @@ export function BoardView({
               </div>
             )}
             {status === 'review' && (
-              <button
-                className="rounded-full bg-primary-container px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-inverse-primary"
-                onClick={() => void move(item.id, 'done')}
-              >
-                Accept
-              </button>
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  {review && (
+                    <>
+                      <span className={gradeChip(review.grade)}>{GRADE_LABELS[review.grade]}</span>
+                      {review.grade === 'approve' && !review.merged && !merged.has(run!.runId) && (
+                        <button
+                          className="rounded-lg border border-border-subtle bg-surface px-3 py-1 text-xs text-on-surface transition-colors hover:bg-surface-container"
+                          onClick={() => void doMerge(run!.runId)}
+                        >
+                          Merge
+                        </button>
+                      )}
+                      {(review.merged || merged.has(run!.runId)) && (
+                        <span className={CHIP}>Merged</span>
+                      )}
+                    </>
+                  )}
+                  <button
+                    className="rounded-full bg-primary-container px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-inverse-primary"
+                    onClick={() => void move(item.id, 'done')}
+                  >
+                    Accept
+                  </button>
+                </div>
+                {run && mergeErr[run.runId] && (
+                  <p className="text-xs text-error whitespace-pre-wrap">{mergeErr[run.runId]}</p>
+                )}
+              </div>
             )}
           </div>
         )}
