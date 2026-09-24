@@ -575,7 +575,12 @@ const hasMergeButton = (html: string): boolean => />Merge</.test(html)
 test('RunDetailsPanel renders a grade chip per grade, with its reasons, and none when review is absent', () => {
   const grades: BranchGrade[] = ['approve', 'needs-work', 'reject', 'ungraded']
   for (const grade of grades) {
-    const html = detailsPanel({ grade, reasons: ['Because reasons.'], findings: [], provider: 'claude' })
+    const html = detailsPanel({
+      grade,
+      reasons: ['Because reasons.'],
+      findings: [],
+      provider: 'claude'
+    })
     expect(html).toContain(GRADE_LABELS[grade])
     expect(html).toContain('Because reasons.')
   }
@@ -610,20 +615,27 @@ test('mergeAndReport calls mergeRun with the run id and reduces the result to on
     window: {
       somni: {
         mergeRun: (...args: unknown[]) => (
-          calls.push(args), Promise.resolve({ ok: false, conflicts: ['a.ts', 'b.ts'] })
+          calls.push(args),
+          Promise.resolve({ ok: false, conflicts: ['a.ts', 'b.ts'] })
         )
       }
     }
   })
-  expect(await mergeAndReport('/repo', 'r1')).toBe('a.ts, b.ts')
+  expect(await mergeAndReport('/repo', 'r1')).toBe(
+    'Merge conflict — resolve or merge by hand: a.ts, b.ts'
+  )
   expect(calls[0]).toEqual(['/repo', 'r1'])
 
   Object.assign(globalThis, {
-    window: { somni: { mergeRun: () => Promise.resolve({ ok: false, error: 'only approved runs merge' }) } }
+    window: {
+      somni: { mergeRun: () => Promise.resolve({ ok: false, error: 'only approved runs merge' }) }
+    }
   })
   expect(await mergeAndReport('/repo', 'r1')).toBe('only approved runs merge')
 
-  Object.assign(globalThis, { window: { somni: { mergeRun: () => Promise.resolve({ ok: true }) } } })
+  Object.assign(globalThis, {
+    window: { somni: { mergeRun: () => Promise.resolve({ ok: true }) } }
+  })
   expect(await mergeAndReport('/repo', 'r1')).toBeNull()
 
   // restore the SSR-wide somni proxy the rest of this file depends on

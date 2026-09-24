@@ -52,6 +52,15 @@ import { isAvailable, markAuthFailed, resetProviders } from './providers'
 //   FAKE_RL_MATCH=<s> rate-limit only invocations whose args contain <s>
 //   FAKE_VERDICT=red|none  the somni-verdict block the closing Review emits (M16)
 //   FAKE_ARGV=<file>  dump argv to <file> (the discipline-preamble assertion)
+//   FAKE_REVIEW_ARGV=<file>  dump ONLY the Branch Review/merge-reviewer call's
+//     argv to <file> — isolates the grading turn from the closing Review and
+//     any fix-round call sharing the same FAKE_ARGV file, so the
+//     no-model/no-dangerously-flag security-seam assertions aren't tripped by
+//     an unrelated, legitimately-autonomous call.
+//   FAKE_FIX_ARGV=<file>  dump ONLY the "Address merge review" fix-round
+//     call's argv (matched on its "came back needs-work" prompt text) —
+//     isolates it from the closing Review call, which legitimately carries
+//     the run's top-level model/provider pairing on the same shared binary.
 //   FAKE_REVIEW=<grade[,grade]>  the somni-review block a Branch Review turn
 //     emits (M28), keyed off the argv carrying the merge-reviewer prompt so
 //     ordinary subtask/closing-Review calls through this same binary are
@@ -73,8 +82,14 @@ if [ -n "$FAKE_COUNT" ]; then
   echo "$n" > "$FAKE_COUNT"
 fi
 if [ -n "$FAKE_ARGV" ]; then printf '%s\n' "$@" >> "$FAKE_ARGV"; fi
+if [ -n "$FAKE_FIX_ARGV" ]; then
+  case "$*" in
+    *"came back needs-work"*) printf '%s\n' "$@" >> "$FAKE_FIX_ARGV" ;;
+  esac
+fi
 case "$*" in
   *"merge reviewer for an unattended coding run"*)
+    if [ -n "$FAKE_REVIEW_ARGV" ]; then printf '%s\n' "$@" >> "$FAKE_REVIEW_ARGV"; fi
     rn=1
     if [ -n "$FAKE_REVIEW_COUNT" ]; then
       rn=$(( $(cat "$FAKE_REVIEW_COUNT" 2>/dev/null || echo 0) + 1 ))
@@ -154,12 +169,18 @@ printf '%s\n' '{"event":"result","result":{"status":"SUCCESS","response":"\`\`\`
 // it as red/unknown and fails the run for an unrelated reason.
 const FAKE_CODEX = `#!/bin/sh
 if [ -n "$FAKE_ARGV" ]; then printf '%s\n' "$@" >> "$FAKE_ARGV"; fi
+if [ -n "$FAKE_FIX_ARGV" ]; then
+  case "$*" in
+    *"came back needs-work"*) printf '%s\n' "$@" >> "$FAKE_FIX_ARGV" ;;
+  esac
+fi
 if [ -n "$FAKE_AUTH_FAIL" ]; then
   echo '{"type":"turn.failed","error":{"message":"401 unauthorized: codex login required"}}'
   exit 1
 fi
 case "$*" in
   *"merge reviewer for an unattended coding run"*)
+    if [ -n "$FAKE_REVIEW_ARGV" ]; then printf '%s\n' "$@" >> "$FAKE_REVIEW_ARGV"; fi
     rn=1
     if [ -n "$FAKE_REVIEW_COUNT" ]; then
       rn=$(( $(cat "$FAKE_REVIEW_COUNT" 2>/dev/null || echo 0) + 1 ))
@@ -186,8 +207,14 @@ echo '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5}}'
 // next-in-chain success behind a parked codex (auth-failover-under-auto test).
 const FAKE_GEMINI = `#!/bin/sh
 if [ -n "$FAKE_ARGV" ]; then printf '%s\n' "$@" >> "$FAKE_ARGV"; fi
+if [ -n "$FAKE_FIX_ARGV" ]; then
+  case "$*" in
+    *"came back needs-work"*) printf '%s\n' "$@" >> "$FAKE_FIX_ARGV" ;;
+  esac
+fi
 case "$*" in
   *"merge reviewer for an unattended coding run"*)
+    if [ -n "$FAKE_REVIEW_ARGV" ]; then printf '%s\n' "$@" >> "$FAKE_REVIEW_ARGV"; fi
     rn=1
     if [ -n "$FAKE_REVIEW_COUNT" ]; then
       rn=$(( $(cat "$FAKE_REVIEW_COUNT" 2>/dev/null || echo 0) + 1 ))
@@ -1334,7 +1361,8 @@ describe('branch review (M28)', () => {
 
   it('approve completes the run; the review is recorded against the cross-provider reviewer', async () => {
     const argv = join(root, 'argv.log')
-    fake({ FAKE_REVIEW: 'approve', FAKE_ARGV: argv })
+    const reviewArgv = join(root, 'review-argv.log')
+    fake({ FAKE_REVIEW: 'approve', FAKE_ARGV: argv, FAKE_REVIEW_ARGV: reviewArgv })
     const state = await runStory(repo, docs, base, noEvents)
     expect(state.status).toBe('Completed')
     expect(reviewTitles(state)).toEqual(['Review', 'Branch review'])
@@ -1344,16 +1372,72 @@ describe('branch review (M28)', () => {
     expect(state.review).toMatchObject({ grade: 'approve', provider: 'codex', sameProvider: false })
     expect(state.tasks.find((t) => t.title === 'Branch review')?.runner).toBe('codex')
     expect(readFileSync(argv, 'utf8')).toContain('merge reviewer for an unattended coding run')
+    // Security seam: the review turn is `plain`, never autonomous — it must
+    // never carry the codex sandbox-bypass flag (M28 review fix pin). Scoped
+    // to FAKE_REVIEW_ARGV — the shared FAKE_ARGV file also carries the
+    // closing Review call, which legitimately runs autonomous.
+    const reviewArgvText = readFileSync(reviewArgv, 'utf8')
+    expect(reviewArgvText).not.toContain('--dangerously')
+    expect(reviewArgvText).not.toContain('--approval-mode yolo')
     // run.json round-trips the review field, not just the in-memory state.
-    const onDisk = JSON.parse(readFileSync(join(repo, '.somni/runs', state.runId, 'run.json'), 'utf8'))
-    expect(onDisk.review).toMatchObject({ grade: 'approve', provider: 'codex', sameProvider: false })
+    const onDisk = JSON.parse(
+      readFileSync(join(repo, '.somni/runs', state.runId, 'run.json'), 'utf8')
+    )
+    expect(onDisk.review).toMatchObject({
+      grade: 'approve',
+      provider: 'codex',
+      sameProvider: false
+    })
+  })
+
+  it('a top-level model never crosses providers — neither the reviewer nor the fix turn receives it', async () => {
+    // The implementer runs on 'claude' via a role pin carrying its OWN model,
+    // so its subtask call is not itself evidence either way. settings.runner/
+    // model point at a different provider (gemini) entirely — the run's
+    // unrelated default profile, which the closing Review call legitimately
+    // uses (same provider as settings.runner — not a leak). Before the fix,
+    // auxTask's override branch fell back to that default profile's model
+    // for BOTH the cross-provider reviewer (codex) and the
+    // same-provider-as-implementer fix turn — a 'gemini' model id handed to
+    // codex's and claude's CLIs. FAKE_REVIEW_ARGV/FAKE_FIX_ARGV isolate those
+    // two calls from the closing Review's legitimate use of the same string.
+    saveRole(repo, {
+      slug: 'imp',
+      name: 'Implementer',
+      preamble: 'implements.',
+      runner: 'claude',
+      model: 'claude-in-house'
+    })
+    const leak = story('Leak check', [
+      { title: 'Write it', prompt: 'write it', role: 'imp', selected: true }
+    ]).id
+    const reviewArgv = join(root, 'leak-review-argv.log')
+    const fixArgv = join(root, 'leak-fix-argv.log')
+    const reviewCount = join(root, 'leak-review-count')
+    fake({
+      FAKE_REVIEW_ARGV: reviewArgv,
+      FAKE_FIX_ARGV: fixArgv,
+      FAKE_REVIEW: 'needs-work,approve',
+      FAKE_REVIEW_COUNT: reviewCount
+    })
+    const state = await runStory(repo, leak, base, noEvents, {
+      settings: { runner: 'gemini', model: 'gemini-top-level-leak' }
+    })
+    expect(state.status).toBe('Completed')
+    expect(state.review).toMatchObject({ grade: 'approve', provider: 'codex', fixRound: true })
+    expect(readFileSync(reviewArgv, 'utf8')).not.toContain('gemini-top-level-leak')
+    const fixArgvText = readFileSync(fixArgv, 'utf8')
+    expect(fixArgvText).toContain('came back needs-work') // proves the file caught the right call
+    expect(fixArgvText).not.toContain('gemini-top-level-leak')
   })
 
   it('needs-work runs one fix round carrying the findings, then approves on re-review with fixRound recorded', async () => {
     const argv = join(root, 'fix-argv.log')
+    const reviewArgv = join(root, 'fix-review-argv.log')
     const reviewCount = join(root, 'review-count')
     fake({
       FAKE_ARGV: argv,
+      FAKE_REVIEW_ARGV: reviewArgv,
       FAKE_REVIEW: 'needs-work,approve',
       FAKE_REVIEW_COUNT: reviewCount
     })
@@ -1371,6 +1455,12 @@ describe('branch review (M28)', () => {
     // BRANCH_FIX_PROMPT lists each finding as "- <finding>" — "f" is the
     // finding FAKE_REVIEW's needs-work reply carries.
     expect(readFileSync(argv, 'utf8')).toContain('- f')
+    // Security seam, gemini reviewer case: still no sandbox-bypass flag.
+    // Scoped to FAKE_REVIEW_ARGV — the shared FAKE_ARGV file also carries the
+    // closing Review and the fix round, both legitimately autonomous.
+    const reviewArgvText = readFileSync(reviewArgv, 'utf8')
+    expect(reviewArgvText).not.toContain('--dangerously')
+    expect(reviewArgvText).not.toContain('--approval-mode yolo')
   })
 
   it('a final needs-work after the fix round lands needs-attention, the same mechanism as reviewGreen=false', async () => {

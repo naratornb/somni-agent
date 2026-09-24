@@ -49,7 +49,10 @@ export function implementerOf(runners: (RunnerName | undefined)[]): RunnerName {
   for (const r of runners) {
     if (!r) continue
     const c = counts.get(r) ?? 0
-    if (c > n) ((best = r), (n = c))
+    if (c > n) {
+      best = r
+      n = c
+    }
   }
   return best
 }
@@ -66,7 +69,9 @@ export function pickReviewer(
     return { runner, model: pin.model, effort: pin.effort, sameProvider: runner === implementer }
   }
   const other = providerChain(settings).find((n) => n !== implementer && isAvailable(n, settings))
-  return other ? { runner: other, sameProvider: false } : { runner: implementer, sameProvider: true }
+  return other
+    ? { runner: other, sameProvider: false }
+    : { runner: implementer, sameProvider: true }
 }
 
 export const DIFF_CAP = 150_000

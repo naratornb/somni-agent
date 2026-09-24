@@ -286,7 +286,11 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
         '--diff-filter=U'
       ]).catch(() => ({ stdout: '' }))) as { stdout: string }
       await lockedGit(['-C', repo, 'merge', '--abort']).catch(() => {})
-      return { ok: false, error: gitError(err), conflicts: stdout.trim().split('\n').filter(Boolean) }
+      return {
+        ok: false,
+        error: gitError(err),
+        conflicts: stdout.trim().split('\n').filter(Boolean)
+      }
     }
     const state = loadRun(repo, runId)
     if (state?.review) {

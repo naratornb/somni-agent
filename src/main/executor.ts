@@ -620,11 +620,24 @@ async function execute(
     state.tasks.push(task)
     writeState()
 
+    // A pinned override never falls back to the DEFAULT profile's model —
+    // profile.model is that other provider's model id, and handing it to a
+    // different runner's CLI is a cross-provider leak (M28 review fix: the
+    // unpinned cross-provider reviewer/fix-turn silently invoked its CLI
+    // with a foreign model id and errored out ungraded every time). turn.ts
+    // itself re-falls-back an omitted model to `settings.model` (the same
+    // global default), so the override call gets its OWN settings object
+    // with that field already resolved — never the shared one.
+    const pinnedModel = override
+      ? (override.model ?? settings.providers?.defaults?.[override.runner]?.model)
+      : profile.model
+    const turnSettings = override ? { ...settings, model: pinnedModel } : settings
+
     const outcome = await runTurnWithFailover({
       choice: runner,
-      pinnedModel: override?.model ?? profile.model,
+      pinnedModel,
       pinnedEffort: override?.effort ?? profile.effort,
-      settings,
+      settings: turnSettings,
       ctrl,
       nowMs,
       events,
@@ -776,10 +789,7 @@ async function execute(
     // is not the whole-run-failed path (§5).
     if (fixText === null)
       return land(
-        base(
-          { ...first, reasons: [...first.reasons, 'fix round did not complete'] },
-          true
-        )
+        base({ ...first, reasons: [...first.reasons, 'fix round did not complete'] }, true)
       )
 
     const check = await runCheckCommand(settings.checkCommand, state.worktree, timeoutMs)
@@ -789,7 +799,10 @@ async function execute(
         base(
           {
             ...first,
-            reasons: [...first.reasons, `checkCommand \`${check.command}\` failed after the fix round`]
+            reasons: [
+              ...first.reasons,
+              `checkCommand \`${check.command}\` failed after the fix round`
+            ]
           },
           true
         )

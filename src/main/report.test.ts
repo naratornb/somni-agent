@@ -190,7 +190,9 @@ describe('merge review grade line', () => {
       }
     } as RunState
     const md = minimalReport(state, summarize('', ''))
-    expect(md).toContain('**Merge review: UNGRADED** (claude) — the branch review turn produced no reply')
+    expect(md).toContain(
+      '**Merge review: UNGRADED** (claude) — the branch review turn produced no reply'
+    )
   })
 
   it('adds the sameProvider/diffTruncated/fixRound notes when set', () => {

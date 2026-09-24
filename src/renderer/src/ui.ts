@@ -91,7 +91,9 @@ export const gradeChip = (grade: BranchGrade): string => `${STATUS_CHIP_BASE} ${
 export async function mergeAndReport(repo: string, runId: string): Promise<string | null> {
   const res = await window.somni.mergeRun(repo, runId)
   if (res.ok) return null
-  return res.conflicts?.length ? res.conflicts.join(', ') : (res.error ?? 'Merge failed.')
+  return res.conflicts?.length
+    ? `Merge conflict — resolve or merge by hand: ${res.conflicts.join(', ')}`
+    : (res.error ?? 'Merge failed.')
 }
 
 export const KIND_CHIP: Record<'idea' | 'story' | 'epic', string> = {

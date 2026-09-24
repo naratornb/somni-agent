@@ -20,8 +20,11 @@ describe('parseReview', () => {
     expect(parseReview(text)).toEqual({ grade: 'approve', reasons: ['solid'], findings: [] })
   })
   it('malformed or missing fence grades needs-work with a parse note', () => {
-    for (const bad of ['no fence at all', '```somni-review\nnot json\n```',
-      '```somni-review\n{"grade":"maybe"}\n```']) {
+    for (const bad of [
+      'no fence at all',
+      '```somni-review\nnot json\n```',
+      '```somni-review\n{"grade":"maybe"}\n```'
+    ]) {
       const r = parseReview(bad)
       expect(r.grade).toBe('needs-work')
       expect(r.findings.join(' ')).toMatch(/parse|verdict/i)
