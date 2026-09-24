@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   acquireSlot,
+  hasFreeSlot,
   isAvailable,
   markAuthFailed,
   markMissing,
@@ -108,6 +109,32 @@ describe('nextAvailableAt', () => {
     const s = { providers: { disabled: ['claude'] as const } }
     expect(nextAvailableAt(s as never, 'claude', T0)).toBeNull()
     expect(isAvailable('claude', s as never, T0)).toBe(false)
+  })
+})
+
+describe('cap-aware pickAuto', () => {
+  it('skips a capped-full provider for an idle one', async () => {
+    const s = { providers: { caps: { claude: 1 } } }
+    const release = await acquireSlot('claude', s as never)
+    expect(pickAuto(s as never)).toBe('codex') // claude available but full
+    release()
+    expect(pickAuto(s as never)).toBe('claude') // slot freed → chain head again
+  })
+  it('falls back to the first available when everyone is capped-full', async () => {
+    const s = {
+      providers: { caps: { claude: 1, codex: 1 }, disabled: ['gemini', 'antigravity'] }
+    }
+    const r1 = await acquireSlot('claude', s as never)
+    const r2 = await acquireSlot('codex', s as never)
+    expect(pickAuto(s as never)).toBe('claude') // nobody idle → today's behavior
+    r1()
+    r2()
+  })
+  it('hasFreeSlot is true without a cap and false at the cap', async () => {
+    expect(hasFreeSlot('gemini', {})).toBe(true)
+    const r = await acquireSlot('claude', { providers: { caps: { claude: 1 } } } as never)
+    expect(hasFreeSlot('claude', { providers: { caps: { claude: 1 } } } as never)).toBe(false)
+    r()
   })
 })
 

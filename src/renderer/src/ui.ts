@@ -7,7 +7,9 @@ import type {
   GroomState,
   Item,
   Persona,
-  RunnerName
+  RunnerName,
+  RunRow,
+  RunState
 } from '../../preload/index'
 
 const DISABLED = 'disabled:opacity-40 disabled:pointer-events-none'
@@ -95,6 +97,39 @@ export async function mergeAndReport(repo: string, runId: string): Promise<strin
     ? `Merge conflict — resolve or merge by hand: ${res.conflicts.join(', ')}`
     : (res.error ?? 'Merge failed.')
 }
+
+/**
+ * Runs seeding (M29 item 1): `listRuns(repo)` on load/refresh gives prior
+ * runs their Board grade chip + Merge back — durable across restarts, not
+ * just what this session's pipeline pushed live. Disk is the seed; the
+ * caller passes only this session's live-pushed entries as `live` (App.tsx
+ * filters full state through `pick` first — see the stale-wins fix below),
+ * so a live `onRunState` push always wins for a key both sides have, and a
+ * key seedRuns produced on some EARLIER refresh but was never itself pushed
+ * live can never masquerade as live on a later one.
+ */
+export const seedRuns = (
+  fromDisk: RunRow[],
+  live: Record<string, RunState>
+): Record<string, RunState> => ({
+  ...Object.fromEntries(fromDisk.map((r) => [r.runId, r])),
+  ...live
+})
+
+/**
+ * Restrict a runs map to only the given ids (M29 final review fix). Two
+ * callers: `seedRuns`'s `live` argument (App.tsx passes `pick(state,
+ * liveRunIds)`, not the raw state — the raw state is disk-seeded too after
+ * the first refresh, so passing it whole would make every past refresh look
+ * live forever and no later disk write could ever update it again) and
+ * Home's PipelineView (scoped to this session's activity, not the Board's
+ * full seeded history).
+ */
+export const pick = (
+  state: Record<string, RunState>,
+  ids: ReadonlySet<string>
+): Record<string, RunState> =>
+  Object.fromEntries(Object.entries(state).filter(([id]) => ids.has(id)))
 
 export const KIND_CHIP: Record<'idea' | 'story' | 'epic', string> = {
   idea: CHIP,
@@ -187,6 +222,41 @@ export const shouldSeedProposal = (
   proposal: ChatProposal | null,
   groomStateAtMount?: GroomState
 ): boolean => proposal != null && alreadyParkedForReview(groomStateAtMount)
+
+/**
+ * Ask-more (M29 item 9): the interview cap (chat.ts's questionRounds >= 3)
+ * silently routes the next answer into a background draft — this is the
+ * affordance that lets the user opt out first. Idle and no proposal on the
+ * table are the same guards `sending`/`proposal` already give the composer.
+ */
+export const shouldOfferAskMore = (
+  rounds: number,
+  sending: boolean,
+  hasProposal: boolean
+): boolean => rounds >= 3 && !sending && !hasProposal
+
+/**
+ * The one-shot bypass (M29 item 9): `askNext` only ever buys ONE send its
+ * `{interactive: true}` — consuming it always resets to false, whether or
+ * not it was actually set, so a stray double-consume can never leak the
+ * bypass into a second Turn.
+ */
+export const consumeAskMore = (
+  askNext: boolean
+): { opts?: { interactive: true }; next: false } => ({
+  opts: askNext ? { interactive: true } : undefined,
+  next: false
+})
+
+/**
+ * Live round advance (M29 item 9 fix): the mount-time `loadChat` snapshot
+ * alone goes stale the instant a live Turn crosses the cap without a
+ * remount — a live 'done' event's `question` is exactly what chat.ts's own
+ * questionRounds counts server-side (parseQuestion truthy on a non-workUnit
+ * turn), so mirror that count here instead of waiting to reopen the session.
+ */
+export const nextRounds = (rounds: number, question: unknown): number =>
+  question ? rounds + 1 : rounds
 
 // ── Pure renderer helpers (M15) ──────────────────────────────────────────────
 // Not atoms, but they live here for the same reason `appendText` does: the

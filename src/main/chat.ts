@@ -299,7 +299,13 @@ function pendingText(lines: Line[]): string {
 export function loadChat(
   repo: string,
   slug: string
-): { messages: ChatMessage[]; busy: boolean; partial: string; proposal: ChatProposal | null } {
+): {
+  messages: ChatMessage[]
+  busy: boolean
+  partial: string
+  proposal: ChatProposal | null
+  questionRounds: number
+} {
   const messages = readLines(repo, slug).filter((l): l is ChatMessage => 'role' in l)
   // Streamed text is buffered here (M25.2) so a view re-entered mid-Turn shows
   // the reply so far instead of an idle transcript.
@@ -311,7 +317,10 @@ export function loadChat(
     messages,
     busy: inFlight.has(slug),
     partial: partials.get(slug) ?? '',
-    proposal: lastAssistant ? parseProposal(lastAssistant.text) : null
+    proposal: lastAssistant ? parseProposal(lastAssistant.text) : null,
+    // Interview rounds spent so far (M29): lets the renderer offer the
+    // interactive bypass before the cap silently routes the next answer.
+    questionRounds: questionRounds(repo, slug)
   }
 }
 
@@ -345,14 +354,21 @@ export function sendChat(
   text: string,
   settings: Settings,
   roleSlugs: string[],
-  onEvent: (ev: ChatEvent) => void
+  onEvent: (ev: ChatEvent) => void,
+  opts: { interactive?: boolean } = {}
 ): { ok: boolean; error?: string } {
   if (inFlight.has(slug)) return { ok: false, error: 'a chat turn is already in flight' }
   const item = store.loadItems(repo).find((i) => i.id === slug)
   const birth = readLines(repo, slug).length === 0
   // Hands-off routing (M27): an owner's groom drafts itself from birth; any
   // interview ends after three rounds. Everything else is a normal turn.
-  if ((birth && personaOf(item, settings) === 'owner') || questionRounds(repo, slug) >= 3) {
+  // `interactive` (M29) opts out of the cap only — typing into an owner
+  // session is its own opt-in to conversation, but the birth seed is still
+  // the owner's handoff regardless of the flag.
+  if (
+    (birth && personaOf(item, settings) === 'owner') ||
+    (!opts.interactive && questionRounds(repo, slug) >= 3)
+  ) {
     // Durable before handoff: queued (cap full) or discarded by a quit before
     // ever running (interruptSessions drops the job closure), the text must
     // survive on disk either way — the closure is not the source of truth.

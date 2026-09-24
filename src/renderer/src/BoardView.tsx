@@ -25,7 +25,10 @@ type Props = {
   items: Item[]
   backlog: string[] // Backlog-column order
   roles: Role[]
-  runs: Record<string, RunState> // this session's live runs, keyed by runId
+  // keyed by runId — the seeded truth: every prior run from disk (M29 item
+  // 1), with this session's live pushes always winning over the disk
+  // snapshot, not only this session's own runs (M29 final review).
+  runs: Record<string, RunState>
   refresh: () => void
   onGroom: (item: Item) => void // hand off to the Groom view (§7)
   openId?: string | null // item the palette asked to open in the StoryPanel

@@ -59,8 +59,16 @@ export function isAvailable(name: RunnerName, settings: Settings, now = Date.now
   return !h?.parked && !(h?.cooldownUntil && h.cooldownUntil > now)
 }
 
+// A provider with spare cap room (M29): pickAuto prefers idle providers so a
+// capped-full head of the chain doesn't queue work an idle sibling could take.
+export function hasFreeSlot(name: RunnerName, settings: Settings): boolean {
+  const cap = Math.max(1, settings.providers?.caps?.[name] ?? Infinity)
+  return (running.get(name) ?? 0) < cap
+}
+
 export function pickAuto(settings: Settings, now = Date.now()): RunnerName | null {
-  return providerChain(settings).find((n) => isAvailable(n, settings, now)) ?? null
+  const available = providerChain(settings).filter((n) => isAvailable(n, settings, now))
+  return available.find((n) => hasFreeSlot(n, settings)) ?? available[0] ?? null
 }
 
 export function nextAvailableAt(

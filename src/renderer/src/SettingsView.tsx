@@ -407,11 +407,17 @@ export function SettingsForm({
             <option value="codex">Codex (codex)</option>
           </select>
           <input
-            className={`${INPUT} flex-1 font-mono-code`}
+            className={`${INPUT} flex-1 font-mono-code disabled:opacity-40`}
             list="reviewer-model-list"
             placeholder="CLI default"
             aria-label="Merge reviewer model"
             value={s.reviewer?.model ?? ''}
+            // Reviewer inputs (M29 item 6): Auto (no runner pinned) has no CLI
+            // to point a model/effort at — pickReviewer falls through the
+            // failover chain, so a model/effort here would just be silently
+            // ignored. Disabled says so at a glance, the DISABLED idiom's
+            // opacity-40 muted look.
+            disabled={!s.reviewer?.runner}
             onChange={(e) => patchReviewer({ model: e.target.value })}
           />
           <datalist id="reviewer-model-list">
@@ -420,9 +426,10 @@ export function SettingsForm({
             ))}
           </datalist>
           <select
-            className={INPUT}
+            className={`${INPUT} disabled:opacity-40`}
             aria-label="Merge reviewer effort"
             value={s.reviewer?.effort ?? ''}
+            disabled={!s.reviewer?.runner}
             onChange={(e) => patchReviewer({ effort: e.target.value as Effort })}
           >
             <option value="">CLI default</option>

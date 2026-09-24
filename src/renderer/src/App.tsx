@@ -19,7 +19,7 @@ import { BoardView } from './BoardView'
 import { GroomView } from './GroomView'
 import { HomeView } from './HomeView'
 import { CaptureModal, CommandPalette } from './capture'
-import { approveRunIds, BTN_PRIMARY, saveCapture, type PaletteResult } from './ui'
+import { approveRunIds, BTN_PRIMARY, pick, saveCapture, seedRuns, type PaletteResult } from './ui'
 
 // Material Symbols glyph per routable view. Home reuses the freed `speed`
 // glyph — the icon font is a subset (main.css), so new ligatures render as
@@ -58,6 +58,14 @@ function App(): React.JSX.Element {
   const [groomSeed, setGroomSeed] = useState<string | null>(null)
   const [autoRun, setAutoRun] = useState(false)
   const [runs, setRuns] = useState<Record<string, RunState>>({})
+  // Stale-wins fix (M29 final review): the runIds `onRunState` has actually
+  // pushed THIS session — seedRuns's disk merge below must only let these
+  // entries of `runs` override disk, never the whole map. Without this, once
+  // a run seeds in from disk it counts as "live" on every later refresh too,
+  // so a disk-only change (e.g. Abandon on a crash-orphaned run) never shows.
+  // State, not a ref: Home's PipelineView reads it at render time below, and
+  // react-hooks/refs forbids reading a ref's `.current` during render.
+  const [liveRunIds, setLiveRunIds] = useState<Set<string>>(new Set())
   const [logs, setLogs] = useState<Record<string, LogLine[]>>({})
   // Drain state is owned by main (Decision 8): seeded from pipeline:state on
   // mount — a renderer opened mid-drain shows the truth — then kept live by the
@@ -85,9 +93,12 @@ function App(): React.JSX.Element {
   // Fix (M27 final review): GroomView's header chip and shouldAutoHandoff must
   // see the settings-level persona too — item?.persona ?? settings.persona ??
   // 'director', the same order main resolves it in (chat.ts's personaOf).
-  // Fetched once, like HomeView's own settings fetch; a save doesn't push here
-  // live (no settings:changed event exists yet) — reopening Settings mid-app
-  // rarely races grooming a still-unstamped item.
+  // M29: switched to resolveSettings(repo) — the repo's .somni/config.json can
+  // override persona too, and this is the same resolution chat:send uses
+  // internally, so the chip/default and the actual grooming behavior agree.
+  // Refetched on every refresh(), same as the rest of the repo-scoped state —
+  // a save doesn't push here live (no settings:changed event exists yet), so
+  // reopening Settings mid-app rarely races grooming a still-unstamped item.
   const [settings, setSettings] = useState<ResolvedSettings | null>(null)
 
   // Every door into a Groom (Board, Sessions, Home, Capture, the toast, a
@@ -107,13 +118,19 @@ function App(): React.JSX.Element {
       void window.somni.skillsStatus(path).then(setSkills)
       // runs left Running on disk belong to a somni that quit or crashed
       void window.somni.orphanedRuns(path).then(setOrphans)
+      // Durable Board grades + Merge (M29 item 1, fixed in final review):
+      // every prior run, not just what this session's pipeline pushed live —
+      // seedRuns merges disk under only the runIds onRunState has actually
+      // pushed live (`pick`), so a live push always wins but a disk-only
+      // change to a run that was merely seeded in on some earlier refresh
+      // still lands (it was never "live" to begin with).
+      void window.somni
+        .listRuns(path)
+        .then((rows) => setRuns((r) => seedRuns(rows, pick(r, liveRunIds))))
+      void window.somni.resolveSettings(path).then(setSettings)
     },
-    [repo]
+    [repo, liveRunIds]
   )
-
-  useEffect(() => {
-    void window.somni.getSettings().then(setSettings)
-  }, [])
 
   useEffect(() => {
     void window.somni.lastRepo().then((path) => {
@@ -122,9 +139,10 @@ function App(): React.JSX.Element {
         refresh(path)
       }
     })
-    const offState = window.somni.onRunState((state) =>
+    const offState = window.somni.onRunState((state) => {
+      setLiveRunIds((s) => (s.has(state.runId) ? s : new Set(s).add(state.runId)))
       setRuns((r) => ({ ...r, [state.runId]: state }))
-    )
+    })
     const offLog = window.somni.onRunLog(({ runId, taskIndex, text }) =>
       setLogs((l) => ({
         ...l,
@@ -443,9 +461,12 @@ function App(): React.JSX.Element {
                 openGroom(item)
               }}
               onViewAll={() => setView('Sessions')}
+              defaultPersona={settings?.persona}
             >
               <PipelineView
-                runs={runs}
+                // Session-scoped, not the Board's full seeded history (M29
+                // final review fix): only runIds onRunState has pushed live.
+                runs={pick(runs, liveRunIds)}
                 logs={logs}
                 busy={busy}
                 drain={drain}

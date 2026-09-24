@@ -138,6 +138,7 @@ export function HomeView({
   onStart,
   onGroom,
   onViewAll,
+  defaultPersona,
   children
 }: {
   repo: string
@@ -145,25 +146,30 @@ export function HomeView({
   onStart: (text: string, persona: Persona) => void
   onGroom?: (item: Item) => void
   onViewAll?: () => void
+  // Quick Start chip default (M29 item 8 follow-up): App's resolveSettings(repo)
+  // — a repo override wins over the global value, same as GroomView's own
+  // defaultPersona. The first-run pick strip below stays on the local raw
+  // global fetch: it's asking "has this ever been set at all", which a
+  // repo-resolved value can't answer.
+  defaultPersona?: Persona
   children?: React.ReactNode
 }): React.JSX.Element {
   const [text, setText] = useState('')
   const [chips, setChips] = useState<string[]>(FALLBACK_CHIPS)
   const [settings, setSettings] = useState<ResolvedSettings | null>(null)
-  // The Quick Start chip (§3): defaults to the settings value once it loads,
-  // but toggling here never writes back — it's this one groom's pick.
-  const [chipPersona, setChipPersona] = useState<Persona>('director')
+  // The Quick Start chip (§3): resolved fresh every render from defaultPersona,
+  // the same way GroomView's header chip resolves from its own defaultPersona
+  // prop — never seeded once via useState (the prop arrives async, after the
+  // App-level resolveSettings call resolves). A pick here overrides this one
+  // groom only and never writes back.
+  const [chipOverride, setChipOverride] = useState<Persona | null>(null)
+  const chipPersona: Persona = chipOverride ?? defaultPersona ?? 'director'
 
   useEffect(() => {
     void window.somni.suggestions(repo).then((s) => {
       if (s.length) setChips(s)
     })
-    // The chip's default is set once, on load — a pick made afterward (below)
-    // updates it directly, not through a second state-syncing effect.
-    void window.somni.getSettings().then((s) => {
-      setSettings(s)
-      setChipPersona(s.persona ?? 'director')
-    })
+    void window.somni.getSettings().then(setSettings)
   }, [repo])
 
   // Voice quick-start (M24): off = dictation fills the box for a glance;
@@ -182,10 +188,12 @@ export function HomeView({
 
   // First-run pick (§2): writes through the normal settings-save path, same
   // as Settings' own Persona select — the strip is gone on the next load.
+  // Also updates the chip immediately (an override, same as a manual toggle) —
+  // App's resolvedPersona won't reflect this pick until its next refresh().
   const pickPersona = (p: Persona): void => {
     void window.somni.setSettings({ persona: p }).then(() => {
       setSettings((s) => (s ? { ...s, persona: p } : s))
-      setChipPersona(p)
+      setChipOverride(p)
     })
   }
 
@@ -201,7 +209,7 @@ export function HomeView({
         chips={chips}
         onChipPick={setText}
         persona={chipPersona}
-        onPersonaToggle={() => setChipPersona(togglePersona)}
+        onPersonaToggle={() => setChipOverride(togglePersona(chipPersona))}
         onSubmit={submit}
         onSpoken={onSpoken}
       />

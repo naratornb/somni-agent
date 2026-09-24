@@ -90,14 +90,19 @@ export function RunDetailsPanel({
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-3">
             <span className={gradeChip(run.review.grade)}>{GRADE_LABELS[run.review.grade]}</span>
-            {run.review.grade === 'approve' && !run.review.merged && (
-              <button
-                className="rounded-lg bg-primary-container px-3 py-1 text-xs font-semibold text-on-primary-container transition-colors hover:bg-primary-container/90"
-                onClick={() => onMerge()}
-              >
-                Merge
-              </button>
-            )}
+            {/* Merge gating (M29 item 2): hidden only once details are IN and
+                say the branch is gone — absent details (not loaded yet) keeps
+                the button, the Task 3 server refusal is the real authority. */}
+            {run.review.grade === 'approve' &&
+              !run.review.merged &&
+              (!details || details.branchExists) && (
+                <button
+                  className="rounded-lg bg-primary-container px-3 py-1 text-xs font-semibold text-on-primary-container transition-colors hover:bg-primary-container/90"
+                  onClick={() => onMerge()}
+                >
+                  Merge
+                </button>
+              )}
             {run.review.merged && <span className={CHIP}>Merged</span>}
           </div>
           {run.review.reasons.length > 0 && (

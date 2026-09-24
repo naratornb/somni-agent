@@ -22,8 +22,11 @@ import {
   BUBBLE_AI,
   BUBBLE_USER,
   CHIP,
+  consumeAskMore,
   ERROR_BANNER,
+  nextRounds,
   shouldAutoHandoff,
+  shouldOfferAskMore,
   shouldSeedProposal
 } from './ui'
 
@@ -155,6 +158,12 @@ export function GroomView({
   const [applying, setApplying] = useState(false)
   const [input, setInput] = useState('')
   const [lastUser, setLastUser] = useState('')
+  // Ask-more (M29 item 9): interview rounds already spent, from loadChat —
+  // the cap that would otherwise silently route the NEXT answer into a
+  // background draft. `askMoreNext` is the one-shot local opt-out; consumed
+  // and cleared by `send` regardless of whether it was actually set.
+  const [rounds, setRounds] = useState(0)
+  const [askMoreNext, setAskMoreNext] = useState(false)
   const loaded = useRef(false)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -176,6 +185,12 @@ export function GroomView({
       if (ev.kind === 'done') {
         setStreaming(null)
         setMessages((m) => [...m, ev.message])
+        // Ask-more fix: a live event's question is what actually advances the
+        // interview count — the mount-time loadChat snapshot never updates on
+        // its own, so an uninterrupted interview crossing the cap without a
+        // remount would otherwise never offer the bypass (the exact failure
+        // this affordance exists to prevent).
+        setRounds((r) => nextRounds(r, ev.question))
         // Single slot: only the latest turn's actionable card is shown.
         setProposal(ev.proposal)
         // Fix (M27 §7): a live turn's own provenance always wins over the
@@ -191,14 +206,21 @@ export function GroomView({
     listRef.current?.scrollTo(0, listRef.current.scrollHeight)
   }, [messages.length, streaming])
 
-  const send = async (text: string): Promise<void> => {
+  // `useAskMore` defaults to the armed flag for a normal turn, but Propose
+  // Now (below) passes `false` explicitly: a fixed proposal-now message is
+  // never the interactive answer the flag was armed for, so it must CLEAR
+  // the flag, not consume it — consumeAskMore(false) does exactly that
+  // (proposal turns take their normal, non-interactive route either way).
+  const send = async (text: string, useAskMore = askMoreNext): Promise<void> => {
     if (!text.trim() || sending) return
     setError(null)
     setLastUser(text)
     setMessages((m) => [...m, { role: 'user', text, ts: new Date().toISOString() }])
     setStreaming('')
     setState(null) // main clears the session state on every send (M25.3)
-    const res = await window.somni.sendChat(repo, slug, text)
+    const { opts, next } = consumeAskMore(useAskMore)
+    setAskMoreNext(next)
+    const res = await window.somni.sendChat(repo, slug, text, opts)
     if (!res.ok) {
       setStreaming(null)
       setError(res.error ?? 'chat failed')
@@ -211,6 +233,7 @@ export function GroomView({
     loaded.current = true
     void window.somni.loadChat(repo, slug).then((c) => {
       setMessages(c.messages)
+      setRounds(c.questionRounds)
       // A Turn still in flight (M25.2): main replays what it has streamed so
       // far, so re-entering the view shows the partial reply, not an idle one.
       if (c.busy) setStreaming(c.partial)
@@ -273,6 +296,8 @@ export function GroomView({
     setQuestion(null)
     setProposal(null)
     setInput('')
+    setRounds(0)
+    setAskMoreNext(false)
   }
 
   const handoff = async (): Promise<void> => {
@@ -382,6 +407,17 @@ export function GroomView({
           </button>
         </p>
       )}
+      {/* Ask-more (M29 item 9): the interview cap otherwise routes the next
+          answer straight into a background draft with no warning — this is
+          the opt-out, spending one send's worth of `interactive: true`. */}
+      {shouldOfferAskMore(rounds, sending, proposal !== null) && (
+        <p className="flex shrink-0 items-center gap-3 rounded-lg bg-surface-container px-4 py-3 text-on-surface-variant">
+          Three rounds in — the next answer drafts a proposal. Keep talking instead?
+          <button className={BTN_GHOST} onClick={() => setAskMoreNext(true)}>
+            Ask more questions
+          </button>
+        </p>
+      )}
       <div className="flex shrink-0 items-end gap-2 border-t border-border-subtle pt-3">
         <textarea
           className="h-20 flex-1 resize-y rounded-lg border border-border-subtle bg-surface-container px-3 py-2 font-body-md text-body-md text-on-surface focus:border-primary focus:outline-none"
@@ -402,7 +438,9 @@ export function GroomView({
           </button>
           <button
             className={BTN_GHOST}
-            onClick={() => void send(window.somni.proposeNow)}
+            // Fix (M29 final review): pass `false` — Propose Now must clear an
+            // armed ask-more flag, not spend it on this fixed message.
+            onClick={() => void send(window.somni.proposeNow, false)}
             disabled={sending}
           >
             Propose Now

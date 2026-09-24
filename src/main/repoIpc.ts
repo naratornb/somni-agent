@@ -161,6 +161,9 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
   })
 
   ipcMain.handle('settings:get', () => ({ ...store.SETTINGS_DEFAULTS, ...readSettings() }))
+  // Repo-resolved settings (M29): global + .somni/config.json overrides, the
+  // same resolution chat:send already uses — exposed for the renderer.
+  ipcMain.handle('settings:resolve', (_e, repo: string) => repoSettings(repo))
   // Runner health (M22): probed fresh per ask, off the settings on disk.
   ipcMain.handle('runner:status', () => runnerStatus(readSettings()))
   // Every provider at once (M26 §3): Providers panel + zero-provider onboarding.
@@ -261,6 +264,11 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
     const run = listRuns(repo).find((r) => r.runId === runId)
     if (!run) return { ok: false, error: 'run not found' }
     if (run.review?.grade !== 'approve') return { ok: false, error: 'only approved runs merge' }
+    try {
+      await lockedGit(['-C', repo, 'rev-parse', '--verify', run.branch])
+    } catch {
+      return { ok: false, error: 'branch was cleaned up — nothing to merge' }
+    }
     // The clean-tree check protects the user's own code, never somni's own
     // bookkeeping — .somni/ churns on every run transition (including the
     // merged-stamp this handler writes below), so it's excluded from the
@@ -330,16 +338,25 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
   ipcMain.handle('groom:start', (_e, repo: string, persona?: store.Persona) =>
     startGroom(repo, persona)
   )
-  ipcMain.handle('chat:send', (_e, repo: string, slug: string, text: string) => {
-    // Only a story currently executing is refused; a fresh groom and unrelated
-    // items stay usable during a pipeline (Decision 9).
-    if (isRunning(slug)) return { ok: false, error: 'this story is currently running' }
-    const settings = repoSettings(repo)
-    const roleSlugs = store.loadRepo(repo).roles.map((r) => r.slug)
-    return sendChat(repo, slug, text, settings, roleSlugs, (ev: ChatEvent) =>
-      BrowserWindow.getAllWindows()[0]?.webContents.send('chat:event', ev)
-    )
-  })
+  ipcMain.handle(
+    'chat:send',
+    (_e, repo: string, slug: string, text: string, opts?: { interactive?: boolean }) => {
+      // Only a story currently executing is refused; a fresh groom and unrelated
+      // items stay usable during a pipeline (Decision 9).
+      if (isRunning(slug)) return { ok: false, error: 'this story is currently running' }
+      const settings = repoSettings(repo)
+      const roleSlugs = store.loadRepo(repo).roles.map((r) => r.slug)
+      return sendChat(
+        repo,
+        slug,
+        text,
+        settings,
+        roleSlugs,
+        (ev: ChatEvent) => BrowserWindow.getAllWindows()[0]?.webContents.send('chat:event', ev),
+        opts
+      )
+    }
+  )
   // Stateless one-shot — the renderer disables its own button while pending.
   // Uses the global-settings profile, as `chat:send` does: role overrides are
   // not consulted (Decision 1).

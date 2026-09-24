@@ -24,14 +24,34 @@ import { turn, TurnRequest } from './turn'
 import type { Effort, RunnerChoice, RunnerName, Settings } from './store'
 import type { Ctrl, RunEvents, TaskRun } from './executor'
 
-const POLL_MS = 25 // real ms between deadline checks
+const POLL_MS = 25 // real ms between availability checks
 
-// Abortable wait to a deadline on the caller's clock (RunOpts.now, or real time
-// by default); resolves true when the deadline passed, false on cancel/abort.
-// Polls in real time rather than a single setTimeout(at - now()): `now` may
-// run faster than real time (tests fast-forward a provider's real cooldown),
-// and that delta is on the caller's clock, not a real-ms duration.
-function sleepUntil(at: number, signal: AbortSignal, now: () => number): Promise<boolean> {
+// Abortable wait for a usable provider; resolves true the moment one is
+// available OR the moment nothing can ever become available again (the mid-
+// wait parked case — a sibling's auth error while we're already waiting).
+// Either way control returns to resolveTurnRunner's outer loop, which
+// recomputes and either proceeds or hits its existing null → 'unavailable'
+// fail-fast; this wait never duplicates that check, just stops blocking it.
+// False only on cancel/abort. Polls (not a fixed deadline) so a sibling's
+// markOk wakes this wait immediately instead of at the old cooldown deadline
+// (fix, M29 final review: a freed cap slot can't wake it — pickAuto's
+// all-capped fallback returns `available[0]` rather than null, so
+// slot-fullness never makes it into `done()` here; a capped task blocks
+// inside acquireSlot's own FIFO instead, entirely separate from this wait).
+// Real-time polling
+// rather than a single setTimeout: `now` may run faster than real time
+// (tests fast-forward a provider's real cooldown), and that delta is on the
+// caller's clock, not a real-ms duration.
+function waitForRunner(
+  choice: RunnerChoice,
+  settings: Settings,
+  signal: AbortSignal,
+  now: () => number
+): Promise<boolean> {
+  const done = (): boolean =>
+    (choice === 'auto'
+      ? pickAuto(settings, now()) != null
+      : isAvailable(choice, settings, now())) || nextAvailableAt(settings, choice, now()) === null
   return new Promise((resolve) => {
     const finish = (ok: boolean): void => {
       clearInterval(iv)
@@ -41,9 +61,9 @@ function sleepUntil(at: number, signal: AbortSignal, now: () => number): Promise
     const onAbort = (): void => finish(false)
     signal.addEventListener('abort', onAbort, { once: true })
     const iv = setInterval(() => {
-      if (now() >= at) finish(true)
+      if (done()) finish(true)
     }, POLL_MS)
-    if (now() >= at) finish(true)
+    if (done()) finish(true)
   })
 }
 
@@ -71,7 +91,7 @@ export async function resolveTurnRunner(
     const at = nextAvailableAt(settings, choice, nowMs())
     if (at === null) return 'unavailable'
     onPause?.(new Date(at).toISOString())
-    if (await sleepUntil(at, ctrl.ac.signal, nowMs)) onResume?.()
+    if (await waitForRunner(choice, settings, ctrl.ac.signal, nowMs)) onResume?.()
   }
 }
 
