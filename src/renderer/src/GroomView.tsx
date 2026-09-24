@@ -202,6 +202,15 @@ export function GroomView({
       // A Turn still in flight (M25.2): main replays what it has streamed so
       // far, so re-entering the view shows the partial reply, not an idle one.
       if (c.busy) setStreaming(c.partial)
+      // Reopened brief (M27 §7 fix): a needs-review session gets no live
+      // 'done' event to carry its proposal on this mount, so main replays it
+      // from the transcript. Only when nothing live has set one already —
+      // `prev ?? c.proposal` never clobbers a live event that (impossibly
+      // fast, but just in case) beat this load. fromWorkUnit needs no touch
+      // here: whenever a proposal reached the transcript at all, chat.ts had
+      // already parked the item needs-review, so the mount seed above
+      // (`alreadyParkedForReview(groomState)`) is already correct.
+      if (c.proposal) setProposal((prev) => prev ?? c.proposal)
       // The seed is the quick-start's first message. Each groom owns its own
       // transcript now, so a fresh one is always empty — but never re-send into
       // a transcript that already has turns.

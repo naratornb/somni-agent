@@ -299,11 +299,20 @@ function pendingText(lines: Line[]): string {
 export function loadChat(
   repo: string,
   slug: string
-): { messages: ChatMessage[]; busy: boolean; partial: string } {
+): { messages: ChatMessage[]; busy: boolean; partial: string; proposal: ChatProposal | null } {
   const messages = readLines(repo, slug).filter((l): l is ChatMessage => 'role' in l)
   // Streamed text is buffered here (M25.2) so a view re-entered mid-Turn shows
   // the reply so far instead of an idle transcript.
-  return { messages, busy: inFlight.has(slug), partial: partials.get(slug) ?? '' }
+  // The last assistant reply's proposal (M27 fix): a reopened needs-review
+  // session gets no live 'done' event to carry it, so the renderer needs it
+  // replayed here — parseProposal lives here, so main parses it, not the view.
+  const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
+  return {
+    messages,
+    busy: inFlight.has(slug),
+    partial: partials.get(slug) ?? '',
+    proposal: lastAssistant ? parseProposal(lastAssistant.text) : null
+  }
 }
 
 export function newChat(repo: string, slug: string): void {

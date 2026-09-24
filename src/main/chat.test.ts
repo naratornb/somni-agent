@@ -724,7 +724,8 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     expect(midTurn).toEqual({
       messages: [expect.objectContaining({ role: 'user', text: 'hi' })],
       busy: true,
-      partial: 'partial words'
+      partial: 'partial words',
+      proposal: null // no assistant reply landed yet
     })
     const after = loadChat(repo, slug)
     expect(after.busy).toBe(false)
@@ -1145,6 +1146,25 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     await send(item.id, 'propose something')
     await new Promise((r) => setTimeout(r, 50)) // prove nothing fires in the background
     expect(callsLogged()).toHaveLength(1)
+  })
+
+  // Fix (M27 §7 round 2): a reopened needs-review session gets no live 'done'
+  // event to carry its proposal, so GroomView needs it replayed from the
+  // transcript on load — parseProposal lives here, so main parses it once and
+  // hands the renderer the result, rather than re-implementing fence parsing.
+  it("loadChat replays the last assistant reply's proposal, or null when it has none", async () => {
+    const item = saveItem(repo, { name: 'Thing', kind: 'idea' })
+    fake({ FAKE_TEXT: block(story({ name: 'Replayed' })) })
+    await send(item.id, 'propose something')
+    expect(loadChat(repo, item.id).proposal).toEqual(
+      parseProposal(block(story({ name: 'Replayed' })))
+    )
+
+    // A later plain reply becomes the new last assistant message — the stale
+    // proposal from the earlier turn must not leak forward.
+    fake({ FAKE_TEXT: 'never mind, forget it' })
+    await send(item.id, 'actually never mind')
+    expect(loadChat(repo, item.id).proposal).toBeNull()
   })
 
   it('a pre-M27 item with no persona picks up settings.persona at birth; absent settings default to director', async () => {

@@ -7,6 +7,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, test } from 'vitest'
 import type {
+  GroomState,
   Item,
   Persona,
   ProviderHealth,
@@ -1426,6 +1427,33 @@ test('alreadyParkedForReview seeds fromWorkUnit true only when the session was a
   expect(alreadyParkedForReview(undefined)).toBe(false)
   expect(alreadyParkedForReview('working')).toBe(false)
   expect(alreadyParkedForReview('done')).toBe(false)
+})
+
+// Fix round 2: a reopened needs-review session gets no live 'done' event, so
+// GroomView seeds `proposal` from loadChat's replayed one (main/chat.ts) and
+// `fromWorkUnit` from alreadyParkedForReview(groomState) — both at mount. The
+// SSR harness can't mount GroomView and resolve a mocked loadChat promise (no
+// DOM/act, no jsdom dependency available to add), so this wires the same two
+// pure pieces together exactly as GroomView's mount effect does, proving the
+// composition (not just each piece alone) produces the Approve & run surface.
+test('reopened brief: a loaded proposal + already-parked groomState together produce Approve & run', () => {
+  const groomStateAtMount: GroomState = 'needs-review' // what the view was handed at mount
+  const loadedProposal = storyProposalM27 // stands in for loadChat's replayed proposal
+  const fromWorkUnit = alreadyParkedForReview(groomStateAtMount) // GroomView's mount seed
+
+  const section = ProposalSection({
+    proposal: loadedProposal,
+    roles,
+    fromWorkUnit,
+    applying: false,
+    applyLabel: 'Apply',
+    onApply: () => {},
+    onApproveRun: () => {},
+    onDismiss: () => {}
+  })
+  expect(section.props.applyLabel).toBe('Approve & run')
+  expect(section.props.summary).toBe('Ship a greeting.')
+  expect(section.props.secondaryLabel).toBe('Apply')
 })
 
 // ProposalPreview's rendering half of the same feature: the summary block
