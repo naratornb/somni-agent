@@ -555,6 +555,61 @@ describe('failover (M26)', () => {
     expect(existsSync(join(state.worktree, 'task-ran-here'))).toBe(false)
   })
 
+  // M29 review fix: the wait used to only re-check availability, so a
+  // sibling parking the sole awaited provider mid-wait (auth error on the
+  // same provider from another task) left ready() permanently false — a
+  // silent 25ms busy-poll forever. The wait must also give up and hand
+  // control back to resolveTurnRunner's own fail-fast the moment nothing can
+  // ever come back, the same way the old deadline-sleep always re-entered
+  // the outer loop eventually. No fast clock: only the mid-wait park can end
+  // this within the test's timeout, proving there's no hang.
+  it('fails fast instead of spinning when the awaited pinned provider is parked mid-wait', async () => {
+    fake({ FAKE_COUNT: join(root, 'n'), FAKE_FAIL_TIMES: '1', FAKE_RATE_LIMIT: '1' })
+    let paused = (): void => {}
+    const gotPause = new Promise<void>((resolve) => {
+      paused = () => resolve()
+    })
+    const started = Date.now()
+    const runPromise = runStory(repo, docs, base, {
+      ...noEvents,
+      onPipeline: (s) => s === 'Paused' && paused()
+    })
+    await gotPause
+    await new Promise((r) => setTimeout(r, 80)) // let a few poll ticks pass first
+    markAuthFailed('claude') // the sole pinned candidate goes dead mid-wait
+    const state = await runPromise
+    expect(state.status).toBe('Failed')
+    expect(state.tasks[0].error).toBe('no provider available')
+    expect(Date.now() - started).toBeLessThan(2000) // nowhere near the real 5-minute deadline
+  })
+
+  it('fails fast under auto too, when the single remaining candidate is parked mid-wait', async () => {
+    fake({ FAKE_COUNT: join(root, 'n'), FAKE_FAIL_TIMES: '1', FAKE_RATE_LIMIT: '1' })
+    const settings = {
+      runner: 'auto' as const,
+      providers: { disabled: ['codex', 'gemini', 'antigravity'] as RunnerName[] }
+    }
+    let paused = (): void => {}
+    const gotPause = new Promise<void>((resolve) => {
+      paused = () => resolve()
+    })
+    const started = Date.now()
+    const runPromise = runStory(
+      repo,
+      docs,
+      base,
+      { ...noEvents, onPipeline: (s) => s === 'Paused' && paused() },
+      { settings }
+    )
+    await gotPause
+    await new Promise((r) => setTimeout(r, 80))
+    markAuthFailed('claude') // claude was the only enabled candidate
+    const state = await runPromise
+    expect(state.status).toBe('Failed')
+    expect(state.tasks[0].error).toBe('no provider available')
+    expect(Date.now() - started).toBeLessThan(2000)
+  })
+
   it('an auth-shaped failure parks a pinned provider and fails the task immediately (never retried)', async () => {
     saveRole(repo, {
       slug: 'codex-dev',
