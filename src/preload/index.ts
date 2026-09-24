@@ -208,7 +208,8 @@ const somni = {
     slug: string,
     text: string,
     opts?: { interactive?: boolean }
-  ): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('chat:send', repo, slug, text, opts),
+  ): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('chat:send', repo, slug, text, opts),
   // Apply — the only write out of a groom. `key` is the groomed item's id; it
   // converts in place, keeping its id, and child Stories are created beside it.
   applyProposal: (

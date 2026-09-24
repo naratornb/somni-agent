@@ -477,8 +477,7 @@ export function resumePipeline(
   const queue: Job[] = runIds.map((runId) => ({
     id: runId,
     slug: runSlug(repo, runId),
-    run: (ctrl: Ctrl) =>
-      execute(repo, mustLoadRun(repo, runId), events, { ...opts, ctrl })
+    run: (ctrl: Ctrl) => execute(repo, mustLoadRun(repo, runId), events, { ...opts, ctrl })
   }))
   return drainLoop(() => queue.shift(), maxConcurrency, events, opts, 'resume')
 }

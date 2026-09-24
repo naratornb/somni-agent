@@ -45,8 +45,9 @@ function waitForRunner(
   now: () => number
 ): Promise<boolean> {
   const done = (): boolean =>
-    (choice === 'auto' ? pickAuto(settings, now()) != null : isAvailable(choice, settings, now())) ||
-    nextAvailableAt(settings, choice, now()) === null
+    (choice === 'auto'
+      ? pickAuto(settings, now()) != null
+      : isAvailable(choice, settings, now())) || nextAvailableAt(settings, choice, now()) === null
   return new Promise((resolve) => {
     const finish = (ok: boolean): void => {
       clearInterval(iv)
