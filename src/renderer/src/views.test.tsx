@@ -6,10 +6,18 @@
 // tester's. Add a DOM environment only if that gap ever bites.
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, test } from 'vitest'
-import type { Item, ProviderHealth, RunDetails, RunRow, Settings } from '../../preload/index'
+import type {
+  GroomState,
+  Item,
+  Persona,
+  ProviderHealth,
+  RunDetails,
+  RunRow,
+  Settings
+} from '../../preload/index'
 import App from './App'
-import { GroomView } from './GroomView'
-import { HomeView } from './HomeView'
+import { GroomView, ProposalSection } from './GroomView'
+import { HomeView, PersonaPickStrip, QuickStartBox } from './HomeView'
 import { BoardView } from './BoardView'
 import { PipelineView } from './PipelineView'
 import { ProvidersSetup } from './ProvidersSetup'
@@ -28,12 +36,18 @@ import {
 } from './chatShared'
 import { CaptureModal, CommandPalette, QuickAdd } from './capture'
 import {
+  alreadyParkedForReview,
+  approveRunIds,
+  briefSummary,
   captureItem,
   paletteResults,
   railOrder,
   reorderBacklog,
   saveCapture,
-  sessionGroups
+  sessionGroups,
+  shouldAutoHandoff,
+  shouldSeedProposal,
+  togglePersona
 } from './ui'
 
 // Every somni.* call is a noop; proposeNow is read during render.
@@ -1194,4 +1208,354 @@ test('GroomView renders the working and queued state lines', () => {
       <GroomView repo="/repo" roles={roles} itemId="SOM-1" itemName="x" onApplied={() => {}} />
     )
   ).toContain('Draft in background')
+})
+
+// ── M27: persona pick + chip, owner auto-handoff, Summary, Approve & run ────
+
+// §1: Settings gets a Persona select, in the same patch-out idiom as every
+// other SettingsForm field, defaulting to the director fallback when unset.
+test('SettingsForm Persona select shows both options and patches persona', () => {
+  const html = renderToStaticMarkup(<>{SettingsForm(formProps())}</>)
+  expect(html).toContain('Technical Director')
+  expect(html).toContain('Project Owner')
+
+  let patched: Partial<Settings> | undefined
+  const tree = SettingsForm(formProps({ patch: (p) => (patched = p) }))
+  const select = findByLabel(tree, 'Persona')
+  ;(select?.props.onChange as (e: { target: { value: string } }) => void)?.({
+    target: { value: 'owner' }
+  })
+  expect(patched?.persona).toBe('owner')
+})
+
+// §2: the first-run pick strip — one question, once. It only ever asks;
+// HomeView is what decides whether to show it (settings.persona === undefined).
+test('PersonaPickStrip renders both cards and calls onPick with the chosen persona', () => {
+  let picked: Persona | undefined
+  const tree = PersonaPickStrip({ onPick: (p) => (picked = p) })
+  const html = renderToStaticMarkup(<>{tree}</>)
+  expect(html).toContain('Technical Director')
+  expect(html).toContain('Project Owner')
+
+  const owner = findByLabel(tree, 'Pick Project Owner')
+  ;(owner?.props.onClick as () => void)?.()
+  expect(picked).toBe('owner')
+
+  const director = findByLabel(tree, 'Pick Technical Director')
+  ;(director?.props.onClick as () => void)?.()
+  expect(picked).toBe('director')
+})
+
+// §3: the Quick Start chip — defaults to whatever persona it's handed (HomeView
+// wires that to the settings value) and toggles on click; Start forwards it.
+test('QuickStartBox shows the persona it is given, toggles on click, and Start reaches onSubmit', () => {
+  let toggled = false
+  let submitted = false
+  const tree = QuickStartBox({
+    text: 'Fix the thing',
+    onTextChange: () => {},
+    chips: [],
+    onChipPick: () => {},
+    persona: 'owner',
+    onPersonaToggle: () => (toggled = true),
+    onSubmit: () => (submitted = true),
+    onSpoken: () => {}
+  })
+  const html = renderToStaticMarkup(<>{tree}</>)
+  expect(html).toContain('Project Owner')
+
+  const chip = findByLabel(tree, 'Persona')
+  ;(chip?.props.onClick as () => void)?.()
+  expect(toggled).toBe(true)
+
+  const start = findByLabel(tree, 'Start')
+  ;(start?.props.onClick as () => void)?.()
+  expect(submitted).toBe(true)
+})
+
+test('togglePersona flips between director and owner', () => {
+  expect(togglePersona('director')).toBe('owner')
+  expect(togglePersona('owner')).toBe('director')
+})
+
+// §4: the Groom header chip — resolved from the full item when the caller has
+// one, director fallback otherwise. The flip itself goes through item:save
+// (the same full-replace path StoryPanel's Save uses), reviewed at the source.
+test('GroomView header chip shows the resolved persona, falling back to director', () => {
+  const withOwner = renderToStaticMarkup(
+    <GroomView
+      repo="/repo"
+      roles={roles}
+      itemId="SOM-1"
+      itemName="x"
+      item={{ ...items[0], id: 'SOM-1', persona: 'owner' }}
+      onApplied={() => {}}
+    />
+  )
+  expect(withOwner).toContain('Project Owner')
+
+  const fallback = renderToStaticMarkup(
+    <GroomView repo="/repo" roles={roles} itemId="SOM-1" itemName="x" onApplied={() => {}} />
+  )
+  expect(fallback).toContain('Technical Director')
+})
+
+// Fix (M27 final review): the chip must fall through to the settings-level
+// persona — not straight to the director default — for an unstamped item
+// (Board/Capture never stamps persona). item?.persona still wins when both
+// are present; no item and no defaultPersona keeps the director fallback.
+test('GroomView header chip falls through to defaultPersona (settings) before director', () => {
+  const settingsOwner = renderToStaticMarkup(
+    <GroomView
+      repo="/repo"
+      roles={roles}
+      itemId="SOM-1"
+      itemName="x"
+      item={{ ...items[0], id: 'SOM-1' }} // no persona stamp
+      defaultPersona="owner"
+      onApplied={() => {}}
+    />
+  )
+  expect(settingsOwner).toContain('Project Owner')
+
+  const itemStampWins = renderToStaticMarkup(
+    <GroomView
+      repo="/repo"
+      roles={roles}
+      itemId="SOM-1"
+      itemName="x"
+      item={{ ...items[0], id: 'SOM-1', persona: 'director' }}
+      defaultPersona="owner"
+      onApplied={() => {}}
+    />
+  )
+  expect(itemStampWins).toContain('Technical Director')
+
+  const noSettingsNoItem = renderToStaticMarkup(
+    <GroomView repo="/repo" roles={roles} itemId="SOM-1" itemName="x" onApplied={() => {}} />
+  )
+  expect(noSettingsNoItem).toContain('Technical Director')
+})
+
+// §5: the owner mount-handoff decision, extracted pure so it's testable without
+// running GroomView's load effect. A truly empty owner groom (no name pick, no
+// spec) is spec §2's fallback — the user types, and chat.ts's birth routing
+// takes it from there on that first send.
+test('shouldAutoHandoff fires only for an idle, fresh, content-bearing owner groom', () => {
+  expect(shouldAutoHandoff('director', 0, false, null, 'New groom', '')).toBe(false)
+  expect(shouldAutoHandoff('owner', 0, false, null, 'New groom', '')).toBe(false) // truly empty
+  expect(shouldAutoHandoff('owner', 0, false, null, 'New groom', 'Some spec')).toBe(true)
+  expect(shouldAutoHandoff('owner', 0, false, null, 'Search is slow', '')).toBe(true)
+  expect(shouldAutoHandoff('owner', 1, false, null, 'Search is slow', '')).toBe(false) // not fresh
+  expect(shouldAutoHandoff('owner', 0, true, null, 'Search is slow', '')).toBe(false) // busy
+  expect(shouldAutoHandoff('owner', 0, false, 'needs-review', 'Search is slow', '')).toBe(false)
+})
+
+// §6: the brief Summary extractor — pure text slicing, no proposal shape needed.
+test('briefSummary extracts the Summary section; no section returns null', () => {
+  expect(briefSummary('## Summary\n\nShips the thing.\n\n## Details\n\nMore.')).toBe(
+    'Ships the thing.'
+  )
+  expect(briefSummary('## Details\n\nNo summary here.')).toBeNull()
+  expect(briefSummary('## Summary\n\n   \n')).toBeNull() // whitespace-only section
+})
+
+const storyProposalM27 = {
+  kind: 'story' as const,
+  name: 'Solo',
+  spec: '## Summary\n\nShip a greeting.\n\n## Details\n\nMore.',
+  stories: [],
+  tasks: workflow.tasks,
+  roles: []
+}
+
+// §7 fix: chat.ts parks groomState 'needs-review' for ANY parsed proposal —
+// live interactive turn or background work unit alike — so the gate can't be
+// state==='needs-review'. It has to be provenance: fromWorkUnit, which
+// GroomView sets from ev.workUnit on every live 'done' event, seeded at mount
+// from whether the session was already parked (a reopened session, no live
+// event this mount — ui.ts's alreadyParkedForReview). ProposalSection is the
+// real boundary GroomView hands this flag to; these three cases are exactly
+// what its 'done' handler computes for scenarios (a)/(b)/(c) of the fix:
+//   (a) a live done, workUnit false (interactive turn) → fromWorkUnit=false
+//   (b) a live done, workUnit true (background draft) → fromWorkUnit=true
+//   (c) mount with groomState already 'needs-review', no live event yet →
+//       fromWorkUnit seeded true by alreadyParkedForReview
+// The SSR harness can't fire a live onChatEvent after mount (no DOM/act, and
+// no jsdom dependency is available to add) — GroomView's actual handler body
+// (`setFromWorkUnit(!!ev.workUnit)` and the `useState(alreadyParkedForReview(...))`
+// seed) is reviewed by inspection, and alreadyParkedForReview's own unit test
+// below pins down the seed exactly.
+test('ProposalSection: (a) a live interactive-turn proposal keeps Apply/Apply & run', () => {
+  const onApply = (): void => {}
+  const onApproveRun = (): void => {}
+  const onDismiss = (): void => {}
+
+  const inline = ProposalSection({
+    proposal: storyProposalM27,
+    roles,
+    fromWorkUnit: false, // ev.workUnit was falsy on this live 'done'
+    applying: false,
+    applyLabel: 'Apply',
+    onApply,
+    onApproveRun,
+    onDismiss
+  })
+  expect(inline.props.applyLabel).toBe('Apply')
+  expect(inline.props.summary).toBeNull()
+  expect(inline.props.secondaryLabel).toBeUndefined()
+  expect(inline.props.onApply).toBe(onApply) // never routed to approve+run
+
+  // Quick-start autoRun: same fromWorkUnit=false, its own label unchanged.
+  const autoRun = ProposalSection({
+    proposal: storyProposalM27,
+    roles,
+    fromWorkUnit: false,
+    applying: false,
+    applyLabel: 'Apply & run',
+    onApply,
+    onApproveRun,
+    onDismiss
+  })
+  expect(autoRun.props.applyLabel).toBe('Apply & run')
+  expect(autoRun.props.onApply).toBe(onApply)
+})
+
+test('ProposalSection: (b) a live background-work-unit proposal reads Approve & run', () => {
+  const onApply = (): void => {}
+  const onApproveRun = (): void => {}
+  const onDismiss = (): void => {}
+
+  const nr = ProposalSection({
+    proposal: storyProposalM27,
+    roles,
+    fromWorkUnit: true, // ev.workUnit was true on this live 'done'
+    applying: false,
+    applyLabel: 'Apply',
+    onApply,
+    onApproveRun,
+    onDismiss
+  })
+  expect(nr.props.applyLabel).toBe('Approve & run')
+  expect(nr.props.summary).toBe('Ship a greeting.')
+  expect(nr.props.secondaryLabel).toBe('Apply')
+  expect(nr.props.onSecondary).toBe(onApply)
+  expect(nr.props.onApply).toBe(onApproveRun) // the primary click queues
+
+  // An Epic never promises "& run" or a queueing secondary, even so.
+  const epic = ProposalSection({
+    proposal: { ...proposal, kind: 'epic' as const },
+    roles,
+    fromWorkUnit: true,
+    applying: false,
+    applyLabel: 'Apply',
+    onApply,
+    onApproveRun,
+    onDismiss
+  })
+  expect(epic.props.applyLabel).toBe('Apply')
+  expect(epic.props.secondaryLabel).toBeUndefined()
+})
+
+// (c) a reopened session: groomState was already 'needs-review' when the view
+// loaded, with no live event this mount — a completed brief regardless of how
+// the proposal was produced.
+test('alreadyParkedForReview seeds fromWorkUnit true only when the session was already parked at mount', () => {
+  expect(alreadyParkedForReview('needs-review')).toBe(true)
+  expect(alreadyParkedForReview(undefined)).toBe(false)
+  expect(alreadyParkedForReview('working')).toBe(false)
+  expect(alreadyParkedForReview('done')).toBe(false)
+})
+
+// Fix round 2: a reopened needs-review session gets no live 'done' event, so
+// GroomView seeds `proposal` from loadChat's replayed one (main/chat.ts) and
+// `fromWorkUnit` from alreadyParkedForReview(groomState) — both at mount. The
+// SSR harness can't mount GroomView and resolve a mocked loadChat promise (no
+// DOM/act, no jsdom dependency available to add), so this wires the same two
+// pure pieces together exactly as GroomView's mount effect does, proving the
+// composition (not just each piece alone) produces the Approve & run surface.
+test('reopened brief: a loaded proposal + already-parked groomState together produce Approve & run', () => {
+  const groomStateAtMount: GroomState = 'needs-review' // what the view was handed at mount
+  const loadedProposal = storyProposalM27 // stands in for loadChat's replayed proposal
+  const fromWorkUnit = alreadyParkedForReview(groomStateAtMount) // GroomView's mount seed
+
+  const section = ProposalSection({
+    proposal: loadedProposal,
+    roles,
+    fromWorkUnit,
+    applying: false,
+    applyLabel: 'Apply',
+    onApply: () => {},
+    onApproveRun: () => {},
+    onDismiss: () => {}
+  })
+  expect(section.props.applyLabel).toBe('Approve & run')
+  expect(section.props.summary).toBe('Ship a greeting.')
+  expect(section.props.secondaryLabel).toBe('Apply')
+})
+
+// Fix round 3: Dismiss clears groomState (session:reopen) while leaving the
+// fence text sitting in the transcript — a fence existing is not enough, the
+// session must still BE parked needs-review, or a dismissed proposal
+// resurrects on reopen. GroomView's mount effect gates the proposal seed on
+// exactly this function (`shouldSeedProposal(c.proposal, groomState)`); when
+// it's false, `setProposal` is never called, `proposal` stays null, and
+// `{proposal && <ProposalSection/>}` renders nothing — the SSR harness can't
+// observe that absence any more directly than the real gate itself (same
+// ceiling as the round-2 composition test above: no DOM/act, no jsdom
+// dependency available to add).
+test('shouldSeedProposal: a fence still in the transcript never reseeds without a parked groomState', () => {
+  const loadedProposal = storyProposalM27 // stands in for the fence left in the transcript
+  expect(shouldSeedProposal(loadedProposal, undefined)).toBe(false) // dismissed, then reopened
+  expect(shouldSeedProposal(loadedProposal, 'needs-review')).toBe(true) // (b) still seeds
+  expect(shouldSeedProposal(null, 'needs-review')).toBe(false) // no fence at all, never seeds
+})
+
+// ProposalPreview's rendering half of the same feature: the summary block
+// sits above the rest of the card, and the secondary button only appears
+// when both its label and handler are given.
+test('ProposalPreview renders the summary above the rest, and an optional secondary button', () => {
+  const html = renderToStaticMarkup(
+    <ProposalPreview
+      proposal={proposal}
+      roles={roles}
+      applyLabel="Approve & run"
+      disabled={false}
+      onApply={() => {}}
+      onDismiss={() => {}}
+      summary="Ships the thing end to end."
+      secondaryLabel="Apply"
+      onSecondary={() => {}}
+    />
+  )
+  expect(html).toContain('Ships the thing end to end.')
+  expect(html.indexOf('Ships the thing end to end.')).toBeLessThan(html.indexOf('Spec'))
+  expect(html).toContain('Approve &amp; run')
+  expect(html).toContain('>Apply<') // the secondary button
+
+  const withoutSummary = renderToStaticMarkup(
+    <ProposalPreview
+      proposal={proposal}
+      roles={roles}
+      disabled={false}
+      onApply={() => {}}
+      onDismiss={() => {}}
+    />
+  )
+  expect(withoutSummary).not.toContain('Ships the thing')
+  // Only the primary Apply button — no secondary without secondaryLabel/onSecondary.
+  expect(withoutSummary.match(/>Apply</g)?.length ?? 0).toBe(1)
+})
+
+// The queue list itself: root once Ready, plus every child the proposal left
+// unblocked — the same Ready + no-blockers gate the pipeline enforces.
+test('approveRunIds queues the root only when Ready, plus every unblocked child', () => {
+  const root: Item = { ...items[0], id: 'SOM-20', status: 'ready' }
+  const children: Item[] = [
+    { ...items[0], id: 'SOM-21', blockedBy: [] },
+    { ...items[0], id: 'SOM-22', blockedBy: ['SOM-21'] },
+    { ...items[0], id: 'SOM-23' } // no blockedBy field at all
+  ]
+  expect(approveRunIds(root, children)).toEqual(['SOM-20', 'SOM-21', 'SOM-23'])
+  expect(approveRunIds({ ...root, status: 'grooming' }, children)).toEqual(['SOM-21', 'SOM-23'])
 })

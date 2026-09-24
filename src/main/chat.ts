@@ -6,10 +6,20 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'fs'
 import { dirname, join } from 'path'
 import { getRunner } from './runners'
 import { groomPreamble, WORK_UNIT_PROMPT } from './prompts'
-import { cancelQueued } from './sessions'
+import { cancelQueued, handoff } from './sessions'
 import * as store from './store'
 import { turn } from './turn'
-import type { Effort, GroomState, Item, Profile, Role, RunnerName, Settings, Task } from './store'
+import type {
+  Effort,
+  GroomState,
+  Item,
+  Persona,
+  Profile,
+  Role,
+  RunnerName,
+  Settings,
+  Task
+} from './store'
 
 // Every Groom is an Item from its first message (M25.1) — there is no draft
 // slot. A from-scratch groom starts as an Idea under this placeholder name,
@@ -57,10 +67,22 @@ export const PROPOSE_NOW =
 
 // Opening a from-scratch Groom (M25.1): the Item exists before the first
 // message, so the conversation is keyed on a real id and two parallel grooms
-// can never share a transcript.
-export function startGroom(repo: string): Item {
-  return store.saveItem(repo, { kind: 'idea', status: 'grooming', name: NEW_GROOM_NAME })
+// can never share a transcript. An owner persona (M27) is stamped at birth so
+// the router below knows to draft it unattended from the first message.
+export function startGroom(repo: string, persona?: Persona): Item {
+  return store.saveItem(repo, {
+    kind: 'idea',
+    status: 'grooming',
+    name: NEW_GROOM_NAME,
+    ...(persona ? { persona } : {})
+  })
 }
+
+// Persona resolution (M27): the groom's own stamp wins, then settings, and
+// only then the director default — never assumed off resolved settings, since
+// persona is deliberately absent from SETTINGS_DEFAULTS.
+const personaOf = (item: Item | undefined, settings: Settings): Persona =>
+  item?.persona ?? settings.persona ?? 'director'
 
 // The message for one turn. First turn carries the preamble; later turns resume.
 const chatPrompt = (
@@ -215,6 +237,15 @@ export function parseProposal(text: string): ChatProposal | null {
   }
 }
 
+// Interview rounds already spent (M27): the cap routes the answer to round
+// three into a background draft. Counted from the transcript — the fences are
+// already the truth, a counter field would just drift from it.
+export function questionRounds(repo: string, slug: string): number {
+  return readLines(repo, slug).filter(
+    (l): l is ChatMessage => 'role' in l && l.role === 'assistant' && !!parseQuestion(l.text)
+  ).length
+}
+
 type Line = ChatMessage | { sessionId: string }
 
 function readLines(repo: string, slug: string): Line[] {
@@ -247,14 +278,41 @@ const sessionOf = (lines: Line[]): string | null => {
   return null
 }
 
+// The user text a work unit still owes a Turn (M27): whatever trailing user
+// line(s) follow the last assistant reply. A routed send durably appends its
+// text before handoff (sendChat) — if the job is later re-handed-off with
+// only the generic HANDOFF_MESSAGE (a resume, its own closure long gone after
+// interruptSessions), this is how the real text still reaches the model.
+function pendingText(lines: Line[]): string {
+  const messages = lines.filter((l): l is ChatMessage => 'role' in l)
+  let after = 0
+  messages.forEach((m, i) => {
+    if (m.role === 'assistant') after = i + 1
+  })
+  return messages
+    .slice(after)
+    .filter((m) => m.role === 'user')
+    .map((m) => m.text)
+    .join('\n')
+}
+
 export function loadChat(
   repo: string,
   slug: string
-): { messages: ChatMessage[]; busy: boolean; partial: string } {
+): { messages: ChatMessage[]; busy: boolean; partial: string; proposal: ChatProposal | null } {
   const messages = readLines(repo, slug).filter((l): l is ChatMessage => 'role' in l)
   // Streamed text is buffered here (M25.2) so a view re-entered mid-Turn shows
   // the reply so far instead of an idle transcript.
-  return { messages, busy: inFlight.has(slug), partial: partials.get(slug) ?? '' }
+  // The last assistant reply's proposal (M27 fix): a reopened needs-review
+  // session gets no live 'done' event to carry it, so the renderer needs it
+  // replayed here — parseProposal lives here, so main parses it, not the view.
+  const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
+  return {
+    messages,
+    busy: inFlight.has(slug),
+    partial: partials.get(slug) ?? '',
+    proposal: lastAssistant ? parseProposal(lastAssistant.text) : null
+  }
 }
 
 export function newChat(repo: string, slug: string): void {
@@ -290,6 +348,20 @@ export function sendChat(
   onEvent: (ev: ChatEvent) => void
 ): { ok: boolean; error?: string } {
   if (inFlight.has(slug)) return { ok: false, error: 'a chat turn is already in flight' }
+  const item = store.loadItems(repo).find((i) => i.id === slug)
+  const birth = readLines(repo, slug).length === 0
+  // Hands-off routing (M27): an owner's groom drafts itself from birth; any
+  // interview ends after three rounds. Everything else is a normal turn.
+  if ((birth && personaOf(item, settings) === 'owner') || questionRounds(repo, slug) >= 3) {
+    // Durable before handoff: queued (cap full) or discarded by a quit before
+    // ever running (interruptSessions drops the job closure), the text must
+    // survive on disk either way — the closure is not the source of truth.
+    appendLine(repo, slug, { role: 'user', text, ts: new Date().toISOString() })
+    return handoff(repo, slug, {
+      emit: onEvent,
+      run: () => workUnitTurn(repo, slug, settings, roleSlugs, onEvent, text, true)
+    })
+  }
   void runTurn(repo, slug, text, settings, roleSlugs, onEvent, false)
   return { ok: true }
 }
@@ -308,9 +380,13 @@ export function workUnitTurn(
   slug: string,
   settings: Settings,
   roleSlugs: string[],
-  onEvent: (ev: ChatEvent) => void
+  onEvent: (ev: ChatEvent) => void,
+  message: string = HANDOFF_MESSAGE,
+  // The routed path already wrote `message` to the transcript itself, durably,
+  // before ever handing off (see sendChat) — runTurn must not double-log it.
+  prelogged = false
 ): Promise<void> {
-  return runTurn(repo, slug, HANDOFF_MESSAGE, settings, roleSlugs, onEvent, true)
+  return runTurn(repo, slug, message, settings, roleSlugs, onEvent, true, prelogged)
 }
 
 function runTurn(
@@ -320,7 +396,8 @@ function runTurn(
   settings: Settings,
   roleSlugs: string[],
   onEvent: (ev: ChatEvent) => void,
-  workUnit: boolean
+  workUnit: boolean,
+  prelogged = false
 ): Promise<void> {
   // One Turn per session, whichever path asked for it — a second would
   // interleave the same transcript. Claimed synchronously, before any write:
@@ -330,7 +407,8 @@ function runTurn(
   inFlight.set(slug, ac)
   const lines = readLines(repo, slug)
   let sessionId = sessionOf(lines)
-  appendLine(repo, slug, { role: 'user', text, ts: new Date().toISOString() })
+  // The routed path already wrote this line durably before handing off.
+  if (!prelogged) appendLine(repo, slug, { role: 'user', text, ts: new Date().toISOString() })
   // Every groom is keyed on a real item (M25.1): turn 1 is seeded with the item
   // as it stands, and each turn flips it into Grooming and stamps its last
   // activity. Nothing else is written until Apply.
@@ -354,9 +432,20 @@ function runTurn(
 
   let reply = ''
   // A work unit resumes the same session with the assume-and-continue rules on
-  // top; a handoff before the first turn still needs the grooming contract.
+  // top; a handoff before the first turn still needs the grooming contract. A
+  // routed message (the cap, or Propose Now) rides above the contract too —
+  // the plain HANDOFF_MESSAGE alone needs nothing extra above it. A resume
+  // (quit dropped the queued job's own closure) hands us only HANDOFF_MESSAGE
+  // too, so recover any pending routed text from the durable transcript itself
+  // — the trailing user line(s) after the last assistant reply, never yet fed
+  // to a Turn.
+  const routedText = text !== HANDOFF_MESSAGE ? text : pendingText(lines)
   const prompt = workUnit
-    ? [sessionId ? '' : groomPreamble(roleSlugs, context, settings.methodology), WORK_UNIT_PROMPT]
+    ? [
+        sessionId ? '' : groomPreamble(roleSlugs, context, settings.methodology),
+        routedText,
+        WORK_UNIT_PROMPT
+      ]
         .filter(Boolean)
         .join('\n')
     : chatPrompt(text, sessionId, roleSlugs, settings, context)
@@ -425,6 +514,19 @@ function runTurn(
       question: workUnit ? null : parseQuestion(finalText),
       ...(workUnit ? { workUnit: true } : {})
     })
+    // A reply that neither asks nor proposes is done talking (M27): the session
+    // drafts itself rather than idling. Misfires are cheap — the brief's
+    // Assumptions section carries whatever was left open (spec §9). Fix (final
+    // review): gated on a clean turn (`r.ok`) — a rate-limited/killed turn that
+    // streamed fenceless partial prose before dying must not hand off; that
+    // background draft would run on the same cooling provider, fail again, and
+    // park a confusing needs-review over what was really just a dropped turn.
+    if (!workUnit && r.ok && item && !parseProposal(finalText) && !parseQuestion(finalText)) {
+      handoff(repo, slug, {
+        emit: onEvent,
+        run: () => workUnitTurn(repo, slug, settings, roleSlugs, onEvent)
+      })
+    }
     if (!workUnit && item?.name === NEW_GROOM_NAME)
       void autoTitle(repo, slug, text, reply, settings, onEvent)
   })
@@ -478,7 +580,7 @@ export function applyProposal(
   repo: string,
   key: string,
   proposal: ChatProposal
-): { ok: true; item: Item } | { ok: false; error: string } {
+): { ok: true; item: Item; children: Item[] } | { ok: false; error: string } {
   // Applying mid-turn would move the item's file out from under the reply
   // still being appended to it.
   if (inFlight.has(key)) return { ok: false, error: 'a chat turn is already in flight' }
@@ -505,6 +607,7 @@ export function applyProposal(
     tasks: proposal.kind === 'story' ? proposal.tasks : []
   })
   const childIds: string[] = []
+  const children: Item[] = []
   for (const story of proposal.stories) {
     const child = store.saveItem(repo, {
       kind: 'story',
@@ -516,14 +619,24 @@ export function applyProposal(
       blockedBy: story.blockedBy.map((i) => childIds[i])
     })
     childIds.push(child.id)
+    children.push(child)
   }
   // Mirrors `item:save`: an item landing in Backlog joins the column's ordering.
   const backlog = store.loadBacklog(repo)
   if (root.status === 'backlog' && !backlog.includes(root.id))
     store.saveBacklog(repo, [...backlog, root.id])
-  return { ok: true, item: root }
+  return { ok: true, item: root, children }
 }
 
 export function killChats(): void {
   for (const ac of inFlight.values()) ac.abort()
+}
+
+/** Test hook — an aborted Turn's own `.then()` still runs once the killed
+ *  process actually exits, which can outlive the test that triggered it (M27
+ *  auto-handoff can leave one running). ids restart at SOM-1 per fresh repo,
+ *  so a stale in-flight entry would silently refuse the next test's same slug. */
+export function resetChats(): void {
+  inFlight.clear()
+  partials.clear()
 }

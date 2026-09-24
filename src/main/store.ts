@@ -22,6 +22,10 @@ export type RunnerChoice = RunnerName | 'auto'
 // and run prompts plus which vendored skills are injected — never the item model.
 export type Methodology = 'pocock' | 'superpowers'
 export const METHODOLOGIES: Methodology[] = ['pocock', 'superpowers']
+// Who the user is to this groom (M27): a Technical Director answers up to
+// three sharp questions; a Project Owner drops the idea and reviews the brief.
+export type Persona = 'director' | 'owner'
+export const PERSONAS: Persona[] = ['director', 'owner']
 export type Profile = { runner?: RunnerChoice; model?: string; effort?: Effort }
 export type ProviderDefaults = { model?: string; effort?: Effort }
 // Failover chain config (M26): order/disabled shape the chain; defaults supply
@@ -58,6 +62,11 @@ export type Settings = Profile & {
   checkCommand?: string
   // Resolved per repo at groom/run time (docs/adr/0002); items carry no copy.
   methodology?: Methodology
+  // Who the user is to a groom (M27). No default here deliberately: settings:get
+  // must be able to expose "never picked" as undefined for the onboarding UI —
+  // the director default is applied at resolution sites (personaOf), not baked
+  // into SETTINGS_DEFAULTS.
+  persona?: Persona
 }
 
 // What settings:get / resolveSettings hand out: every defaulted field present.
@@ -118,6 +127,7 @@ export type Item = {
   lastActivity?: string
   groomState?: GroomState
   doneAt?: string // when the session reached `done` — the auto-archive clock
+  persona?: Persona // who groomed this item (M27) — absent when never set
   epic?: string
   blockedBy?: string[] // ids that must be `done` first
   tasks: Task[] // stories only: the .tasks.json sidecar
@@ -366,6 +376,9 @@ function parseItem(repo: string, file: string): Item {
       ? { groomState: fields.groomState as GroomState }
       : {}),
     ...(fields.doneAt ? { doneAt: fields.doneAt } : {}),
+    ...((PERSONAS as string[]).includes(fields.persona)
+      ? { persona: fields.persona as Persona }
+      : {}),
     ...(fields.epic ? { epic: fields.epic } : {}),
     ...(blockedBy.length ? { blockedBy } : {}),
     tasks: loadTasks(repo, base)
@@ -426,6 +439,7 @@ export function saveItem(repo: string, item: Partial<Item> & { name: string }): 
     ...(item.lastActivity ? { lastActivity: item.lastActivity } : {}),
     ...(item.groomState ? { groomState: item.groomState } : {}),
     ...(item.doneAt ? { doneAt: item.doneAt } : {}),
+    ...(item.persona ? { persona: item.persona } : {}),
     ...(item.epic ? { epic: item.epic } : {}),
     ...(item.blockedBy?.length ? { blockedBy: item.blockedBy } : {}),
     tasks: item.tasks ?? []
@@ -446,6 +460,7 @@ export function saveItem(repo: string, item: Partial<Item> & { name: string }): 
     full.lastActivity ? `lastActivity: ${full.lastActivity}` : '',
     full.groomState ? `groomState: ${full.groomState}` : '',
     full.doneAt ? `doneAt: ${full.doneAt}` : '',
+    full.persona ? `persona: ${full.persona}` : '',
     full.epic ? `epic: ${full.epic}` : '',
     full.blockedBy ? `blockedBy: ${full.blockedBy.join(', ')}` : ''
   ].filter(Boolean)

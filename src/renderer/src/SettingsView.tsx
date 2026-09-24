@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type {
   Effort,
   Methodology,
+  Persona,
   ProviderHealth,
   ProvidersSettings,
   ReportStyle,
@@ -243,6 +244,21 @@ export function SettingsForm({
             <option value="minimal">Minimal — app-computed stats, zero tokens</option>
             <option value="compact">Compact — stats + one summary call</option>
             <option value="full">Full — stats + a Report task in the worktree</option>
+          </select>
+        </FieldRow>
+        {/* Persona (M27): deliberately absent from SETTINGS_DEFAULTS, so this
+            shows the director fallback until the first-run pick or this select
+            writes a real value — either way, this is the same settings-save
+            path. */}
+        <FieldRow label="Persona">
+          <select
+            className={`${INPUT} flex-1`}
+            aria-label="Persona"
+            value={s.persona ?? 'director'}
+            onChange={(e) => patch({ persona: e.target.value as Persona })}
+          >
+            <option value="director">Technical Director — interviews before every proposal</option>
+            <option value="owner">Project Owner — drafts in the background, asks when stuck</option>
           </select>
         </FieldRow>
         <FieldRow label="Voice quick-start">

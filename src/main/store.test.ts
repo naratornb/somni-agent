@@ -14,6 +14,7 @@ import {
   saveItem,
   deleteItem,
   loadItems,
+  updateItem,
   nextId,
   readyBlocker,
   resolveProfile,
@@ -309,6 +310,14 @@ describe('execution profile & settings resolution', () => {
     expect(resolveProfile(undefined, { runner: 'auto' }).runner).toBe('auto')
     expect(resolveProfile({ runner: 'codex' }, { runner: 'auto' }).runner).toBe('codex')
   })
+
+  it('persona layers repo config over global, absent stays absent', () => {
+    expect(resolveSettings(repo, {}).persona).toBeUndefined()
+    expect(resolveSettings(repo, { persona: 'owner' }).persona).toBe('owner')
+    mkdirSync(join(repo, '.somni'), { recursive: true })
+    writeFileSync(join(repo, '.somni/config.json'), '{"persona":"director"}')
+    expect(resolveSettings(repo, { persona: 'owner' }).persona).toBe('director')
+  })
 })
 
 describe('backlog ordering', () => {
@@ -319,6 +328,20 @@ describe('backlog ordering', () => {
     expect(loadBacklog(repo)).toEqual([b.id, a.id])
     deleteItem(repo, b.id)
     expect(loadBacklog(repo)).toEqual([a.id])
+  })
+})
+
+describe('item persona', () => {
+  it('round-trips through save and update', () => {
+    const item = saveItem(repo, { kind: 'idea', status: 'grooming', name: 'x', persona: 'owner' })
+    expect(loadItems(repo).find((i) => i.id === item.id)?.persona).toBe('owner')
+    updateItem(repo, item.id, { persona: 'director' })
+    expect(loadItems(repo).find((i) => i.id === item.id)?.persona).toBe('director')
+  })
+
+  it('loads with persona undefined when unset', () => {
+    const item = saveItem(repo, { kind: 'idea', status: 'backlog', name: 'y' })
+    expect(loadItems(repo).find((i) => i.id === item.id)?.persona).toBeUndefined()
   })
 })
 

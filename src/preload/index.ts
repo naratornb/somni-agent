@@ -9,6 +9,7 @@ import type { SkillsStatus } from '../main/skills'
 import type {
   Item,
   ItemStatus,
+  Persona,
   RepoData,
   ResolvedSettings,
   Role,
@@ -38,6 +39,7 @@ export type {
   ItemKind,
   ItemStatus,
   Methodology,
+  Persona,
   ProvidersSettings,
   RepoData,
   ReportStyle,
@@ -157,7 +159,8 @@ const somni = {
     ipcRenderer.invoke('item:setStatus', repo, id, status),
   // Opens a from-scratch Groom: main creates the Item first (M25.1) and the
   // conversation is keyed on its real id.
-  startGroom: (repo: string): Promise<Item> => ipcRenderer.invoke('groom:start', repo),
+  startGroom: (repo: string, persona?: Persona): Promise<Item> =>
+    ipcRenderer.invoke('groom:start', repo, persona),
   // Archived session → plain active conversation again (M25.3). The same clear
   // backs dismissing a needs-review Proposal (M25.5).
   reopenSession: (repo: string, id: string): Promise<Item> =>
@@ -171,12 +174,18 @@ const somni = {
   resumeSession: (repo: string, id: string): Promise<IpcResult> =>
     ipcRenderer.invoke('session:resume', repo, id),
   // `partial` is the reply streamed so far when `busy` — a Groom re-entered
-  // mid-Turn renders it under the streaming cursor (M25.2).
+  // mid-Turn renders it under the streaming cursor (M25.2). `proposal` is the
+  // last assistant reply's, parsed by main (M27 fix) — a reopened needs-review
+  // session gets no live 'done' event to carry it, so the view seeds from this.
   loadChat: (
     repo: string,
     slug: string
-  ): Promise<{ messages: ChatMessage[]; busy: boolean; partial: string }> =>
-    ipcRenderer.invoke('chat:load', repo, slug),
+  ): Promise<{
+    messages: ChatMessage[]
+    busy: boolean
+    partial: string
+    proposal: ChatProposal | null
+  }> => ipcRenderer.invoke('chat:load', repo, slug),
   newChat: (repo: string, slug: string): Promise<void> =>
     ipcRenderer.invoke('chat:new', repo, slug),
   sendChat: (repo: string, slug: string, text: string): Promise<{ ok: boolean; error?: string }> =>
@@ -187,7 +196,7 @@ const somni = {
     repo: string,
     key: string,
     proposal: ChatProposal
-  ): Promise<{ ok: true; item: Item } | { ok: false; error: string }> =>
+  ): Promise<{ ok: true; item: Item; children: Item[] } | { ok: false; error: string }> =>
     ipcRenderer.invoke('proposal:apply', repo, key, proposal),
   onChatEvent: (cb: (ev: ChatEvent) => void): (() => void) =>
     on('chat:event', (p) => cb(p as ChatEvent)),

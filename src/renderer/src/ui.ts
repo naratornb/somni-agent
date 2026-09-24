@@ -1,7 +1,7 @@
 // Shared UI atoms — M10-ui.md §0. Class strings, not components: the design
 // system is Tailwind utilities, and a wrapper component per button would hide
 // the exact strings the mocks are the source of truth for.
-import type { GroomState, Item, RunnerName } from '../../preload/index'
+import type { ChatProposal, GroomState, Item, Persona, RunnerName } from '../../preload/index'
 
 const DISABLED = 'disabled:opacity-40 disabled:pointer-events-none'
 
@@ -75,6 +75,79 @@ export const ERROR_BANNER =
 /** Voice transcripts append to the end — macOS dictation covers cursor insertion. */
 export const appendText = (current: string, text: string): string =>
   current.trim() ? `${current.trimEnd()} ${text}` : text
+
+// ── Persona (M27) ─────────────────────────────────────────────────────────────
+// Persona is deliberately absent from SETTINGS_DEFAULTS (main/store.ts) — the
+// renderer applies this same director fallback everywhere it resolves one for
+// display or behavior, never consulting settings for it directly.
+export const togglePersona = (p: Persona): Persona => (p === 'owner' ? 'director' : 'owner')
+
+/**
+ * The needs-review "Approve & run" queue (§7): the applied root once it is
+ * Ready, plus every child the proposal left unblocked — the same Ready +
+ * no-blockers gate the pipeline itself enforces, so nothing queued here would
+ * be refused anyway.
+ */
+export const approveRunIds = (root: Item, children: Item[]): string[] => [
+  ...(root.status === 'ready' ? [root.id] : []),
+  ...children.filter((c) => (c.blockedBy?.length ?? 0) === 0).map((c) => c.id)
+]
+
+/**
+ * The `## Summary` section of a proposal's spec, or null when it has none
+ * (M27 §6): text between the heading and the next `##`, trimmed.
+ */
+export const briefSummary = (spec: string): string | null => {
+  const m = spec.match(/^## Summary\s*\n([\s\S]*?)(?=\n## |$)/m)
+  return m ? m[1].trim() || null : null
+}
+
+// Mirrors chat.ts's NEW_GROOM_NAME — not re-exported to the renderer (M26's
+// "mirror small constants locally" precedent, SettingsView.tsx).
+const NEW_GROOM_NAME = 'New groom'
+
+/**
+ * Owner mount-handoff (M27 §5): a fresh owner groom that already carries
+ * content (an idea groomed elsewhere, or a persona flip onto an existing
+ * spec) drafts itself in the background the moment it's opened — no need to
+ * ask the user to say "go". A truly empty owner groom does nothing here;
+ * typing still works the normal way, and chat.ts's birth routing takes over
+ * on that first send.
+ */
+export const shouldAutoHandoff = (
+  persona: Persona,
+  messageCount: number,
+  busy: boolean,
+  state: GroomState | null,
+  itemName: string,
+  spec: string
+): boolean => {
+  if (persona !== 'owner' || busy || state != null || messageCount !== 0) return false
+  return itemName !== NEW_GROOM_NAME || spec.trim() !== ''
+}
+
+/**
+ * Approve & run's gate (M27 §7 fix): whether a proposal is a *completed
+ * background brief*, not a live interactive turn's — chat.ts parks groomState
+ * 'needs-review' for either, so the groomState alone can't tell them apart.
+ * A reopened session with no live event yet this mount (the session was
+ * already parked when the view loaded) is a completed brief regardless of how
+ * the proposal was produced — the user left and came back.
+ */
+export const alreadyParkedForReview = (groomStateAtMount?: GroomState): boolean =>
+  groomStateAtMount === 'needs-review'
+
+/**
+ * Reopened-brief mount seed (M27 §7 round-3 fix): a fence sitting in the
+ * transcript is not enough on its own — Dismiss clears groomState
+ * (session:reopen) while leaving that fence text right where it was, so a
+ * dismissed proposal must never resurrect just because it's still there. Only
+ * seed when the session is STILL parked needs-review at mount.
+ */
+export const shouldSeedProposal = (
+  proposal: ChatProposal | null,
+  groomStateAtMount?: GroomState
+): boolean => proposal != null && alreadyParkedForReview(groomStateAtMount)
 
 // ── Pure renderer helpers (M15) ──────────────────────────────────────────────
 // Not atoms, but they live here for the same reason `appendText` does: the

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { FIX_PROMPT, groomPreamble, REVIEW_PROMPT, subtaskPrompt } from './prompts'
+import {
+  FIX_PROMPT,
+  groomPreamble,
+  REVIEW_PROMPT,
+  subtaskPrompt,
+  WORK_UNIT_PROMPT
+} from './prompts'
 
 describe('subtaskPrompt', () => {
   it('keeps the role preamble optional and the order stable', () => {
@@ -28,5 +34,22 @@ describe('methodology variants', () => {
       expect(p).toContain('somni-groomed')
       expect(p).toContain('ZERO-BASED INDEX')
     }
+  })
+})
+
+describe('interview discipline and work unit', () => {
+  it('groomPreamble caps the interview at three questions', () => {
+    const p = groomPreamble([])
+    expect(p).toContain('at most THREE questions')
+    expect(p).toContain('materially change')
+    // the relentless quality bar stays
+    expect(p).toContain('somni-question')
+  })
+
+  it('WORK_UNIT_PROMPT demands a Summary section above Assumptions', () => {
+    expect(WORK_UNIT_PROMPT).toContain('## Summary')
+    expect(WORK_UNIT_PROMPT.indexOf('## Summary')).toBeLessThan(
+      WORK_UNIT_PROMPT.indexOf('## Assumptions')
+    )
   })
 })

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { groomPreamble } from './prompts'
+import { groomPreamble, WORK_UNIT_PROMPT } from './prompts'
 import {
   applyProposal,
   readOnlyRunner,
@@ -13,13 +13,15 @@ import {
   parseProposal,
   parseQuestion,
   PROPOSE_NOW,
+  questionRounds,
+  resetChats,
   sendChat,
   setNotifier,
   startGroom,
   turnArgs,
   workUnitTurn
 } from './chat'
-import { handoff, queuedIds, resetSessions } from './sessions'
+import { handoff, interruptSessions, queuedIds, resetSessions, WORK_UNIT_CAP } from './sessions'
 import type { ChatEvent } from './chat'
 import { existsSync, readdirSync } from 'fs'
 import {
@@ -397,6 +399,9 @@ describe('applyProposal', () => {
     expect(children[0].blockedBy).toBeUndefined()
     expect(children[1].blockedBy).toEqual([children[0].id])
     expect(children.every((c) => c.tasks.length === 1)).toBe(true)
+    // the returned `children` field mirrors the same items, in creation order
+    expect(res.ok && res.children.map((c) => c.id)).toEqual(children.map((c) => c.id))
+    expect(res.ok && res.children.map((c) => c.name)).toEqual(['Index', 'Query'])
   })
 
   it('writes new roles only — an existing slug always wins', () => {
@@ -455,6 +460,10 @@ if (process.env.FAKE_FAIL) {
 }
 process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: process.env.FAKE_SESSION }) + '\\n')
 process.stdout.write(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: process.env.FAKE_TEXT }] } }) + '\\n')
+if (process.env.FAKE_FAIL_AFTER_TEXT) {
+  process.stderr.write('claude: rate limited\\n')
+  process.exit(1)
+}
 process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false }) + '\\n')
 `
 
@@ -494,10 +503,16 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     fakeEnv.push('ARGS_LOG')
     fake({ FAKE_SESSION: 'sess-abc', FAKE_TEXT: 'hello there' })
     pending.length = 0
+    resetSessions() // queue/active state is module-level (sessions.ts) — never leak across tests
   })
 
   afterEach(async () => {
     killChats()
+    // An auto-handoff (M27) can leave an untracked background Turn running —
+    // not in `pending` — whose own abort keeps winding down after this test
+    // ends. Drop it now: ids restart at SOM-1 per fresh repo, so a lingering
+    // in-flight entry would silently refuse the very next test's same slug.
+    resetChats()
     await Promise.allSettled(pending)
     process.env.PATH = savedPath
     for (const k of fakeEnv) delete process.env[k]
@@ -713,7 +728,8 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     expect(midTurn).toEqual({
       messages: [expect.objectContaining({ role: 'user', text: 'hi' })],
       busy: true,
-      partial: 'partial words'
+      partial: 'partial words',
+      proposal: null // no assistant reply landed yet
     })
     const after = loadChat(repo, slug)
     expect(after.busy).toBe(false)
@@ -755,7 +771,15 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
   })
 
   it('auto-titles the item after the first exchange and stops overwriting after', async () => {
-    fake({ FAKE_TEXT: 'Faster search indexing' })
+    // A trailing question fence (M27): autoTitle only ever reads the reply's
+    // first line, so the title extraction is unaffected — but it keeps this
+    // reply from tripping the new auto-handoff, which would otherwise race
+    // the second `send` below for the same in-flight slot.
+    fake({
+      FAKE_TEXT:
+        'Faster search indexing\n' +
+        qBlock('{"question":"More?","options":["yes","no"],"recommended":"no"}')
+    })
     const item = startGroom(repo)
     const events = await sendAwaitingTitle(item.id, 'search is slow')
     expect(events.at(-1)).toEqual({ slug: item.id, kind: 'title', name: 'Faster search indexing' })
@@ -805,12 +829,16 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
   })
 
   it('two parallel from-scratch grooms keep separate items and transcripts', async () => {
+    // A question fence (M27): a fenceless reply would auto-hand-off each groom
+    // in the background, racing this test's own single-exchange assertion.
+    const reply = qBlock('{"question":"Q","options":["a"],"recommended":"a"}')
+    fake({ FAKE_TEXT: reply })
     const a = startGroom(repo)
     const b = startGroom(repo)
     expect(a.id).not.toBe(b.id)
     await Promise.all([send(a.id, 'groom A'), send(b.id, 'groom B')])
-    expect(loadChat(repo, a.id).messages.map((m) => m.text)).toEqual(['groom A', 'hello there'])
-    expect(loadChat(repo, b.id).messages.map((m) => m.text)).toEqual(['groom B', 'hello there'])
+    expect(loadChat(repo, a.id).messages.map((m) => m.text)).toEqual(['groom A', reply])
+    expect(loadChat(repo, b.id).messages.map((m) => m.text)).toEqual(['groom B', reply])
     expect(loadItems(repo)).toHaveLength(2)
   })
 
@@ -822,13 +850,17 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     await send(item.id, 'groom it')
     expect(loadItems(repo)[0].groomState).toBe('needs-review')
     expect(readFileSync(itemFile(repo, item.id), 'utf8')).toContain('groomState: needs-review')
-    fake({ FAKE_TEXT: 'plain reply' })
+    // A question fence (M27): a fenceless plain reply would auto-hand-off,
+    // stamping groomState back to 'working' right under this assertion.
+    fake({ FAKE_TEXT: qBlock('{"question":"Q","options":["a"],"recommended":"a"}') })
     await send(item.id, 'actually, one more thing')
     expect(loadItems(repo)[0].groomState).toBeUndefined()
   })
 
   it('leaves a session stateless when the turn carries no proposal', async () => {
     const item = startGroom(repo)
+    // A question fence (M27) — see the note above.
+    fake({ FAKE_TEXT: qBlock('{"question":"Q","options":["a"],"recommended":"a"}') })
     await send(item.id, 'hi')
     expect(loadItems(repo)[0].groomState).toBeUndefined()
   })
@@ -836,7 +868,9 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
   // Background work unit (M25.5): one Turn on the same session, resumed, with
   // the assume-and-continue contract on top of the transcript.
   it('runs a work unit with --resume and the assumptions contract, parking needs-review', async () => {
-    fake({ FAKE_TEXT: 'first reply' })
+    // A question fence (M27): a fenceless reply would auto-hand-off, racing
+    // this test's own explicit workUnitTurn call for the same in-flight slot.
+    fake({ FAKE_TEXT: qBlock('{"question":"Q","options":["a"],"recommended":"a"}') })
     // A named item: the placeholder would fire an auto-title Turn into the
     // argv log and race this assertion.
     const item = saveItem(repo, { name: 'Search is slow', kind: 'idea' })
@@ -890,7 +924,9 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
   // Resume (M25.6): an interrupted session re-enters the work-unit path and the
   // CLI conversation continues — same session id on --resume, transcript intact.
   it('resumes an interrupted session on the same CLI session id', async () => {
-    fake({ FAKE_TEXT: 'first reply' })
+    // A question fence (M27): a fenceless reply would auto-hand-off, racing
+    // this test's own explicit handoff() call for the same in-flight slot.
+    fake({ FAKE_TEXT: qBlock('{"question":"Q","options":["a"],"recommended":"a"}') })
     const item = saveItem(repo, { name: 'Search is slow', kind: 'idea' })
     await send(item.id, 'groom it')
     updateItem(repo, item.id, { groomState: 'interrupted' }) // what quit left behind
@@ -914,6 +950,10 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
   // work unit arriving mid-conversation must not spawn a second, interleaving
   // Turn on the same transcript.
   it('never runs two turns at once for one session', async () => {
+    // A question fence (M27): a fenceless reply would auto-hand-off right
+    // after `p` settles, adding an uncounted call before the length assertion.
+    const reply = qBlock('{"question":"Q","options":["a"],"recommended":"a"}')
+    fake({ FAKE_TEXT: reply })
     const item = saveItem(repo, { name: 'Search is slow', kind: 'idea' })
     const before = callsLogged().length
     const p = send(item.id, 'hi')
@@ -921,7 +961,7 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     expect(sendChat(repo, item.id, 'again', {}, ['dev'], () => {}).ok).toBe(false)
     await p
     expect(callsLogged()).toHaveLength(before + 1)
-    expect(loadChat(repo, item.id).messages.map((m) => m.text)).toEqual(['hi', 'hello there'])
+    expect(loadChat(repo, item.id).messages.map((m) => m.text)).toEqual(['hi', reply])
   })
 
   // Review fix: typing into a queued session reclaims it — the waiting job is
@@ -934,6 +974,10 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
       )
     expect(queuedIds()).toEqual([ids[3]])
 
+    // A question fence (M27): a fenceless reply would auto-hand-off again
+    // right behind the reclaim — the cap is still full from A/B/C, so it
+    // would just re-queue the very session this test reclaims.
+    fake({ FAKE_TEXT: qBlock('{"question":"Q","options":["a"],"recommended":"a"}') })
     await send(ids[3], 'actually, let me finish this myself')
     expect(queuedIds()).toEqual([])
     expect(loadItems(repo).find((i) => i.id === ids[3])!.groomState).toBeUndefined()
@@ -963,6 +1007,9 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
   })
 
   it("refuses a handoff while that session's own chat turn is in flight", async () => {
+    // A question fence (M27): a fenceless reply would auto-hand-off on its
+    // own right after `p` settles, racing this test's own explicit handoff().
+    fake({ FAKE_TEXT: qBlock('{"question":"Q","options":["a"],"recommended":"a"}') })
     const item = startGroom(repo)
     const p = send(item.id, 'thinking out loud')
     expect(handoff(repo, item.id, { run: () => Promise.resolve(), emit: () => {} })).toEqual({
@@ -979,6 +1026,267 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     const item = startGroom(repo)
     expect(loadItems(repo)).toEqual([expect.objectContaining({ id: item.id, spec: '' })])
     expect(loadBacklog(repo)).toEqual([])
+  })
+
+  // ---- M27: persona at birth, cap routing, auto-handoff, children -------
+
+  it('startGroom(repo, "owner") stamps persona on the created item', () => {
+    const item = startGroom(repo, 'owner')
+    expect(item.persona).toBe('owner')
+    expect(loadItems(repo)[0].persona).toBe('owner')
+  })
+
+  it('owner persona + empty transcript routes the first message into a work unit', async () => {
+    const item = startGroom(repo, 'owner')
+    const events: ChatEvent[] = []
+    const p = new Promise<void>((resolve) => {
+      const res = sendChat(repo, item.id, 'build me a thing', {}, ['dev'], (ev) => {
+        events.push(ev)
+        if (ev.kind === 'done' || ev.kind === 'error') resolve()
+      })
+      expect(res.ok).toBe(true)
+    })
+    pending.push(p)
+    await p
+
+    const [call] = callsLogged()
+    expect(call[1]).toContain('## Summary') // WORK_UNIT_PROMPT's spec requirement
+    expect(call[1]).toContain('build me a thing') // the seed rides above the contract
+    expect(events).toContainEqual({ slug: item.id, kind: 'state', state: 'working' })
+    expect(loadChat(repo, item.id).messages[0]).toMatchObject({
+      role: 'user',
+      text: 'build me a thing'
+    })
+  })
+
+  it('director persona + empty transcript runs interactively, not a work unit', async () => {
+    const item = startGroom(repo, 'director')
+    fake({ FAKE_TEXT: qBlock('{"question":"Which?","options":["a","b"],"recommended":"a"}') })
+    const events = await send(item.id, 'build me a thing')
+    const [call] = callsLogged()
+    expect(call[1]).toContain('Interview discipline') // the interactive groom preamble
+    expect(call[1]).not.toContain(WORK_UNIT_PROMPT)
+    expect(events.some((e) => e.kind === 'state')).toBe(false) // no routing happened
+  })
+
+  describe('questionRounds', () => {
+    it('counts only assistant messages whose text parses to a valid question fence', () => {
+      mkdirSync(join(repo, '.somni', 'chats'), { recursive: true })
+      const lines = [
+        { role: 'user', text: 'hi', ts: 't' },
+        { role: 'assistant', text: qBlock('{"question":"Q1","options":["a"],"recommended":"a"}') },
+        { role: 'user', text: 'a', ts: 't' },
+        { role: 'assistant', text: 'plain prose, no fence' },
+        { role: 'user', text: 'go on', ts: 't' },
+        { role: 'assistant', text: qBlock('{not json') } // malformed — does not count
+      ]
+      writeFileSync(
+        join(repo, '.somni', 'chats', 'Q-1.jsonl'),
+        lines.map((l) => JSON.stringify(l)).join('\n') + '\n'
+      )
+      expect(questionRounds(repo, 'Q-1')).toBe(1)
+    })
+  })
+
+  it('routes the message into a work unit once three questions have been answered', async () => {
+    const item = saveItem(repo, { name: 'Thing', kind: 'idea' })
+    for (let i = 0; i < 3; i++) {
+      fake({
+        FAKE_TEXT: qBlock(`{"question":"Q${i}","options":["a","b"],"recommended":"a"}`)
+      })
+      await send(item.id, `answer ${i}`)
+    }
+    expect(questionRounds(repo, item.id)).toBe(3)
+
+    fake({ FAKE_TEXT: 'a plain background draft reply' })
+    const events: ChatEvent[] = []
+    const p = new Promise<void>((resolve) => {
+      const res = sendChat(repo, item.id, 'my answer to Q3', {}, ['dev'], (ev) => {
+        events.push(ev)
+        if (ev.kind === 'done' || ev.kind === 'error') resolve()
+      })
+      expect(res.ok).toBe(true)
+    })
+    pending.push(p)
+    await p
+
+    const calls = callsLogged()
+    expect(calls[3][1]).toContain('my answer to Q3') // the routed text rides in the prompt
+    expect(calls[3][1]).toContain('## Summary')
+    const messages = loadChat(repo, item.id).messages
+    expect(messages.at(-2)).toMatchObject({ role: 'user', text: 'my answer to Q3' })
+    expect(events).toContainEqual({ slug: item.id, kind: 'state', state: 'working' })
+  })
+
+  it('a fenceless interactive reply auto-hands-off the session in the background', async () => {
+    const item = saveItem(repo, { name: 'Thing', kind: 'idea' })
+    fake({ FAKE_TEXT: 'just some plain chat, no fences at all' })
+    const events: ChatEvent[] = []
+    const p = new Promise<void>((resolve) => {
+      sendChat(repo, item.id, 'hi', {}, ['dev'], (ev) => {
+        events.push(ev)
+        if (events.filter((e) => e.kind === 'done').length === 2) resolve()
+      })
+    })
+    pending.push(p)
+    await p
+
+    // the session actually transitioned (started, or queued behind a full cap)
+    // rather than being refused for a false "still busy" reading of chatBusy
+    expect(
+      events.some((e) => e.kind === 'state' && (e.state === 'working' || e.state === 'queued'))
+    ).toBe(true)
+    expect(callsLogged()).toHaveLength(2) // the interactive turn + the auto-handed-off work unit
+    const messages = loadChat(repo, item.id).messages
+    expect(messages.filter((m) => m.role === 'user')).toHaveLength(2)
+    expect(messages.at(-1)).toMatchObject({ role: 'assistant' })
+  })
+
+  // Fix (M27 final review): a rate-limited/killed turn can still stream
+  // fenceless prose before dying — the old code only checked `reply.trim()`,
+  // ignoring the exit code, so this used to hand off into a background work
+  // unit that (on the same cooling provider) would fail again and park a
+  // confusing needs-review over what was really just a dropped turn.
+  it('a failed exit with a fenceless partial reply does not auto-hand-off', async () => {
+    const item = saveItem(repo, { name: 'Thing', kind: 'idea' })
+    fake({ FAKE_TEXT: 'just some plain chat, no fences at all', FAKE_FAIL_AFTER_TEXT: '1' })
+    const events: ChatEvent[] = []
+    const p = new Promise<void>((resolve) => {
+      sendChat(repo, item.id, 'hi', {}, ['dev'], (ev) => {
+        events.push(ev)
+        if (ev.kind === 'done' || ev.kind === 'error') resolve()
+      })
+    })
+    pending.push(p)
+    await p
+    await new Promise((r) => setTimeout(r, 50)) // prove nothing fires in the background
+    expect(callsLogged()).toHaveLength(1) // the failed turn only — no auto-handed-off work unit
+    expect(events.some((e) => e.kind === 'state')).toBe(false) // never parked needs-review
+  })
+
+  it('an interactive reply with a proposal fence does not auto-hand-off', async () => {
+    const item = saveItem(repo, { name: 'Thing', kind: 'idea' })
+    fake({ FAKE_TEXT: '```somni-groomed\n' + story() + '\n```' })
+    await send(item.id, 'propose something')
+    await new Promise((r) => setTimeout(r, 50)) // prove nothing fires in the background
+    expect(callsLogged()).toHaveLength(1)
+  })
+
+  // Fix (M27 §7 round 2): a reopened needs-review session gets no live 'done'
+  // event to carry its proposal, so GroomView needs it replayed from the
+  // transcript on load — parseProposal lives here, so main parses it once and
+  // hands the renderer the result, rather than re-implementing fence parsing.
+  it("loadChat replays the last assistant reply's proposal, or null when it has none", async () => {
+    const item = saveItem(repo, { name: 'Thing', kind: 'idea' })
+    fake({ FAKE_TEXT: block(story({ name: 'Replayed' })) })
+    await send(item.id, 'propose something')
+    expect(loadChat(repo, item.id).proposal).toEqual(
+      parseProposal(block(story({ name: 'Replayed' })))
+    )
+
+    // A later plain reply becomes the new last assistant message — the stale
+    // proposal from the earlier turn must not leak forward.
+    fake({ FAKE_TEXT: 'never mind, forget it' })
+    await send(item.id, 'actually never mind')
+    expect(loadChat(repo, item.id).proposal).toBeNull()
+  })
+
+  it('a pre-M27 item with no persona picks up settings.persona at birth; absent settings default to director', async () => {
+    const withSettings = saveItem(repo, { name: 'Old item', kind: 'idea' }) // no persona field
+    const events1: ChatEvent[] = []
+    const p1 = new Promise<void>((resolve) => {
+      sendChat(repo, withSettings.id, 'go', { persona: 'owner' }, ['dev'], (ev) => {
+        events1.push(ev)
+        if (ev.kind === 'done' || ev.kind === 'error') resolve()
+      })
+    })
+    pending.push(p1)
+    await p1
+    expect(events1).toContainEqual({ slug: withSettings.id, kind: 'state', state: 'working' })
+
+    const noSettings = saveItem(repo, { name: 'Another old item', kind: 'idea' })
+    fake({ FAKE_TEXT: qBlock('{"question":"Q","options":["a"],"recommended":"a"}') }) // avoid an
+    // unrelated auto-handoff muddying this assertion — this test is about birth routing only
+    const events2 = await send(noSettings.id, 'go')
+    expect(events2.some((e) => e.kind === 'state')).toBe(false) // director: no routing at all
+  })
+
+  // ---- M27 fix: routed text survives the queue and a quit ---------------
+
+  it('a routed send that queues at the cap has its text durably on disk while still queued', async () => {
+    const fillers = ['A', 'B', 'C'].map((n) => saveItem(repo, { name: n, kind: 'idea' }).id)
+    for (const id of fillers)
+      expect(handoff(repo, id, { emit: () => {}, run: () => new Promise<void>(() => {}) }).ok).toBe(
+        true
+      )
+    expect(WORK_UNIT_CAP).toBe(fillers.length) // the cap this test relies on being full
+
+    const item = startGroom(repo, 'owner')
+    const res = sendChat(repo, item.id, 'seed text', {}, ['dev'], () => {})
+    expect(res.ok).toBe(true)
+    expect(queuedIds()).toEqual([item.id]) // cap full: queued, not started
+    expect(loadChat(repo, item.id).messages).toEqual([
+      expect.objectContaining({ role: 'user', text: 'seed text' })
+    ])
+  })
+
+  it('a queued routed job survives interruptSessions() — resume carries the pending text', async () => {
+    const fillers = ['A', 'B', 'C'].map((n) => saveItem(repo, { name: n, kind: 'idea' }).id)
+    for (const id of fillers)
+      expect(handoff(repo, id, { emit: () => {}, run: () => new Promise<void>(() => {}) }).ok).toBe(
+        true
+      )
+
+    const item = startGroom(repo, 'owner')
+    expect(sendChat(repo, item.id, 'seed text', {}, ['dev'], () => {}).ok).toBe(true)
+    expect(queuedIds()).toEqual([item.id])
+
+    interruptSessions() // quit: drops every job closure, including the routed text
+    expect(queuedIds()).toEqual([])
+
+    // Resume, exactly like the real session:resume IPC handler: no text passed,
+    // just workUnitTurn's bare defaults — the pending text must come off disk.
+    let running!: Promise<void>
+    const res = handoff(repo, item.id, {
+      emit: () => {},
+      run: () => (running = workUnitTurn(repo, item.id, {}, ['dev'], () => {}))
+    })
+    expect(res.ok).toBe(true)
+    pending.push(running)
+    await running
+
+    const [call] = callsLogged()
+    expect(call[1]).toContain('seed text')
+  })
+
+  it('a routed job that runs normally after dequeuing logs its text exactly once', async () => {
+    let releaseFiller!: () => void
+    const fillerRuns = [
+      () => new Promise<void>((resolve) => (releaseFiller = resolve)),
+      () => new Promise<void>(() => {}),
+      () => new Promise<void>(() => {})
+    ]
+    const fillers = ['A', 'B', 'C'].map((n) => saveItem(repo, { name: n, kind: 'idea' }).id)
+    fillers.forEach((id, i) =>
+      expect(handoff(repo, id, { emit: () => {}, run: fillerRuns[i] }).ok).toBe(true)
+    )
+
+    fake({ FAKE_TEXT: qBlock('{"question":"Q","options":["a"],"recommended":"a"}') })
+    const item = startGroom(repo, 'owner')
+    const done = new Promise<void>((resolve) => {
+      const res = sendChat(repo, item.id, 'seed text', {}, ['dev'], (ev) => {
+        if (ev.kind === 'done' || ev.kind === 'error') resolve()
+      })
+      expect(res.ok).toBe(true)
+    })
+    pending.push(done)
+    expect(queuedIds()).toEqual([item.id]) // cap full: queued
+
+    releaseFiller() // frees a slot — startNext() dequeues and runs the routed job for real
+    await done
+
+    const copies = loadChat(repo, item.id).messages.filter((m) => m.text === 'seed text')
+    expect(copies).toHaveLength(1)
   })
 })
 

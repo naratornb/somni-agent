@@ -71,7 +71,12 @@ export function ProposalPreview({
   applyLabel = 'Apply',
   disabled,
   onApply,
-  onDismiss
+  onDismiss,
+  // Needs-review only (M27 §6/§7): the brief's `## Summary` section, emphasized
+  // above the rest, and a secondary "Apply" beside the (relabeled) primary.
+  summary,
+  secondaryLabel,
+  onSecondary
 }: {
   proposal: ChatProposal
   roles: Role[]
@@ -79,6 +84,9 @@ export function ProposalPreview({
   disabled: boolean
   onApply: () => void
   onDismiss: () => void
+  summary?: string | null
+  secondaryLabel?: string
+  onSecondary?: () => void
 }): React.JSX.Element {
   const existing = new Set(roles.map((r) => r.slug))
   const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
@@ -91,6 +99,11 @@ export function ProposalPreview({
           : plural(proposal.tasks.length, 'subtask')}
         {proposal.roles.length ? `, ${plural(proposal.roles.length, 'new role')}` : ''}
       </span>
+      {summary && (
+        <p className="rounded-lg border border-l-2 border-border-subtle border-l-primary bg-primary-container/10 p-3 text-sm font-medium text-on-surface">
+          {summary}
+        </p>
+      )}
       {proposal.spec && (
         // Left-accent border marks the read-only source of truth (DESIGN.md).
         <details className="overflow-hidden rounded-lg border border-l-2 border-border-subtle border-l-primary-container bg-surface">
@@ -156,6 +169,11 @@ export function ProposalPreview({
         <button className={BTN_PRIMARY} onClick={onApply} disabled={disabled}>
           {applyLabel}
         </button>
+        {secondaryLabel && onSecondary && (
+          <button className={BTN_GHOST} onClick={onSecondary} disabled={disabled}>
+            {secondaryLabel}
+          </button>
+        )}
         <button className={BTN_GHOST} onClick={onDismiss}>
           Dismiss
         </button>
