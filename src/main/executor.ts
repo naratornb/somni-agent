@@ -118,16 +118,6 @@ export type DrainState = { mode: DrainMode | null; status: PipelineStatus; resum
 // (subtask or aux Review/Fix) and pre-empts any Turn the run has not started yet.
 export type Ctrl = { cancelled: boolean; ac: AbortController }
 
-// Pre-M26 this paused the whole pipeline on any rate limit. Rate limits are now
-// per-provider (resolveTurnRunner below); nothing calls pause() any more, so
-// wait/ok/abort are kept as inert plumbing rather than threading a Gate-shaped
-// hole through drainLoop/cancelPipeline for no behavioral gain.
-type Gate = {
-  wait: () => Promise<void>
-  ok: () => void
-  abort: () => void
-}
-
 export type RunOpts = {
   now?: () => Date
   timeoutMs?: number
@@ -135,18 +125,12 @@ export type RunOpts = {
   settings?: Settings // resolved repo+global settings (profile, report style)
   pollMs?: number // drain idle poll interval (default 2000)
   ctrl?: Ctrl // internal: set by the pipeline
-  gate?: Gate // internal: set by the pipeline
-}
-
-function makeGate(): Gate {
-  return { wait: () => Promise.resolve(), ok: () => {}, abort: () => {} }
 }
 
 type Pipeline = {
   cancelled: boolean
   stopping: boolean
   ctrls: Set<Ctrl>
-  gate: Gate
   mode: DrainMode
   status: PipelineStatus
   resumeAt?: string
@@ -203,7 +187,6 @@ export function cancelPipeline(): void {
   if (!pipeline) return
   pipeline.cancelled = true
   pipeline.stopping = true
-  pipeline.gate.abort()
   for (const c of pipeline.ctrls) {
     c.cancelled = true
     c.ac.abort()
@@ -300,7 +283,7 @@ function isGreen(
   return check ? check.ok && verdict !== 'red' : verdict === 'green'
 }
 
-type Job = { id: string; slug: string; run: (ctrl: Ctrl, gate: Gate) => Promise<RunState> }
+type Job = { id: string; slug: string; run: (ctrl: Ctrl) => Promise<RunState> }
 
 // The drain (M9 §3): one supervisor loop. It refills up to maxConcurrency from
 // `next()`, then waits for either a job to finish or the poll interval to
@@ -323,12 +306,10 @@ async function drainLoop(
     mine.resumeAt = info?.resumeAt
     events.onPipeline?.(status, { ...info, mode: mine.mode })
   }
-  const gate = opts.gate ?? makeGate()
   const mine: Pipeline = {
     cancelled: false,
     stopping: false,
     ctrls: new Set(),
-    gate,
     mode,
     status: 'Idle'
   }
@@ -347,7 +328,7 @@ async function drainLoop(
     activeSlugs.add(job.slug)
     emit('Running') // only ever on an actual launch
     const p = Promise.resolve()
-      .then(() => job.run(ctrl, gate))
+      .then(() => job.run(ctrl))
       .then((r) => {
         results.push(r)
       })
@@ -409,9 +390,9 @@ export function startDrain(
       return {
         id: it.id,
         slug: it.id,
-        run: async (ctrl, gate) => {
+        run: async (ctrl) => {
           try {
-            return await runStory(repo, it.id, worktreeBase, events, { ...opts, ctrl, gate })
+            return await runStory(repo, it.id, worktreeBase, events, { ...opts, ctrl })
           } catch (err) {
             // A story that cannot even start would otherwise be re-picked on
             // every scan — its status stays `in-progress` on disk.
@@ -496,8 +477,8 @@ export function resumePipeline(
   const queue: Job[] = runIds.map((runId) => ({
     id: runId,
     slug: runSlug(repo, runId),
-    run: (ctrl: Ctrl, gate: Gate) =>
-      execute(repo, mustLoadRun(repo, runId), events, { ...opts, ctrl, gate })
+    run: (ctrl: Ctrl) =>
+      execute(repo, mustLoadRun(repo, runId), events, { ...opts, ctrl })
   }))
   return drainLoop(() => queue.shift(), maxConcurrency, events, opts, 'resume')
 }
@@ -558,7 +539,6 @@ async function execute(
 ): Promise<RunState> {
   const now = opts.now ?? ((): Date => new Date())
   const ctrl = opts.ctrl ?? { cancelled: false, ac: new AbortController() }
-  const gate = opts.gate ?? makeGate()
   const settings = opts.settings ?? {}
   const timeoutMs =
     opts.timeoutMs ?? (settings.timeoutMinutes ? settings.timeoutMinutes * 60_000 : TASK_TIMEOUT_MS)
@@ -856,7 +836,6 @@ async function execute(
       task.attempts ??= 0
       writeState()
 
-      await gate.wait()
       const outcome = await runTurnWithFailover({
         choice: profile.runner ?? 'claude',
         pinnedModel: profile.model,
@@ -885,7 +864,6 @@ async function execute(
       })
 
       if (outcome.ok) {
-        gate.ok()
         task.status = 'Completed'
       } else if (outcome.reason === 'cancelled') {
         task.status = 'Cancelled'
