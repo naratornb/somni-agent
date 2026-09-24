@@ -126,6 +126,17 @@ export const shouldAutoHandoff = (
   return itemName !== NEW_GROOM_NAME || spec.trim() !== ''
 }
 
+/**
+ * Approve & run's gate (M27 §7 fix): whether a proposal is a *completed
+ * background brief*, not a live interactive turn's — chat.ts parks groomState
+ * 'needs-review' for either, so the groomState alone can't tell them apart.
+ * A reopened session with no live event yet this mount (the session was
+ * already parked when the view loaded) is a completed brief regardless of how
+ * the proposal was produced — the user left and came back.
+ */
+export const alreadyParkedForReview = (groomStateAtMount?: GroomState): boolean =>
+  groomStateAtMount === 'needs-review'
+
 // ── Pure renderer helpers (M15) ──────────────────────────────────────────────
 // Not atoms, but they live here for the same reason `appendText` does: the
 // components that use them are Fast-Refresh files, which may export components

@@ -35,6 +35,7 @@ import {
 } from './chatShared'
 import { CaptureModal, CommandPalette, QuickAdd } from './capture'
 import {
+  alreadyParkedForReview,
   approveRunIds,
   briefSummary,
   captureItem,
@@ -1329,11 +1330,59 @@ const storyProposalM27 = {
   roles: []
 }
 
-// §7: needs-review reads "Approve & run" and carries the Summary + a secondary
-// Apply; the inline interview / quick-start auto-run path (no needs-review
-// state) keeps its own label and never shows either. An Epic never promises
-// "& run" or a queueing secondary even inside a needs-review session.
-test('ProposalSection computes the needs-review labeling/summary/secondary; other paths unchanged', () => {
+// §7 fix: chat.ts parks groomState 'needs-review' for ANY parsed proposal —
+// live interactive turn or background work unit alike — so the gate can't be
+// state==='needs-review'. It has to be provenance: fromWorkUnit, which
+// GroomView sets from ev.workUnit on every live 'done' event, seeded at mount
+// from whether the session was already parked (a reopened session, no live
+// event this mount — ui.ts's alreadyParkedForReview). ProposalSection is the
+// real boundary GroomView hands this flag to; these three cases are exactly
+// what its 'done' handler computes for scenarios (a)/(b)/(c) of the fix:
+//   (a) a live done, workUnit false (interactive turn) → fromWorkUnit=false
+//   (b) a live done, workUnit true (background draft) → fromWorkUnit=true
+//   (c) mount with groomState already 'needs-review', no live event yet →
+//       fromWorkUnit seeded true by alreadyParkedForReview
+// The SSR harness can't fire a live onChatEvent after mount (no DOM/act, and
+// no jsdom dependency is available to add) — GroomView's actual handler body
+// (`setFromWorkUnit(!!ev.workUnit)` and the `useState(alreadyParkedForReview(...))`
+// seed) is reviewed by inspection, and alreadyParkedForReview's own unit test
+// below pins down the seed exactly.
+test('ProposalSection: (a) a live interactive-turn proposal keeps Apply/Apply & run', () => {
+  const onApply = (): void => {}
+  const onApproveRun = (): void => {}
+  const onDismiss = (): void => {}
+
+  const inline = ProposalSection({
+    proposal: storyProposalM27,
+    roles,
+    fromWorkUnit: false, // ev.workUnit was falsy on this live 'done'
+    applying: false,
+    applyLabel: 'Apply',
+    onApply,
+    onApproveRun,
+    onDismiss
+  })
+  expect(inline.props.applyLabel).toBe('Apply')
+  expect(inline.props.summary).toBeNull()
+  expect(inline.props.secondaryLabel).toBeUndefined()
+  expect(inline.props.onApply).toBe(onApply) // never routed to approve+run
+
+  // Quick-start autoRun: same fromWorkUnit=false, its own label unchanged.
+  const autoRun = ProposalSection({
+    proposal: storyProposalM27,
+    roles,
+    fromWorkUnit: false,
+    applying: false,
+    applyLabel: 'Apply & run',
+    onApply,
+    onApproveRun,
+    onDismiss
+  })
+  expect(autoRun.props.applyLabel).toBe('Apply & run')
+  expect(autoRun.props.onApply).toBe(onApply)
+})
+
+test('ProposalSection: (b) a live background-work-unit proposal reads Approve & run', () => {
   const onApply = (): void => {}
   const onApproveRun = (): void => {}
   const onDismiss = (): void => {}
@@ -1341,7 +1390,7 @@ test('ProposalSection computes the needs-review labeling/summary/secondary; othe
   const nr = ProposalSection({
     proposal: storyProposalM27,
     roles,
-    state: 'needs-review',
+    fromWorkUnit: true, // ev.workUnit was true on this live 'done'
     applying: false,
     applyLabel: 'Apply',
     onApply,
@@ -1354,25 +1403,11 @@ test('ProposalSection computes the needs-review labeling/summary/secondary; othe
   expect(nr.props.onSecondary).toBe(onApply)
   expect(nr.props.onApply).toBe(onApproveRun) // the primary click queues
 
-  const inline = ProposalSection({
-    proposal: storyProposalM27,
-    roles,
-    state: null,
-    applying: false,
-    applyLabel: 'Apply & run',
-    onApply,
-    onApproveRun,
-    onDismiss
-  })
-  expect(inline.props.applyLabel).toBe('Apply & run') // unchanged label
-  expect(inline.props.summary).toBeNull()
-  expect(inline.props.secondaryLabel).toBeUndefined()
-  expect(inline.props.onApply).toBe(onApply) // never routed to approve+run
-
+  // An Epic never promises "& run" or a queueing secondary, even so.
   const epic = ProposalSection({
     proposal: { ...proposal, kind: 'epic' as const },
     roles,
-    state: 'needs-review',
+    fromWorkUnit: true,
     applying: false,
     applyLabel: 'Apply',
     onApply,
@@ -1381,6 +1416,16 @@ test('ProposalSection computes the needs-review labeling/summary/secondary; othe
   })
   expect(epic.props.applyLabel).toBe('Apply')
   expect(epic.props.secondaryLabel).toBeUndefined()
+})
+
+// (c) a reopened session: groomState was already 'needs-review' when the view
+// loaded, with no live event this mount — a completed brief regardless of how
+// the proposal was produced.
+test('alreadyParkedForReview seeds fromWorkUnit true only when the session was already parked at mount', () => {
+  expect(alreadyParkedForReview('needs-review')).toBe(true)
+  expect(alreadyParkedForReview(undefined)).toBe(false)
+  expect(alreadyParkedForReview('working')).toBe(false)
+  expect(alreadyParkedForReview('done')).toBe(false)
 })
 
 // ProposalPreview's rendering half of the same feature: the summary block

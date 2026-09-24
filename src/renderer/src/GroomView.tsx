@@ -14,6 +14,7 @@ import type {
 } from '../../preload/index'
 import { MicButton, ProposalPreview, QuestionCard, StreamingBubble } from './chatShared'
 import {
+  alreadyParkedForReview,
   appendText,
   briefSummary,
   BTN_GHOST,
@@ -66,7 +67,7 @@ const AI = `max-w-[80%] ${BUBBLE_AI}`
 export function ProposalSection({
   proposal,
   roles,
-  state,
+  fromWorkUnit,
   applying,
   applyLabel,
   onApply,
@@ -75,7 +76,12 @@ export function ProposalSection({
 }: {
   proposal: ChatProposal
   roles: Role[]
-  state: GroomState | null
+  // Approve & run's gate (M27 §7 fix) — true only for a completed background
+  // brief: a work-unit turn's proposal, or a session already parked
+  // needs-review when the view loaded. Never a live interactive turn's
+  // proposal, even though chat.ts parks groomState 'needs-review' for that
+  // too — see ui.ts's alreadyParkedForReview.
+  fromWorkUnit: boolean
   applying: boolean
   applyLabel: string
   onApply: () => void
@@ -84,7 +90,7 @@ export function ProposalSection({
 }): React.JSX.Element {
   // An Epic Apply lands in Backlog and runs nothing — never promise "& run" or
   // a queueing secondary on it (#26 story 8).
-  const needsReview = state === 'needs-review' && proposal.kind !== 'epic'
+  const needsReview = fromWorkUnit && proposal.kind !== 'epic'
   const primary = applying
     ? 'Applying…'
     : proposal.kind === 'epic'
@@ -129,6 +135,11 @@ export function GroomView({
   const [error, setError] = useState<string | null>(null)
   const [question, setQuestion] = useState<ChatQuestion | null>(null)
   const [proposal, setProposal] = useState<ChatProposal | null>(null)
+  // Approve & run's gate (M27 §7 fix): true for a completed background brief
+  // only — set from `ev.workUnit` on every live 'done' event, initialized from
+  // whether the session was already parked needs-review when this view
+  // mounted (a reopened session, no live event yet this mount).
+  const [fromWorkUnit, setFromWorkUnit] = useState(alreadyParkedForReview(groomState))
   const [applying, setApplying] = useState(false)
   const [input, setInput] = useState('')
   const [lastUser, setLastUser] = useState('')
@@ -155,6 +166,9 @@ export function GroomView({
         setMessages((m) => [...m, ev.message])
         // Single slot: only the latest turn's actionable card is shown.
         setProposal(ev.proposal)
+        // Fix (M27 §7): a live turn's own provenance always wins over the
+        // mount-time guess — a proposal from THIS turn is never stale.
+        setFromWorkUnit(!!ev.workUnit)
         setQuestion(ev.proposal ? null : ev.question)
       }
     })
@@ -321,7 +335,7 @@ export function GroomView({
         <ProposalSection
           proposal={proposal}
           roles={roles}
-          state={state}
+          fromWorkUnit={fromWorkUnit}
           applying={applying}
           applyLabel={applyLabel}
           onApply={() => void doApply(false)}
