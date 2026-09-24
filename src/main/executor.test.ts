@@ -63,6 +63,9 @@ import { isAvailable, markAuthFailed, resetProviders } from './providers'
 //     which list entry is next. FAKE_REVIEW_HANG=<file> (gemini's copy only):
 //     touch <file> then hang, so a test can wait for the marker and cancel
 //     mid-turn deterministically.
+//   FAKE_COMMIT  after touching task-ran-here, git add+commit it too — a real
+//     tracked change for a Branch Review's `git diff <base>` to find non-empty
+//     (M28 §2 diff-split coverage).
 const FAKE_CLAUDE = `#!/bin/sh
 n=1
 if [ -n "$FAKE_COUNT" ]; then
@@ -109,6 +112,10 @@ if [ -n "$FAKE_SLEEP" ]; then sleep "$FAKE_SLEEP"; fi
 echo '{"type":"system","subtype":"init","session_id":"s1"}'
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"did work"}]}}'
 touch task-ran-here
+if [ -n "$FAKE_COMMIT" ]; then
+  git add task-ran-here
+  git -c user.email=t@t -c user.name=t commit -q -m fake
+fi
 case "\${FAKE_VERDICT:-green}" in
   red) printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"duration_ms":5,"result":"\`\`\`somni-verdict\\n{\\"verdict\\": \\"red\\", \\"findings\\": \\"no tests\\"}\\n\`\`\`"}';;
   none) printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"duration_ms":5,"result":"Looks fine to me."}';;
@@ -1391,7 +1398,7 @@ describe('branch review (M28)', () => {
     expect(statusOnDisk(docs)).toBe('needs-attention')
   })
 
-  it('a reviewer turn that dies with no reply grades ungraded and still completes', async () => {
+  it('a reviewer turn that dies with no reply grades ungraded, carrying the real TaskRun error', async () => {
     fake({ FAKE_REVIEW: 'fail' })
     const state = await runStory(repo, docs, base, noEvents, {
       settings: { reviewer: { runner: 'gemini' } }
@@ -1399,6 +1406,61 @@ describe('branch review (M28)', () => {
     expect(state.status).toBe('Completed')
     expect(reviewTitles(state)).toEqual(['Review', 'Branch review'])
     expect(state.review?.grade).toBe('ungraded')
+    // The honest reason, not a fixed placeholder: the fake dies with exit 1 and
+    // no result event, so the TaskRun's own recorded error is "exited with code 1".
+    const branchTask = state.tasks.find((t) => t.title === 'Branch review')
+    expect(branchTask?.error).toBeTruthy()
+    expect(state.review?.reasons).toEqual([branchTask?.error])
+  })
+
+  it('a git diff failure grades ungraded with the real error, never failing an otherwise-green run', async () => {
+    const first = await runStory(repo, docs, base, noEvents)
+    expect(first.status).toBe('Completed')
+    // Poison baseSha so `git diff <base>` fails — a review outage (bad ref,
+    // oversized diff) must never hold a finished, green branch hostage (§6).
+    const path = join(repo, '.somni/runs', first.runId, 'run.json')
+    const s = JSON.parse(readFileSync(path, 'utf8')) as RunState
+    s.status = 'Running'
+    s.baseSha = 'not-a-real-sha'
+    s.tasks = s.tasks.filter((t) => !t.aux) // re-run the subtask; drop the prior Review/Branch review
+    s.tasks[0].status = 'Running'
+    s.reviews = []
+    delete s.review
+    writeFileSync(path, JSON.stringify(s, null, 2))
+
+    const [state] = await resumePipeline(repo, [first.runId], 1, noEvents)
+    expect(state.status).toBe('Completed')
+    // branchDiff threw before any turn ran — no Branch review aux task at all.
+    expect(reviewTitles(state)).toEqual(['Review'])
+    expect(state.review?.grade).toBe('ungraded')
+    expect(state.review?.reasons[0]).toContain('branch diff failed')
+  })
+
+  it('the fix round is pinned to the implementer, never the run default or the reviewer', async () => {
+    // The role pins its own runner — different from both settings.runner (the
+    // naive "default profile") and the reviewer, so a wrong pin is visible.
+    saveRole(repo, { slug: '', name: 'Dev', preamble: 'You are dev.', runner: 'claude' })
+    const reviewCount = join(root, 'review-count-pin')
+    fake({ FAKE_REVIEW: 'needs-work,approve', FAKE_REVIEW_COUNT: reviewCount })
+    const state = await runStory(repo, docs, base, noEvents, {
+      settings: { runner: 'gemini', reviewer: { runner: 'codex' } }
+    })
+    expect(state.status).toBe('Completed')
+    const fixTask = state.tasks.find((t) => t.title === 'Address merge review')
+    expect(fixTask?.runner).toBe('claude')
+  })
+
+  it('a real, non-empty diff is split and reaches the reviewer prompt', async () => {
+    const argv = join(root, 'diff-argv.log')
+    fake({ FAKE_COMMIT: '1', FAKE_REVIEW: 'approve', FAKE_ARGV: argv })
+    const state = await runStory(repo, docs, base, noEvents, {
+      settings: { reviewer: { runner: 'gemini' } }
+    })
+    expect(state.status).toBe('Completed')
+    // Proves the split + capDiff path ran on real content, not an empty diff:
+    // the fake's own touched-and-committed file shows up as a real "diff --git"
+    // hunk in the reviewer's prompt.
+    expect(readFileSync(argv, 'utf8')).toContain('diff --git')
   })
 
   it('a single-provider chain reviews with the same provider as the implementer', async () => {

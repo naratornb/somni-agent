@@ -247,9 +247,12 @@ async function branchDiff(
   worktree: string,
   base: string
 ): Promise<{ stat: string; files: { file: string; diff: string }[] }> {
+  // The runCheckCommand precedent: an unbounded diff must not reject on
+  // Node's 1MB default and take the whole run down with it.
+  const opts = { maxBuffer: 10 << 20 }
   const [{ stdout: stat }, { stdout: raw }] = await Promise.all([
-    gitRead('git', ['-C', worktree, 'diff', '--stat', base]),
-    gitRead('git', ['-C', worktree, 'diff', base])
+    gitRead('git', ['-C', worktree, 'diff', '--stat', base], opts),
+    gitRead('git', ['-C', worktree, 'diff', base], opts)
   ])
   const files = raw
     .split(/^diff --git /m)
@@ -707,9 +710,18 @@ async function execute(
     let truncated = false
     let reviewN = 0
 
-    const review = async (): Promise<ReturnType<typeof parseReview> | null> => {
-      const { stat, files } = await branchDiff(state.worktree, state.baseSha ?? 'HEAD')
-      const capped = capDiff(stat, files)
+    // Never returns null: a git failure or a dead turn both grade 'ungraded'
+    // with the real reason folded in — a review outage never holds a green,
+    // finished branch hostage (§6), and never invents a fabricated wording
+    // when the TaskRun already recorded what actually went wrong.
+    const review = async (): Promise<Pick<BranchReview, 'grade' | 'reasons' | 'findings'>> => {
+      let diff: { stat: string; files: { file: string; diff: string }[] }
+      try {
+        diff = await branchDiff(state.worktree, state.baseSha ?? 'HEAD')
+      } catch (err) {
+        return { grade: 'ungraded', reasons: [`branch diff failed: ${message(err)}`], findings: [] }
+      }
+      const capped = capDiff(diff.stat, diff.files)
       truncated ||= capped.truncated
       const text = await auxTask(
         'Branch review',
@@ -717,7 +729,13 @@ async function execute(
         `branch-review-${++reviewN}.log`,
         { runner: reviewer.runner, model: reviewer.model, effort: reviewer.effort, plain: true }
       )
-      return text ? parseReview(text) : null
+      if (text) return parseReview(text)
+      const task = state.tasks[state.tasks.length - 1] // the 'Branch review' TaskRun just pushed
+      return {
+        grade: 'ungraded',
+        reasons: [task?.error ?? 'the branch review turn produced no reply'],
+        findings: []
+      }
     }
 
     const land = (r: BranchReview): boolean => {
@@ -738,22 +756,18 @@ async function execute(
 
     const first = await review()
     if (ctrl.cancelled) return true // §7: cancellation invents no grade
-    if (!first)
-      return land(
-        base({
-          grade: 'ungraded',
-          reasons: ['the branch review turn produced no reply'],
-          findings: []
-        })
-      )
     if (first.grade !== 'needs-work') return land(base(first))
 
     // needs-work: ONE fix round (§5), then a re-review by the same reviewer.
+    // Pinned to the implementer (spec §3, not the run's default profile) —
+    // still the failover machinery (bounded, cancellable, cooldown-waiting),
+    // just never a free cross-provider failover for this one turn.
     events.onLog(state.runId, -1, '[somni] branch review needs-work — one fix round')
     const fixText = await auxTask(
       'Address merge review',
       BRANCH_FIX_PROMPT(first.findings),
-      'branch-fix.log'
+      'branch-fix.log',
+      { runner: implementer }
     )
     if (ctrl.cancelled) return true
     // A fix turn that never ran at all parks with the ORIGINAL findings — this
@@ -781,16 +795,7 @@ async function execute(
 
     const second = await review()
     if (ctrl.cancelled) return true
-    return land(
-      base(
-        second ?? {
-          grade: 'ungraded',
-          reasons: ['the re-review turn produced no reply'],
-          findings: first.findings
-        },
-        true
-      )
-    )
+    return land(base(second, true))
   }
 
   // A dead process left these Running; they get re-attempted from scratch.
