@@ -6,10 +6,17 @@
 // tester's. Add a DOM environment only if that gap ever bites.
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, test } from 'vitest'
-import type { Item, ProviderHealth, RunDetails, RunRow, Settings } from '../../preload/index'
+import type {
+  Item,
+  Persona,
+  ProviderHealth,
+  RunDetails,
+  RunRow,
+  Settings
+} from '../../preload/index'
 import App from './App'
-import { GroomView } from './GroomView'
-import { HomeView } from './HomeView'
+import { GroomView, ProposalSection } from './GroomView'
+import { HomeView, PersonaPickStrip, QuickStartBox } from './HomeView'
 import { BoardView } from './BoardView'
 import { PipelineView } from './PipelineView'
 import { ProvidersSetup } from './ProvidersSetup'
@@ -28,12 +35,16 @@ import {
 } from './chatShared'
 import { CaptureModal, CommandPalette, QuickAdd } from './capture'
 import {
+  approveRunIds,
+  briefSummary,
   captureItem,
   paletteResults,
   railOrder,
   reorderBacklog,
   saveCapture,
-  sessionGroups
+  sessionGroups,
+  shouldAutoHandoff,
+  togglePersona
 } from './ui'
 
 // Every somni.* call is a noop; proposeNow is read during render.
@@ -1194,4 +1205,229 @@ test('GroomView renders the working and queued state lines', () => {
       <GroomView repo="/repo" roles={roles} itemId="SOM-1" itemName="x" onApplied={() => {}} />
     )
   ).toContain('Draft in background')
+})
+
+// ── M27: persona pick + chip, owner auto-handoff, Summary, Approve & run ────
+
+// §1: Settings gets a Persona select, in the same patch-out idiom as every
+// other SettingsForm field, defaulting to the director fallback when unset.
+test('SettingsForm Persona select shows both options and patches persona', () => {
+  const html = renderToStaticMarkup(<>{SettingsForm(formProps())}</>)
+  expect(html).toContain('Technical Director')
+  expect(html).toContain('Project Owner')
+
+  let patched: Partial<Settings> | undefined
+  const tree = SettingsForm(formProps({ patch: (p) => (patched = p) }))
+  const select = findByLabel(tree, 'Persona')
+  ;(select?.props.onChange as (e: { target: { value: string } }) => void)?.({
+    target: { value: 'owner' }
+  })
+  expect(patched?.persona).toBe('owner')
+})
+
+// §2: the first-run pick strip — one question, once. It only ever asks;
+// HomeView is what decides whether to show it (settings.persona === undefined).
+test('PersonaPickStrip renders both cards and calls onPick with the chosen persona', () => {
+  let picked: Persona | undefined
+  const tree = PersonaPickStrip({ onPick: (p) => (picked = p) })
+  const html = renderToStaticMarkup(<>{tree}</>)
+  expect(html).toContain('Technical Director')
+  expect(html).toContain('Project Owner')
+
+  const owner = findByLabel(tree, 'Pick Project Owner')
+  ;(owner?.props.onClick as () => void)?.()
+  expect(picked).toBe('owner')
+
+  const director = findByLabel(tree, 'Pick Technical Director')
+  ;(director?.props.onClick as () => void)?.()
+  expect(picked).toBe('director')
+})
+
+// §3: the Quick Start chip — defaults to whatever persona it's handed (HomeView
+// wires that to the settings value) and toggles on click; Start forwards it.
+test('QuickStartBox shows the persona it is given, toggles on click, and Start reaches onSubmit', () => {
+  let toggled = false
+  let submitted = false
+  const tree = QuickStartBox({
+    text: 'Fix the thing',
+    onTextChange: () => {},
+    chips: [],
+    onChipPick: () => {},
+    persona: 'owner',
+    onPersonaToggle: () => (toggled = true),
+    onSubmit: () => (submitted = true),
+    onSpoken: () => {}
+  })
+  const html = renderToStaticMarkup(<>{tree}</>)
+  expect(html).toContain('Project Owner')
+
+  const chip = findByLabel(tree, 'Persona')
+  ;(chip?.props.onClick as () => void)?.()
+  expect(toggled).toBe(true)
+
+  const start = findByLabel(tree, 'Start')
+  ;(start?.props.onClick as () => void)?.()
+  expect(submitted).toBe(true)
+})
+
+test('togglePersona flips between director and owner', () => {
+  expect(togglePersona('director')).toBe('owner')
+  expect(togglePersona('owner')).toBe('director')
+})
+
+// §4: the Groom header chip — resolved from the full item when the caller has
+// one, director fallback otherwise. The flip itself goes through item:save
+// (the same full-replace path StoryPanel's Save uses), reviewed at the source.
+test('GroomView header chip shows the resolved persona, falling back to director', () => {
+  const withOwner = renderToStaticMarkup(
+    <GroomView
+      repo="/repo"
+      roles={roles}
+      itemId="SOM-1"
+      itemName="x"
+      item={{ ...items[0], id: 'SOM-1', persona: 'owner' }}
+      onApplied={() => {}}
+    />
+  )
+  expect(withOwner).toContain('Project Owner')
+
+  const fallback = renderToStaticMarkup(
+    <GroomView repo="/repo" roles={roles} itemId="SOM-1" itemName="x" onApplied={() => {}} />
+  )
+  expect(fallback).toContain('Technical Director')
+})
+
+// §5: the owner mount-handoff decision, extracted pure so it's testable without
+// running GroomView's load effect. A truly empty owner groom (no name pick, no
+// spec) is spec §2's fallback — the user types, and chat.ts's birth routing
+// takes it from there on that first send.
+test('shouldAutoHandoff fires only for an idle, fresh, content-bearing owner groom', () => {
+  expect(shouldAutoHandoff('director', 0, false, null, 'New groom', '')).toBe(false)
+  expect(shouldAutoHandoff('owner', 0, false, null, 'New groom', '')).toBe(false) // truly empty
+  expect(shouldAutoHandoff('owner', 0, false, null, 'New groom', 'Some spec')).toBe(true)
+  expect(shouldAutoHandoff('owner', 0, false, null, 'Search is slow', '')).toBe(true)
+  expect(shouldAutoHandoff('owner', 1, false, null, 'Search is slow', '')).toBe(false) // not fresh
+  expect(shouldAutoHandoff('owner', 0, true, null, 'Search is slow', '')).toBe(false) // busy
+  expect(shouldAutoHandoff('owner', 0, false, 'needs-review', 'Search is slow', '')).toBe(false)
+})
+
+// §6: the brief Summary extractor — pure text slicing, no proposal shape needed.
+test('briefSummary extracts the Summary section; no section returns null', () => {
+  expect(briefSummary('## Summary\n\nShips the thing.\n\n## Details\n\nMore.')).toBe(
+    'Ships the thing.'
+  )
+  expect(briefSummary('## Details\n\nNo summary here.')).toBeNull()
+  expect(briefSummary('## Summary\n\n   \n')).toBeNull() // whitespace-only section
+})
+
+const storyProposalM27 = {
+  kind: 'story' as const,
+  name: 'Solo',
+  spec: '## Summary\n\nShip a greeting.\n\n## Details\n\nMore.',
+  stories: [],
+  tasks: workflow.tasks,
+  roles: []
+}
+
+// §7: needs-review reads "Approve & run" and carries the Summary + a secondary
+// Apply; the inline interview / quick-start auto-run path (no needs-review
+// state) keeps its own label and never shows either. An Epic never promises
+// "& run" or a queueing secondary even inside a needs-review session.
+test('ProposalSection computes the needs-review labeling/summary/secondary; other paths unchanged', () => {
+  const onApply = (): void => {}
+  const onApproveRun = (): void => {}
+  const onDismiss = (): void => {}
+
+  const nr = ProposalSection({
+    proposal: storyProposalM27,
+    roles,
+    state: 'needs-review',
+    applying: false,
+    applyLabel: 'Apply',
+    onApply,
+    onApproveRun,
+    onDismiss
+  })
+  expect(nr.props.applyLabel).toBe('Approve & run')
+  expect(nr.props.summary).toBe('Ship a greeting.')
+  expect(nr.props.secondaryLabel).toBe('Apply')
+  expect(nr.props.onSecondary).toBe(onApply)
+  expect(nr.props.onApply).toBe(onApproveRun) // the primary click queues
+
+  const inline = ProposalSection({
+    proposal: storyProposalM27,
+    roles,
+    state: null,
+    applying: false,
+    applyLabel: 'Apply & run',
+    onApply,
+    onApproveRun,
+    onDismiss
+  })
+  expect(inline.props.applyLabel).toBe('Apply & run') // unchanged label
+  expect(inline.props.summary).toBeNull()
+  expect(inline.props.secondaryLabel).toBeUndefined()
+  expect(inline.props.onApply).toBe(onApply) // never routed to approve+run
+
+  const epic = ProposalSection({
+    proposal: { ...proposal, kind: 'epic' as const },
+    roles,
+    state: 'needs-review',
+    applying: false,
+    applyLabel: 'Apply',
+    onApply,
+    onApproveRun,
+    onDismiss
+  })
+  expect(epic.props.applyLabel).toBe('Apply')
+  expect(epic.props.secondaryLabel).toBeUndefined()
+})
+
+// ProposalPreview's rendering half of the same feature: the summary block
+// sits above the rest of the card, and the secondary button only appears
+// when both its label and handler are given.
+test('ProposalPreview renders the summary above the rest, and an optional secondary button', () => {
+  const html = renderToStaticMarkup(
+    <ProposalPreview
+      proposal={proposal}
+      roles={roles}
+      applyLabel="Approve & run"
+      disabled={false}
+      onApply={() => {}}
+      onDismiss={() => {}}
+      summary="Ships the thing end to end."
+      secondaryLabel="Apply"
+      onSecondary={() => {}}
+    />
+  )
+  expect(html).toContain('Ships the thing end to end.')
+  expect(html.indexOf('Ships the thing end to end.')).toBeLessThan(html.indexOf('Spec'))
+  expect(html).toContain('Approve &amp; run')
+  expect(html).toContain('>Apply<') // the secondary button
+
+  const withoutSummary = renderToStaticMarkup(
+    <ProposalPreview
+      proposal={proposal}
+      roles={roles}
+      disabled={false}
+      onApply={() => {}}
+      onDismiss={() => {}}
+    />
+  )
+  expect(withoutSummary).not.toContain('Ships the thing')
+  // Only the primary Apply button — no secondary without secondaryLabel/onSecondary.
+  expect(withoutSummary.match(/>Apply</g)?.length ?? 0).toBe(1)
+})
+
+// The queue list itself: root once Ready, plus every child the proposal left
+// unblocked — the same Ready + no-blockers gate the pipeline enforces.
+test('approveRunIds queues the root only when Ready, plus every unblocked child', () => {
+  const root: Item = { ...items[0], id: 'SOM-20', status: 'ready' }
+  const children: Item[] = [
+    { ...items[0], id: 'SOM-21', blockedBy: [] },
+    { ...items[0], id: 'SOM-22', blockedBy: ['SOM-21'] },
+    { ...items[0], id: 'SOM-23' } // no blockedBy field at all
+  ]
+  expect(approveRunIds(root, children)).toEqual(['SOM-20', 'SOM-21', 'SOM-23'])
+  expect(approveRunIds({ ...root, status: 'grooming' }, children)).toEqual(['SOM-21', 'SOM-23'])
 })

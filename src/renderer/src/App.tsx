@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import appIcon from './assets/icon.png'
 import type {
   DrainState,
+  Persona,
   ProviderHealth,
   RepoData,
   RunState,
@@ -17,7 +18,7 @@ import { BoardView } from './BoardView'
 import { GroomView } from './GroomView'
 import { HomeView } from './HomeView'
 import { CaptureModal, CommandPalette } from './capture'
-import { BTN_PRIMARY, saveCapture, type PaletteResult } from './ui'
+import { approveRunIds, BTN_PRIMARY, saveCapture, type PaletteResult } from './ui'
 
 // Material Symbols glyph per routable view. Home reuses the freed `speed`
 // glyph — the icon font is a subset (main.css), so new ligatures render as
@@ -241,13 +242,15 @@ function App(): React.JSX.Element {
   const keepRunning = drain?.mode === 'keep'
 
   // Home quick-start → groom seeded with the typed task; Apply auto-queues.
-  const quickStart = (text: string): void => {
+  // persona (M27): the Quick Start chip's value, stamped at birth.
+  const quickStart = (text: string, persona: Persona): void => {
     if (!repo) return
-    void window.somni.startGroom(repo).then((item) => {
+    void window.somni.startGroom(repo, persona).then((item) => {
       setGroom({ id: item.id, name: item.name })
       setGroomSeed(text)
       setAutoRun(true)
       setView('Groom')
+      refresh() // so the header persona chip reflects the pick immediately
     })
   }
 
@@ -458,15 +461,24 @@ function App(): React.JSX.Element {
               itemId={groom.id}
               itemName={groom.name}
               groomState={data.items.find((i) => i.id === groom.id)?.groomState}
+              item={data.items.find((i) => i.id === groom.id)}
               seed={groomSeed ?? undefined}
               applyLabel={autoRun ? 'Apply & run' : undefined}
-              onApplied={(item) => {
+              onApplied={(item, children) => {
                 refresh()
-                // Quick-start path: a Ready story goes straight into the
-                // pipeline (the gate stays main's); everything else lands on
-                // the Board where the applied items are visible.
-                if (autoRun && item.status === 'ready') startPipeline([item.id])
-                else setView('Board')
+                // Approve & run (needs-review, M27 §7): queue the root (once
+                // Ready) plus every unblocked child. Quick-start: a Ready story
+                // goes straight into the pipeline (the gate stays main's).
+                // Everything else lands on the Board where it's visible.
+                if (children) {
+                  const ids = approveRunIds(item, children)
+                  if (ids.length) startPipeline(ids)
+                  else setView('Board')
+                } else if (autoRun && item.status === 'ready') {
+                  startPipeline([item.id])
+                } else {
+                  setView('Board')
+                }
                 setAutoRun(false)
                 setGroomSeed(null)
               }}

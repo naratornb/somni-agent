@@ -9,10 +9,21 @@ import type {
   ChatQuestion,
   GroomState,
   Item,
+  Persona,
   Role
 } from '../../preload/index'
 import { MicButton, ProposalPreview, QuestionCard, StreamingBubble } from './chatShared'
-import { appendText, BTN_GHOST, BTN_PRIMARY, BUBBLE_AI, BUBBLE_USER, ERROR_BANNER } from './ui'
+import {
+  appendText,
+  briefSummary,
+  BTN_GHOST,
+  BTN_PRIMARY,
+  BUBBLE_AI,
+  BUBBLE_USER,
+  CHIP,
+  ERROR_BANNER,
+  shouldAutoHandoff
+} from './ui'
 
 type Props = {
   repo: string
@@ -23,12 +34,20 @@ type Props = {
   itemName: string
   // Its session state at mount (M25.5); transitions arrive as chat events.
   groomState?: GroomState
+  // The full record, when the caller already has it (M27) — the source for the
+  // header persona chip and the owner mount-handoff's content check. Absent for
+  // a groom just created this tick (App hasn't refreshed data.items yet); the
+  // chip then shows the director fallback until the next refresh.
+  item?: Item
   // Home quick-start (M23): sent as the first message when the transcript is
   // empty, so the Interview starts from what the user already typed.
   seed?: string
   // "Apply & run" on the auto-run path; default elsewhere.
   applyLabel?: string
-  onApplied: (item: Item) => void
+  // `children` is present only on the needs-review Approve & run path — see
+  // ProposalSection below. Every other apply (inline interview, quick-start
+  // auto-run) calls this with just the item, as before.
+  onApplied: (item: Item, children?: Item[]) => void
 }
 
 const EMPTY =
@@ -38,12 +57,63 @@ const EMPTY =
 const USER = `max-w-[80%] ${BUBBLE_USER}`
 const AI = `max-w-[80%] ${BUBBLE_AI}`
 
+/**
+ * The proposal card, pure props-in/callback-out — GroomView (below) owns the
+ * chat state and IPC calls; this is what makes the needs-review Approve & run
+ * labeling/routing testable without a DOM, the same way SettingsForm made the
+ * Providers panel testable (M26).
+ */
+export function ProposalSection({
+  proposal,
+  roles,
+  state,
+  applying,
+  applyLabel,
+  onApply,
+  onApproveRun,
+  onDismiss
+}: {
+  proposal: ChatProposal
+  roles: Role[]
+  state: GroomState | null
+  applying: boolean
+  applyLabel: string
+  onApply: () => void
+  onApproveRun: () => void
+  onDismiss: () => void
+}): React.JSX.Element {
+  // An Epic Apply lands in Backlog and runs nothing — never promise "& run" or
+  // a queueing secondary on it (#26 story 8).
+  const needsReview = state === 'needs-review' && proposal.kind !== 'epic'
+  const primary = applying
+    ? 'Applying…'
+    : proposal.kind === 'epic'
+      ? 'Apply'
+      : needsReview
+        ? 'Approve & run'
+        : applyLabel
+  return (
+    <ProposalPreview
+      proposal={proposal}
+      roles={roles}
+      applyLabel={primary}
+      disabled={applying}
+      onApply={needsReview ? onApproveRun : onApply}
+      onDismiss={onDismiss}
+      summary={needsReview ? briefSummary(proposal.spec) : null}
+      secondaryLabel={needsReview ? 'Apply' : undefined}
+      onSecondary={needsReview ? onApply : undefined}
+    />
+  )
+}
+
 export function GroomView({
   repo,
   roles,
   itemId,
   itemName,
   groomState,
+  item,
   seed,
   applyLabel = 'Apply',
   onApplied
@@ -51,6 +121,9 @@ export function GroomView({
   const slug = itemId
   const [name, setName] = useState(itemName)
   const [state, setState] = useState<GroomState | null>(groomState ?? null)
+  // Header persona chip (§4): the renderer's own director fallback — never
+  // settings-aware, per the ruling that persona stays out of SETTINGS_DEFAULTS.
+  const [persona, setPersona] = useState<Persona>(item?.persona ?? 'director')
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -119,11 +192,22 @@ export function GroomView({
       // transcript now, so a fresh one is always empty — but never re-send into
       // a transcript that already has turns.
       if (seed && c.messages.length === 0) void send(seed)
+      // Owner mount-handoff (§5): only when there's no seed about to send —
+      // a quick-started owner groom always carries one, and that first send is
+      // what routes it into a work unit (chat.ts's birth handling).
+      else if (
+        shouldAutoHandoff(persona, c.messages.length, c.busy, state, itemName, item?.spec ?? '')
+      )
+        void window.somni.handoffSession(repo, slug)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per slug
   }, [repo, slug])
 
-  const apply = async (): Promise<void> => {
+  // `queue`: true only on the needs-review Approve & run path — passes the
+  // applied children through so App.tsx can compute the pipeline ids
+  // (ui.ts's approveRunIds). Every other apply (inline interview, quick-start
+  // auto-run) calls onApplied with just the item, exactly as before.
+  const doApply = async (queue: boolean): Promise<void> => {
     if (!proposal) return
     setApplying(true)
     const res = await window.somni.applyProposal(repo, slug, proposal)
@@ -132,7 +216,7 @@ export function GroomView({
       setError(res.error)
       return
     }
-    onApplied(res.item)
+    onApplied(res.item, queue ? res.children : undefined)
   }
 
   // Manual override of the AI auto-title. `prompt` matches the view's existing
@@ -181,12 +265,27 @@ export function GroomView({
     void send(text)
   }
 
+  // Header persona chip (§4): flips this groom only, via the same full-replace
+  // item:save StoryPanel's Save uses — `item` carries every other field so
+  // nothing else round-trips changed. No `item` yet (a groom opened this tick,
+  // before the next repo refresh): the chip still shows the fallback, but
+  // flipping is a no-op rather than risk writing a half-filled record.
+  const flipPersona = (): void => {
+    if (!item) return
+    const next: Persona = persona === 'owner' ? 'director' : 'owner'
+    setPersona(next)
+    void window.somni.saveItem(repo, { ...item, persona: next })
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-stack-gap">
       <div className="flex shrink-0 items-center gap-4 border-b border-border-subtle pb-4">
         <h2 className="truncate font-headline-md text-headline-md font-bold">
           {itemId} — {name}
         </h2>
+        <button className={CHIP} onClick={flipPersona} title="Toggle who's grooming this">
+          {persona === 'owner' ? 'Project Owner' : 'Technical Director'}
+        </button>
         <button className={BTN_GHOST} onClick={rename}>
           Rename
         </button>
@@ -219,14 +318,14 @@ export function GroomView({
         )}
       </div>
       {proposal && (
-        <ProposalPreview
+        <ProposalSection
           proposal={proposal}
           roles={roles}
-          // An Epic Apply lands in Backlog and runs nothing — never promise
-          // "& run" on it (#26 story 8).
-          applyLabel={applying ? 'Applying…' : proposal.kind === 'epic' ? 'Apply' : applyLabel}
-          disabled={applying}
-          onApply={() => void apply()}
+          state={state}
+          applying={applying}
+          applyLabel={applyLabel}
+          onApply={() => void doApply(false)}
+          onApproveRun={() => void doApply(true)}
           onDismiss={dismiss}
         />
       )}
