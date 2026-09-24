@@ -24,6 +24,7 @@ import {
   CHIP,
   consumeAskMore,
   ERROR_BANNER,
+  nextRounds,
   shouldAutoHandoff,
   shouldOfferAskMore,
   shouldSeedProposal
@@ -184,6 +185,12 @@ export function GroomView({
       if (ev.kind === 'done') {
         setStreaming(null)
         setMessages((m) => [...m, ev.message])
+        // Ask-more fix: a live event's question is what actually advances the
+        // interview count — the mount-time loadChat snapshot never updates on
+        // its own, so an uninterrupted interview crossing the cap without a
+        // remount would otherwise never offer the bypass (the exact failure
+        // this affordance exists to prevent).
+        setRounds((r) => nextRounds(r, ev.question))
         // Single slot: only the latest turn's actionable card is shown.
         setProposal(ev.proposal)
         // Fix (M27 §7): a live turn's own provenance always wins over the

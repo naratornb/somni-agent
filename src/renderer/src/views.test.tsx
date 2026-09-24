@@ -45,6 +45,7 @@ import {
   consumeAskMore,
   GRADE_LABELS,
   mergeAndReport,
+  nextRounds,
   paletteResults,
   railOrder,
   reorderBacklog,
@@ -1637,6 +1638,28 @@ test('shouldOfferAskMore fires only at the rounds cap, idle, with no pending pro
 test('consumeAskMore spends interactive:true exactly once, then resets', () => {
   expect(consumeAskMore(true)).toEqual({ opts: { interactive: true }, next: false })
   expect(consumeAskMore(false)).toEqual({ opts: undefined, next: false })
+})
+
+// Fix (review): the mount-time loadChat snapshot alone never updates on its
+// own — a live 'done' event's question is what actually has to advance the
+// count, or an uninterrupted interview crossing the cap without a remount
+// never offers the bypass. nextRounds mirrors chat.ts's own counting
+// (parseQuestion truthy on a non-workUnit turn = ev.question is non-null).
+test('nextRounds advances on a live question and crossing the cap flips shouldOfferAskMore', () => {
+  expect(nextRounds(0, null)).toBe(0)
+  const q = { question: 'Where?', options: ['CLI', 'API'], recommended: 'CLI' }
+  expect(nextRounds(2, q)).toBe(3)
+  // A workUnit turn's 'done' carries question: null regardless of its text —
+  // nextRounds must not advance on it either.
+  expect(nextRounds(2, null)).toBe(2)
+
+  let rounds = 0
+  rounds = nextRounds(rounds, q) // round 1
+  expect(shouldOfferAskMore(rounds, false, false)).toBe(false)
+  rounds = nextRounds(rounds, q) // round 2
+  expect(shouldOfferAskMore(rounds, false, false)).toBe(false)
+  rounds = nextRounds(rounds, q) // round 3 — crosses the cap
+  expect(shouldOfferAskMore(rounds, false, false)).toBe(true)
 })
 
 // §6: the brief Summary extractor — pure text slicing, no proposal shape needed.

@@ -231,6 +231,16 @@ export const consumeAskMore = (
   next: false
 })
 
+/**
+ * Live round advance (M29 item 9 fix): the mount-time `loadChat` snapshot
+ * alone goes stale the instant a live Turn crosses the cap without a
+ * remount — a live 'done' event's `question` is exactly what chat.ts's own
+ * questionRounds counts server-side (parseQuestion truthy on a non-workUnit
+ * turn), so mirror that count here instead of waiting to reopen the session.
+ */
+export const nextRounds = (rounds: number, question: unknown): number =>
+  question ? rounds + 1 : rounds
+
 // ── Pure renderer helpers (M15) ──────────────────────────────────────────────
 // Not atoms, but they live here for the same reason `appendText` does: the
 // components that use them are Fast-Refresh files, which may export components
