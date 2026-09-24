@@ -543,6 +543,18 @@ describe('runs:merge', () => {
     expect(saved.review.merged).toEqual(expect.stringMatching(/^\d{4}-\d\d-\d\dT/))
   })
 
+  it('refuses when the run branch was cleaned up — repo untouched', async () => {
+    writeRun('r1', { review: approve })
+    // the worktree holds the branch checked out — drop it before the branch
+    git(repo, 'worktree', 'remove', worktree, '--force')
+    git(repo, 'branch', '-D', 'somni/feature')
+    const res = await invoke<{ ok: boolean; error?: string }>('runs:merge', repo, 'r1')
+    expect(res.ok).toBe(false)
+    expect(res.error).toContain('cleaned up')
+    expect(git(repo, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('main')
+    expect(git(repo, 'status', '--porcelain', '--', '.', ':!.somni')).toBe('')
+  })
+
   it('a conflicting branch aborts cleanly — conflicts named, repo left pristine', async () => {
     writeFileSync(join(repo, 'README.md'), 'three\n')
     git(repo, 'add', '-A')

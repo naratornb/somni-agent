@@ -100,6 +100,10 @@ const somni = {
     on('run:log', (p) => cb(p as { runId: string; taskIndex: number; text: string })),
   // settings:get spreads SETTINGS_DEFAULTS, so every defaulted field is present.
   getSettings: (): Promise<ResolvedSettings> => ipcRenderer.invoke('settings:get'),
+  // Repo-resolved settings (M29) — global + that repo's .somni/config.json
+  // overrides, the same resolution chat:send uses internally.
+  resolveSettings: (repo: string): Promise<ResolvedSettings> =>
+    ipcRenderer.invoke('settings:resolve', repo),
   // Repo-level .somni/config.json (M16: checkCommand). Never global.
   getRepoConfig: (repo: string): Promise<Partial<Settings>> =>
     ipcRenderer.invoke('config:get', repo),
@@ -192,11 +196,19 @@ const somni = {
     busy: boolean
     partial: string
     proposal: ChatProposal | null
+    questionRounds: number
   }> => ipcRenderer.invoke('chat:load', repo, slug),
   newChat: (repo: string, slug: string): Promise<void> =>
     ipcRenderer.invoke('chat:new', repo, slug),
-  sendChat: (repo: string, slug: string, text: string): Promise<{ ok: boolean; error?: string }> =>
-    ipcRenderer.invoke('chat:send', repo, slug, text),
+  // `interactive: true` (M29) bypasses only the questionRounds cap — an
+  // explicit opt-in to keep the conversation going rather than being routed
+  // into a background work unit.
+  sendChat: (
+    repo: string,
+    slug: string,
+    text: string,
+    opts?: { interactive?: boolean }
+  ): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('chat:send', repo, slug, text, opts),
   // Apply — the only write out of a groom. `key` is the groomed item's id; it
   // converts in place, keeping its id, and child Stories are created beside it.
   applyProposal: (

@@ -525,17 +525,53 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
   let slugN = 0
   const nextSlug = (): string => `draft-${++slugN}`
 
-  const send = (slug: string, text: string): Promise<ChatEvent[]> => {
+  const send = (
+    slug: string,
+    text: string,
+    opts?: { interactive?: boolean }
+  ): Promise<ChatEvent[]> => {
     const p = new Promise<ChatEvent[]>((resolve) => {
       const events: ChatEvent[] = []
-      const res = sendChat(repo, slug, text, {}, ['dev'], (ev) => {
-        events.push(ev)
-        if (ev.kind === 'done' || ev.kind === 'error') resolve(events)
-      })
+      const res = sendChat(
+        repo,
+        slug,
+        text,
+        {},
+        ['dev'],
+        (ev) => {
+          events.push(ev)
+          if (ev.kind === 'done' || ev.kind === 'error') resolve(events)
+        },
+        opts
+      )
       expect(res.ok).toBe(true)
     })
     pending.push(p)
     return p
+  }
+
+  // Three answered question rounds written straight to the transcript (no real
+  // Turn), so the crafted fixture never picks up a sessionId — a later
+  // interactive turn on it still gets the full first-turn preamble.
+  const threeRoundsLines = (): unknown[] => {
+    const lines: unknown[] = []
+    for (let i = 0; i < 3; i++) {
+      lines.push({ role: 'user', text: `answer ${i}`, ts: 't' })
+      lines.push({
+        role: 'assistant',
+        text: qBlock(`{"question":"Q${i}","options":["a","b"],"recommended":"a"}`)
+      })
+    }
+    return lines
+  }
+  const writeRounds = (slug: string): void => {
+    mkdirSync(join(repo, '.somni', 'chats'), { recursive: true })
+    writeFileSync(
+      join(repo, '.somni', 'chats', slug + '.jsonl'),
+      threeRoundsLines()
+        .map((l) => JSON.stringify(l))
+        .join('\n') + '\n'
+    )
   }
 
   it('runs a full first-turn -> resume -> transcript -> newChat cycle', async () => {
@@ -729,7 +765,8 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
       messages: [expect.objectContaining({ role: 'user', text: 'hi' })],
       busy: true,
       partial: 'partial words',
-      proposal: null // no assistant reply landed yet
+      proposal: null, // no assistant reply landed yet
+      questionRounds: 0
     })
     const after = loadChat(repo, slug)
     expect(after.busy).toBe(false)
@@ -1115,6 +1152,52 @@ describe('sendChat end-to-end (fake claude on PATH)', () => {
     expect(calls[3][1]).toContain('## Summary')
     const messages = loadChat(repo, item.id).messages
     expect(messages.at(-2)).toMatchObject({ role: 'user', text: 'my answer to Q3' })
+    expect(events).toContainEqual({ slug: item.id, kind: 'state', state: 'working' })
+  })
+
+  // M29: loadChat surfaces questionRounds (reusing the exported helper) so the
+  // renderer can offer the interactive bypass without a separate round-trip.
+  it('loadChat returns questionRounds equal to the number of assistant question fences', () => {
+    const item = saveItem(repo, { name: 'Thing', kind: 'idea' })
+    expect(loadChat(repo, item.id).questionRounds).toBe(0)
+    writeRounds(item.id)
+    expect(loadChat(repo, item.id).questionRounds).toBe(3)
+  })
+
+  // M29: interactive: true bypasses ONLY the questionRounds >= 3 route — the
+  // turn runs as a normal interactive turn (still gets the fresh-session
+  // preamble since the crafted fixture carries no sessionId), never as a work
+  // unit. A plain call on the same fixture still routes.
+  it('interactive: true skips only the questionRounds cap; a plain call still routes', async () => {
+    const interactive = saveItem(repo, { name: 'Interactive', kind: 'idea' })
+    writeRounds(interactive.id)
+    // A question fence, not plain text — a fenceless reply auto-hands-off on
+    // its own right after (a separate M27 behavior); that would confound the
+    // "no routing happened" assertion below.
+    fake({ FAKE_TEXT: qBlock('{"question":"Q3","options":["a","b"],"recommended":"a"}') })
+    const events = await send(interactive.id, 'my answer', { interactive: true })
+    expect(events.some((e) => e.kind === 'state')).toBe(false) // no routing happened
+    const [call] = callsLogged()
+    expect(call[1]).toContain('Interview discipline') // the interactive groom preamble
+    expect(call[1]).not.toContain(WORK_UNIT_PROMPT)
+
+    const routed = saveItem(repo, { name: 'Routed', kind: 'idea' })
+    writeRounds(routed.id)
+    fake({ FAKE_TEXT: 'a plain background draft reply' })
+    const events2 = await send(routed.id, 'my answer')
+    expect(events2).toContainEqual({ slug: routed.id, kind: 'state', state: 'working' })
+    const calls = callsLogged()
+    expect(calls.at(-1)![1]).toContain(WORK_UNIT_PROMPT)
+  })
+
+  // M29: the bypass is scoped to the questionRounds branch only — an owner
+  // groom's birth-seed handoff is the user's own opt-out-of-conversation
+  // action already, untouched by an `interactive` flag on the send call.
+  it('interactive: true does not bypass owner-birth routing', async () => {
+    const item = startGroom(repo, 'owner')
+    const events = await send(item.id, 'build me a thing', { interactive: true })
+    const [call] = callsLogged()
+    expect(call[1]).toContain(WORK_UNIT_PROMPT)
     expect(events).toContainEqual({ slug: item.id, kind: 'state', state: 'working' })
   })
 
