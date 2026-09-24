@@ -41,7 +41,8 @@ somni speaks two vocabularies on purpose: **work items** use the industry's Jira
 
 ## Grooming machinery
 
-- **Interview** — the structured questioning the grooming AI conducts before proposing: one Question at a time, each with concrete options and a recommended answer, relentless until every branch that materially changes the Spec is resolved.
+- **Persona** — who the user is to a groom: the **Technical Director** answers up to three high-leverage Questions before the session drafts itself; the **Project Owner** never answers — their grooms draft from birth. A global setting with a per-groom override, stamped on the item at creation; typing into any session is opting into the Director's rules.
+- **Interview** — the structured questioning the grooming AI conducts before proposing: one Question at a time, each with concrete options and a recommended answer, capped at three total (M27) — only a question whose answer would materially change the Spec earns one of the three.
 - **Question** — one step of the Interview, presented as selectable choices (custom answers always possible). Answering is the user's only obligation in Grooming.
 - **Propose Now** — the user's ever-present right to end the Interview early and receive a Proposal built on stated assumptions. Only the user may cut an Interview short.
 - **Proposal** — AI-drafted Grooming output: the Spec, the Stories and Subtasks it breaks into, *and any new Roles they need*. Inert until Applied.
@@ -49,8 +50,9 @@ somni speaks two vocabularies on purpose: **work items** use the industry's Jira
 - **Refine** — an inline AI rewrite of one existing field (a Subtask prompt, a Role preamble) into a sharper version of itself; same Apply rule.
 - **Session** — one Groom as a first-class activity: the conversation, its Item, and its session state, visible on Home's rail and the Sessions page. A session is born with its Item (there is no draft limbo), is titled by the AI (renamable), and lives on as a reopenable record after it is done.
 - **Session state** — where a session stands in the grooming machinery: *in conversation* → *working* / *queued* (background work) → *needs review* → *done* → *archived*, plus *interrupted* (quit mid-work). Strictly separate vocabulary from Item Status; the two never mix.
-- **Handoff** — the user's explicit act that sends a session into background work ("draft this while I'm away"). The AI may offer one; only the user triggers it. Navigating away is never a Handoff.
+- **Handoff** — sending a session into background work ("draft this while I'm away"). The user may trigger one explicitly; M27's Persona rules can also trigger one automatically — an owner's groom from birth, any session's third answered Question round — but that is still the user's own standing instruction, recorded once when they set the Persona, never a decision the AI makes turn to turn. Navigating away is never a Handoff.
 - **Work unit** — the bounded background work a Handoff buys: one autonomous Turn that continues the Interview assume-and-continue — the AI resolves its own Questions with recorded assumptions (an "Assumptions" section in the Proposal) and parks the session in needs review. At most three sessions work at once; the rest queue.
+- **Brief** — the completed background draft parked in needs-review: a Proposal whose Spec opens with a plain-language Summary above its Assumptions. **Approve & run** applies it and queues its unblocked Stories in one act; the Ready gate holds.
 - **Session rail** — Home's at-a-glance strip of live sessions: the focused (most recently active) session enlarged, the rest compact, blocked-on-you first.
 - **Sessions page** — the activity view over every session, grouped by session state with sort, search, and filters; the Board remains the work-item view of the same truth.
 - **Product Owner (PO) hat / Engineer hat** — the two *conceptual* roles of the same single user: the PO hat captures, grooms and accepts; the Engineer hat edits definitions and settings. Since M23 the hats are prose only — the UI mode switch is gone, one view set serves both.
