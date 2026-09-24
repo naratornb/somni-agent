@@ -52,10 +52,6 @@ function makeRepo(): string {
   git(dir, 'init', '-b', 'main')
   git(dir, 'config', 'user.email', 'test@somni.local')
   git(dir, 'config', 'user.name', 'somni test')
-  // A real user's repo gitignores .somni/ (or commits it deliberately) — either
-  // way writeRun()'s run.json below must never itself count as "dirty" for the
-  // merge tests' porcelain check.
-  writeFileSync(join(dir, '.gitignore'), '.somni/\n')
   writeFileSync(join(dir, 'README.md'), 'one\n')
   git(dir, 'add', '-A')
   git(dir, 'commit', '-m', 'base')
@@ -470,11 +466,19 @@ describe('chat:send guard', () => {
 })
 
 // M28 §4: user-triggered merge for an approved run, in whatever branch the
-// user has checked out (main, per makeRepo).
+// user has checked out (main, per makeRepo). The dirty-tree check protects
+// the USER's code, never somni's own .somni/ bookkeeping — which churns on
+// every run transition, including the merged-stamp this handler writes below
+// — so both documented .somni configurations (untracked, or committed per
+// the README's recommendation) must never themselves count as "dirty".
 describe('runs:merge', () => {
   const approve = { grade: 'approve', reasons: ['solid'], findings: [], provider: 'codex' }
+  const commitSomni = (): void => {
+    git(repo, 'add', '.somni')
+    git(repo, 'commit', '-m', 'somni state')
+  }
 
-  it('refuses when the target repo has uncommitted changes', async () => {
+  it('refuses when a user file is dirty (untracked .somni)', async () => {
     writeRun('r1', { review: approve })
     writeFileSync(join(repo, 'README.md'), 'dirty\n')
     const res = await invoke<{ ok: boolean; error?: string }>('runs:merge', repo, 'r1')
@@ -482,6 +486,17 @@ describe('runs:merge', () => {
     expect(res.error).toContain('uncommitted')
     // refused before any merge was attempted
     expect(git(repo, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('main')
+  })
+
+  it('refuses when a user file is dirty, even with .somni committed and churning', async () => {
+    writeRun('r1', { review: approve })
+    commitSomni()
+    // further, still-uncommitted churn to the now-tracked run.json
+    writeRun('r1', { review: approve, finishedAt: '2026-08-26T10:00:00.000Z' })
+    writeFileSync(join(repo, 'README.md'), 'dirty\n')
+    const res = await invoke<{ ok: boolean; error?: string }>('runs:merge', repo, 'r1')
+    expect(res.ok).toBe(false)
+    expect(res.error).toContain('uncommitted')
   })
 
   it('refuses a run without an approve grade', async () => {
@@ -497,7 +512,7 @@ describe('runs:merge', () => {
     })
   })
 
-  it('merges a clean fast-forwardable branch and stamps review.merged in run.json', async () => {
+  it('merges despite .somni churn (untracked run.json) on an otherwise clean tree', async () => {
     writeRun('r1', { review: approve })
     const res = await invoke<{ ok: boolean }>('runs:merge', repo, 'r1')
     expect(res).toEqual({ ok: true })
@@ -515,6 +530,19 @@ describe('runs:merge', () => {
     expect(rows.find((r) => r.runId === 'r1')!.review!.merged).toBe(saved.review.merged)
   })
 
+  // The README-recommended configuration: .somni/ is committed, so the
+  // handler's own merged-stamp write is a modification to a *tracked* file —
+  // this must not block the merge either.
+  it('merges with .somni committed — the handler’s own merged-stamp write is not "dirty"', async () => {
+    writeRun('r1', { review: approve })
+    commitSomni()
+    const res = await invoke<{ ok: boolean }>('runs:merge', repo, 'r1')
+    expect(res).toEqual({ ok: true })
+    expect(git(repo, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('main')
+    const saved = JSON.parse(readFileSync(join(repo, '.somni/runs/r1/run.json'), 'utf8'))
+    expect(saved.review.merged).toEqual(expect.stringMatching(/^\d{4}-\d\d-\d\dT/))
+  })
+
   it('a conflicting branch aborts cleanly — conflicts named, repo left pristine', async () => {
     writeFileSync(join(repo, 'README.md'), 'three\n')
     git(repo, 'add', '-A')
@@ -523,7 +551,9 @@ describe('runs:merge', () => {
     const res = await invoke<{ ok: boolean; conflicts?: string[] }>('runs:merge', repo, 'r1')
     expect(res.ok).toBe(false)
     expect(res.conflicts).toEqual(['README.md'])
-    expect(git(repo, 'status', '--porcelain')).toBe('')
+    // pristine on the user's side of the tree — .somni's own untracked
+    // bookkeeping churn is not what "pristine" means here.
+    expect(git(repo, 'status', '--porcelain', '--', '.', ':!.somni')).toBe('')
     expect(existsSync(join(repo, '.git', 'MERGE_HEAD'))).toBe(false)
     expect(git(repo, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('main')
     // never stamped on a failed merge

@@ -261,9 +261,19 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
     const run = listRuns(repo).find((r) => r.runId === runId)
     if (!run) return { ok: false, error: 'run not found' }
     if (run.review?.grade !== 'approve') return { ok: false, error: 'only approved runs merge' }
-    const { stdout: dirty } = (await lockedGit(['-C', repo, 'status', '--porcelain'])) as {
-      stdout: string
-    }
+    // The clean-tree check protects the user's own code, never somni's own
+    // bookkeeping — .somni/ churns on every run transition (including the
+    // merged-stamp this handler writes below), so it's excluded from the
+    // dirty check whether it's gitignored or committed (README's recommendation).
+    const { stdout: dirty } = (await lockedGit([
+      '-C',
+      repo,
+      'status',
+      '--porcelain',
+      '--',
+      '.',
+      ':!.somni'
+    ])) as { stdout: string }
     if (dirty.trim()) return { ok: false, error: 'working tree has uncommitted changes' }
     try {
       await lockedGit(['-C', repo, 'merge', '--no-edit', run.branch])
