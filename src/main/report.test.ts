@@ -150,6 +150,72 @@ describe('review section (M16)', () => {
   })
 })
 
+// M28 §4: the merge grade renders at the top of every report style, since
+// minimalReport is the shared base compact/full both build on.
+describe('merge review grade line', () => {
+  const base = {
+    runId: 'r1',
+    workflow: 'w',
+    name: 'Nightly',
+    branch: 'somni/w-1',
+    worktree: '/tmp/wt',
+    status: 'Completed',
+    startedAt: '2026-01-01T00:00:00.000Z',
+    tasks: []
+  }
+
+  it('renders grade + reasons before everything else', () => {
+    const state = {
+      ...base,
+      review: {
+        grade: 'approve',
+        reasons: ['solid', 'tested'],
+        findings: [],
+        provider: 'codex'
+      }
+    } as RunState
+    const md = minimalReport(state, summarize('', ''))
+    expect(md.startsWith('**Merge review: APPROVE** (codex) — solid, tested')).toBe(true)
+    expect(md.indexOf('Merge review')).toBeLessThan(md.indexOf('## Tasks'))
+  })
+
+  it('renders ungraded with its reason', () => {
+    const state = {
+      ...base,
+      review: {
+        grade: 'ungraded',
+        reasons: ['the branch review turn produced no reply'],
+        findings: [],
+        provider: 'claude'
+      }
+    } as RunState
+    const md = minimalReport(state, summarize('', ''))
+    expect(md).toContain('**Merge review: UNGRADED** (claude) — the branch review turn produced no reply')
+  })
+
+  it('adds the sameProvider/diffTruncated/fixRound notes when set', () => {
+    const state = {
+      ...base,
+      review: {
+        grade: 'needs-work',
+        reasons: ['flaky test'],
+        findings: ['fix the flake'],
+        provider: 'claude',
+        sameProvider: true,
+        diffTruncated: true,
+        fixRound: true
+      }
+    } as RunState
+    const md = minimalReport(state, summarize('', ''))
+    expect(md).toContain('(same provider, diff truncated, fix round)')
+  })
+
+  it('omits the grade line entirely when there is no review', () => {
+    const md = minimalReport(base as RunState, summarize('', ''))
+    expect(md).not.toContain('Merge review')
+  })
+})
+
 describe('writeReport compact style — read-only routing (M26 final review, fix 2)', () => {
   const noEvents = { onState: (): void => {}, onLog: (): void => {} }
   const ctrl = { cancelled: false, ac: new AbortController() }

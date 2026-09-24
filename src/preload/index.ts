@@ -4,7 +4,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 // (fs, electron main APIs) ever crosses into the preload bundle.
 import type { ChatEvent, ChatMessage, ChatProposal } from '../main/chat'
 import type { DrainMode, DrainState, PipelineStatus, RunState } from '../main/executor'
-import type { IpcResult, RunDetails, RunRow } from '../main/repoIpc'
+import type { IpcResult, MergeResult, RunDetails, RunRow } from '../main/repoIpc'
 import type { SkillsStatus } from '../main/skills'
 import type {
   Item,
@@ -30,7 +30,7 @@ export type {
   TaskStatus
 } from '../main/executor'
 export type { FileChange, RunStats } from '../main/report'
-export type { IpcResult, RunDetails, RunRow } from '../main/repoIpc'
+export type { IpcResult, MergeResult, RunDetails, RunRow } from '../main/repoIpc'
 export type { SkillsStatus } from '../main/skills'
 export type {
   Effort,
@@ -141,6 +141,10 @@ const somni = {
   revealWorktree: (path: string): Promise<void> => ipcRenderer.invoke('runs:revealWorktree', path),
   cleanupRun: (repo: string, runId: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('runs:cleanup', repo, runId),
+  // User-triggered merge for an approved run (M28 §4) — merges into whatever
+  // branch the target repo currently has checked out.
+  mergeRun: (repo: string, runId: string): Promise<MergeResult> =>
+    ipcRenderer.invoke('runs:merge', repo, runId),
   lastRepo: (): Promise<string | null> => ipcRenderer.invoke('repo:last'),
   chooseRepo: (): Promise<string | null> => ipcRenderer.invoke('repo:choose'),
   loadRepo: (repo: string): Promise<RepoData> => ipcRenderer.invoke('repo:load', repo),

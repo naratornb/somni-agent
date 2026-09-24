@@ -449,7 +449,9 @@ export function loadRuns(repo: string): RunState[] {
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
 }
 
-function saveRun(repo: string, state: RunState): void {
+// Exported for runs:merge (M28 §4) — stamping review.merged reuses this same
+// read-tolerant/write-atomic path rather than a hand-rolled JSON write.
+export function saveRun(repo: string, state: RunState): void {
   atomicWrite(
     join(repo, '.somni', 'runs', state.runId, 'run.json'),
     JSON.stringify(state, null, 2) + '\n'

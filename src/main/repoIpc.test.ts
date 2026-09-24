@@ -52,6 +52,10 @@ function makeRepo(): string {
   git(dir, 'init', '-b', 'main')
   git(dir, 'config', 'user.email', 'test@somni.local')
   git(dir, 'config', 'user.name', 'somni test')
+  // A real user's repo gitignores .somni/ (or commits it deliberately) — either
+  // way writeRun()'s run.json below must never itself count as "dirty" for the
+  // merge tests' porcelain check.
+  writeFileSync(join(dir, '.gitignore'), '.somni/\n')
   writeFileSync(join(dir, 'README.md'), 'one\n')
   git(dir, 'add', '-A')
   git(dir, 'commit', '-m', 'base')
@@ -462,6 +466,69 @@ describe('chat:send guard', () => {
       error: 'this story is currently running'
     })
     runningId = null
+  })
+})
+
+// M28 §4: user-triggered merge for an approved run, in whatever branch the
+// user has checked out (main, per makeRepo).
+describe('runs:merge', () => {
+  const approve = { grade: 'approve', reasons: ['solid'], findings: [], provider: 'codex' }
+
+  it('refuses when the target repo has uncommitted changes', async () => {
+    writeRun('r1', { review: approve })
+    writeFileSync(join(repo, 'README.md'), 'dirty\n')
+    const res = await invoke<{ ok: boolean; error?: string }>('runs:merge', repo, 'r1')
+    expect(res.ok).toBe(false)
+    expect(res.error).toContain('uncommitted')
+    // refused before any merge was attempted
+    expect(git(repo, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('main')
+  })
+
+  it('refuses a run without an approve grade', async () => {
+    writeRun('r1', { review: { ...approve, grade: 'needs-work' } })
+    expect(await invoke('runs:merge', repo, 'r1')).toEqual({
+      ok: false,
+      error: 'only approved runs merge'
+    })
+    writeRun('r2', {})
+    expect(await invoke('runs:merge', repo, 'r2')).toEqual({
+      ok: false,
+      error: 'only approved runs merge'
+    })
+  })
+
+  it('merges a clean fast-forwardable branch and stamps review.merged in run.json', async () => {
+    writeRun('r1', { review: approve })
+    const res = await invoke<{ ok: boolean }>('runs:merge', repo, 'r1')
+    expect(res).toEqual({ ok: true })
+    expect(git(repo, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('main')
+    expect(readFileSync(join(repo, 'README.md'), 'utf8')).toBe('two\n')
+    expect(existsSync(join(repo, 'src/hello.js'))).toBe(true)
+    const saved = JSON.parse(readFileSync(join(repo, '.somni/runs/r1/run.json'), 'utf8'))
+    expect(saved.review.merged).toEqual(expect.stringMatching(/^\d{4}-\d\d-\d\dT/))
+    expect(saved.review.grade).toBe('approve')
+    // the run round-trips through listRuns with the stamp intact
+    const rows = await invoke<Array<{ runId: string; review?: { merged?: string } }>>(
+      'runs:list',
+      repo
+    )
+    expect(rows.find((r) => r.runId === 'r1')!.review!.merged).toBe(saved.review.merged)
+  })
+
+  it('a conflicting branch aborts cleanly — conflicts named, repo left pristine', async () => {
+    writeFileSync(join(repo, 'README.md'), 'three\n')
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-m', 'main diverges')
+    writeRun('r1', { review: approve })
+    const res = await invoke<{ ok: boolean; conflicts?: string[] }>('runs:merge', repo, 'r1')
+    expect(res.ok).toBe(false)
+    expect(res.conflicts).toEqual(['README.md'])
+    expect(git(repo, 'status', '--porcelain')).toBe('')
+    expect(existsSync(join(repo, '.git', 'MERGE_HEAD'))).toBe(false)
+    expect(git(repo, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('main')
+    // never stamped on a failed merge
+    const saved = JSON.parse(readFileSync(join(repo, '.somni/runs/r1/run.json'), 'utf8'))
+    expect(saved.review.merged).toBeUndefined()
   })
 })
 
