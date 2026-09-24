@@ -24,14 +24,23 @@ import { turn, TurnRequest } from './turn'
 import type { Effort, RunnerChoice, RunnerName, Settings } from './store'
 import type { Ctrl, RunEvents, TaskRun } from './executor'
 
-const POLL_MS = 25 // real ms between deadline checks
+const POLL_MS = 25 // real ms between availability checks
 
-// Abortable wait to a deadline on the caller's clock (RunOpts.now, or real time
-// by default); resolves true when the deadline passed, false on cancel/abort.
-// Polls in real time rather than a single setTimeout(at - now()): `now` may
-// run faster than real time (tests fast-forward a provider's real cooldown),
-// and that delta is on the caller's clock, not a real-ms duration.
-function sleepUntil(at: number, signal: AbortSignal, now: () => number): Promise<boolean> {
+// Abortable wait for a usable provider; resolves true the moment one is
+// available, false on cancel/abort. Polls availability (not a fixed deadline)
+// so a sibling's markOk — or a slot freed by acquireSlot's release — wakes
+// this wait immediately instead of at the old cooldown deadline. Real-time
+// polling rather than a single setTimeout: `now` may run faster than real
+// time (tests fast-forward a provider's real cooldown), and that delta is on
+// the caller's clock, not a real-ms duration.
+function waitForRunner(
+  choice: RunnerChoice,
+  settings: Settings,
+  signal: AbortSignal,
+  now: () => number
+): Promise<boolean> {
+  const ready = (): boolean =>
+    choice === 'auto' ? pickAuto(settings, now()) != null : isAvailable(choice, settings, now())
   return new Promise((resolve) => {
     const finish = (ok: boolean): void => {
       clearInterval(iv)
@@ -41,9 +50,9 @@ function sleepUntil(at: number, signal: AbortSignal, now: () => number): Promise
     const onAbort = (): void => finish(false)
     signal.addEventListener('abort', onAbort, { once: true })
     const iv = setInterval(() => {
-      if (now() >= at) finish(true)
+      if (ready()) finish(true)
     }, POLL_MS)
-    if (now() >= at) finish(true)
+    if (ready()) finish(true)
   })
 }
 
@@ -71,7 +80,7 @@ export async function resolveTurnRunner(
     const at = nextAvailableAt(settings, choice, nowMs())
     if (at === null) return 'unavailable'
     onPause?.(new Date(at).toISOString())
-    if (await sleepUntil(at, ctrl.ac.signal, nowMs)) onResume?.()
+    if (await waitForRunner(choice, settings, ctrl.ac.signal, nowMs)) onResume?.()
   }
 }
 

@@ -39,7 +39,7 @@ import {
   setItemStatus,
   Task
 } from './store'
-import { isAvailable, markAuthFailed, resetProviders } from './providers'
+import { isAvailable, markAuthFailed, markOk, resetProviders } from './providers'
 
 // A fake `claude` on PATH: emits a valid stream-json conversation and drops a
 // file in its cwd (proving it ran inside the worktree). Behaviours via env:
@@ -415,6 +415,31 @@ describe('runStory', () => {
     expect(state.tasks[0].attempts).toBe(3)
     expect(state.tasks[0].runner).toBe('claude') // pinned — waited, never switched
     expect(statuses.filter((s) => s === 'Paused')).toHaveLength(2)
+  })
+
+  // M29: the provider wait polls availability, not a fixed deadline — a
+  // sibling's markOk (or the panel's re-probe) wakes it immediately instead
+  // of at the old cooldown deadline. No fast clock: the real 5-minute
+  // cooldown never elapses on its own within this test's timeout, so
+  // completing at all proves the early wake, not just a fast one.
+  it("a waiting task wakes as soon as a success clears its provider's cooldown", async () => {
+    fake({ FAKE_COUNT: join(root, 'n'), FAKE_FAIL_TIMES: '1', FAKE_RATE_LIMIT: '1' })
+    let paused = (): void => {}
+    const gotPause = new Promise<void>((resolve) => {
+      paused = () => resolve()
+    })
+    const started = Date.now()
+    const runPromise = runStory(repo, docs, base, {
+      ...noEvents,
+      onPipeline: (s) => s === 'Paused' && paused()
+    })
+    await gotPause
+    await new Promise((r) => setTimeout(r, 80)) // let a few poll ticks pass first
+    markOk('claude')
+    const state = await runPromise
+    expect(state.status).toBe('Completed')
+    expect(state.tasks[0].runner).toBe('claude')
+    expect(Date.now() - started).toBeLessThan(2000) // nowhere near the real 5-minute deadline
   })
 })
 
