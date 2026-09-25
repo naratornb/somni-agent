@@ -1,6 +1,6 @@
 {
   "name": "somni",
-  "version": "0.7.4",
+  "version": "0.8.0",
   "description": "Overnight AI agent workflow orchestrator for macOS",
   "main": "./out/main/index.js",
   "author": "luke",
