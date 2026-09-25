@@ -530,6 +530,16 @@ describe('runs:merge', () => {
     expect(rows.find((r) => r.runId === 'r1')!.review!.merged).toBe(saved.review.merged)
   })
 
+  // M30: the one UI-enforced gate (a merged run's card has no Merge button
+  // left to click) the server itself didn't back up — a direct re-merge was
+  // accepted as harmless "Already up to date" and re-stamped `merged`.
+  it('refuses re-merging an already-merged run', async () => {
+    writeRun('r1', { review: approve })
+    expect(await invoke<{ ok: boolean }>('runs:merge', repo, 'r1')).toEqual({ ok: true })
+    const res = await invoke<{ ok: boolean; error?: string }>('runs:merge', repo, 'r1')
+    expect(res).toEqual({ ok: false, error: 'already merged' })
+  })
+
   // The README-recommended configuration: .somni/ is committed, so the
   // handler's own merged-stamp write is a modification to a *tracked* file —
   // this must not block the merge either.
