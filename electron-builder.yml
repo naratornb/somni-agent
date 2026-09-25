@@ -9,6 +9,9 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  # Repo working files that must never ship (the .claude worktree once tripled the DMG).
+  - '!{.claude,.superpowers,docs,design,AGENTS.md,CONTEXT.md,LICENSE}'
+  - '!{tsconfig.node.tsbuildinfo,tsconfig.web.tsbuildinfo}'
 asarUnpack:
   - resources/**
 # Vendored methodology skills (M16/M17): agents read them off disk, so they
