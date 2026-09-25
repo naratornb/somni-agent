@@ -5,9 +5,12 @@ import { STATUS_CHIP, statusChip as chipClass } from './ui'
 export type LogLine = { taskIndex: number; text: string }
 
 type Props = {
-  // keyed by runId — only this session's live-pushed runs (App.tsx filters by
-  // its liveRunIds ref before passing down), so Home's pipeline stays
+  // keyed by runId — only this session's live-pushed runs (App.tsx filters
+  // with `pick(runs, liveRunIds)`, the state copy, at render time — a ref's
+  // `.current` can't be read during render), so Home's pipeline stays
   // session-scoped instead of showing every run on disk (M29 final review).
+  // A second ref mirror of liveRunIds exists too (M30), but only for
+  // refresh()'s async closure — never read here.
   runs: Record<string, RunState>
   logs: Record<string, LogLine[]>
   busy: boolean

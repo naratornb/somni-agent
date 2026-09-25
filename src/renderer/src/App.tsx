@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import appIcon from './assets/icon.png'
 import type {
   DrainState,
@@ -19,7 +19,14 @@ import { BoardView } from './BoardView'
 import { GroomView } from './GroomView'
 import { HomeView } from './HomeView'
 import { CaptureModal, CommandPalette } from './capture'
-import { approveRunIds, BTN_PRIMARY, pick, saveCapture, seedRuns, type PaletteResult } from './ui'
+import {
+  approveRunIds,
+  BTN_PRIMARY,
+  pick,
+  saveCapture,
+  seedLiveRuns,
+  type PaletteResult
+} from './ui'
 
 // Material Symbols glyph per routable view. Home reuses the freed `speed`
 // glyph — the icon font is a subset (main.css), so new ligatures render as
@@ -66,6 +73,13 @@ function App(): React.JSX.Element {
   // State, not a ref: Home's PipelineView reads it at render time below, and
   // react-hooks/refs forbids reading a ref's `.current` during render.
   const [liveRunIds, setLiveRunIds] = useState<Set<string>>(new Set())
+  // Ref mirror of the above (M30): refresh()'s `.then` runs after an async
+  // gap, so if it closed over `liveRunIds` (captured when the callback was
+  // built) a push that landed mid-flight was invisible to that resolution —
+  // the run vanished from `runs` until the next refresh. The ref is updated
+  // in the same onRunState statement as the state copy and read only inside
+  // closures (never during render), so seedLiveRuns always sees the latest.
+  const liveRunIdsRef = useRef<Set<string>>(new Set())
   const [logs, setLogs] = useState<Record<string, LogLine[]>>({})
   // Drain state is owned by main (Decision 8): seeded from pipeline:state on
   // mount — a renderer opened mid-drain shows the truth — then kept live by the
@@ -120,16 +134,18 @@ function App(): React.JSX.Element {
       void window.somni.orphanedRuns(path).then(setOrphans)
       // Durable Board grades + Merge (M29 item 1, fixed in final review):
       // every prior run, not just what this session's pipeline pushed live —
-      // seedRuns merges disk under only the runIds onRunState has actually
-      // pushed live (`pick`), so a live push always wins but a disk-only
-      // change to a run that was merely seeded in on some earlier refresh
-      // still lands (it was never "live" to begin with).
+      // seedLiveRuns merges disk under only the runIds onRunState has
+      // actually pushed live (`pick`), so a live push always wins but a
+      // disk-only change to a run that was merely seeded in on some earlier
+      // refresh still lands (it was never "live" to begin with). liveIds is
+      // read via the ref getter, not `liveRunIds` itself (M30) — see the
+      // ref's declaration for why.
       void window.somni
         .listRuns(path)
-        .then((rows) => setRuns((r) => seedRuns(rows, pick(r, liveRunIds))))
+        .then((rows) => setRuns((r) => seedLiveRuns(rows, r, () => liveRunIdsRef.current)))
       void window.somni.resolveSettings(path).then(setSettings)
     },
-    [repo, liveRunIds]
+    [repo]
   )
 
   useEffect(() => {
@@ -140,7 +156,12 @@ function App(): React.JSX.Element {
       }
     })
     const offState = window.somni.onRunState((state) => {
-      setLiveRunIds((s) => (s.has(state.runId) ? s : new Set(s).add(state.runId)))
+      setLiveRunIds((s) => {
+        if (s.has(state.runId)) return s
+        const next = new Set(s).add(state.runId)
+        liveRunIdsRef.current = next // kept in sync with the state copy — see the ref's declaration
+        return next
+      })
       setRuns((r) => ({ ...r, [state.runId]: state }))
     })
     const offLog = window.somni.onRunLog(({ runId, taskIndex, text }) =>

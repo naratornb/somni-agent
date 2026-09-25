@@ -131,6 +131,24 @@ export const pick = (
 ): Record<string, RunState> =>
   Object.fromEntries(Object.entries(state).filter(([id]) => ids.has(id)))
 
+/**
+ * The parked M29 race, closed (M30): `refresh()`'s `.then` used to close
+ * over `liveRunIds` (the state copy) at CALLBACK-CREATION time — a run whose
+ * first `onRunState` push landed after `listRuns()` was issued but before it
+ * resolved was invisible to that resolution's `pick`, so it transiently
+ * vanished from `runs` until the next refresh. `liveIds` here is a getter,
+ * read at CALL time instead: App.tsx passes `() => liveRunIdsRef.current`, a
+ * ref mirror kept in sync with the state copy in the same `onRunState`
+ * statement — so a push that lands mid-flight still counts. The state copy
+ * remains for render-time filtering (react-hooks/refs forbids `.current`
+ * reads there); the ref is closure-read only.
+ */
+export const seedLiveRuns = (
+  fromDisk: RunRow[],
+  current: Record<string, RunState>,
+  liveIds: () => ReadonlySet<string>
+): Record<string, RunState> => seedRuns(fromDisk, pick(current, liveIds()))
+
 export const KIND_CHIP: Record<'idea' | 'story' | 'epic', string> = {
   idea: CHIP,
   story: `${STATUS_CHIP_BASE} bg-primary-container/10 text-primary border-primary-container/30`,
