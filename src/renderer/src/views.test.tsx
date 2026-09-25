@@ -40,6 +40,7 @@ import { CaptureModal, CommandPalette, QuickAdd } from './capture'
 import {
   alreadyParkedForReview,
   approveRunIds,
+  askMoreLabel,
   briefSummary,
   captureItem,
   consumeAskMore,
@@ -1689,6 +1690,21 @@ test('shouldOfferAskMore fires only at the rounds cap, idle, with no pending pro
   expect(shouldOfferAskMore(2, false, false)).toBe(false) // under the cap
   expect(shouldOfferAskMore(3, true, false)).toBe(false) // busy
   expect(shouldOfferAskMore(3, false, true)).toBe(false) // a proposal's already on the table
+})
+
+// M30: arming the banner had no visible feedback — a re-click after arming
+// was a silent no-op. askMoreLabel names the button text for both states;
+// GroomView also disables the button while armed. Consuming the flag
+// (consumeAskMore always resets to `next: false`) restores the unarmed
+// label, same as an explicit clear.
+test('askMoreLabel: unarmed shows the action, armed shows it is about to fire', () => {
+  expect(askMoreLabel(false)).toBe('Ask more questions')
+  expect(askMoreLabel(true)).toBe('Next message will ask')
+})
+
+test('askMoreLabel + consumeAskMore: consuming an armed flag restores the unarmed label', () => {
+  expect(askMoreLabel(consumeAskMore(true).next)).toBe('Ask more questions')
+  expect(askMoreLabel(consumeAskMore(false).next)).toBe('Ask more questions')
 })
 
 // The one-shot bypass: spends `{interactive: true}` on exactly the send it

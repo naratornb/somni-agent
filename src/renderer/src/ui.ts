@@ -267,6 +267,16 @@ export const consumeAskMore = (
 })
 
 /**
+ * Ask-more banner label (M30): arming the flag had no visible feedback — a
+ * re-click was a silent no-op. While armed, the button names what's about to
+ * happen; GroomView also disables it (`disabled={askMoreNext}`) so the
+ * re-click can't happen at all. consumeAskMore always resets to `next:
+ * false`, so passing that through here restores the unarmed label for free.
+ */
+export const askMoreLabel = (askMoreNext: boolean): string =>
+  askMoreNext ? 'Next message will ask' : 'Ask more questions'
+
+/**
  * Live round advance (M29 item 9 fix): the mount-time `loadChat` snapshot
  * alone goes stale the instant a live Turn crosses the cap without a
  * remount — a live 'done' event's `question` is exactly what chat.ts's own

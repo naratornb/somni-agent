@@ -16,6 +16,7 @@ import { MicButton, ProposalPreview, QuestionCard, StreamingBubble } from './cha
 import {
   alreadyParkedForReview,
   appendText,
+  askMoreLabel,
   briefSummary,
   BTN_GHOST,
   BTN_PRIMARY,
@@ -409,12 +410,14 @@ export function GroomView({
       )}
       {/* Ask-more (M29 item 9): the interview cap otherwise routes the next
           answer straight into a background draft with no warning — this is
-          the opt-out, spending one send's worth of `interactive: true`. */}
+          the opt-out, spending one send's worth of `interactive: true`.
+          Armed feedback (M30): once clicked, the button names what's about
+          to happen and disables — a re-click was a silent no-op before. */}
       {shouldOfferAskMore(rounds, sending, proposal !== null) && (
         <p className="flex shrink-0 items-center gap-3 rounded-lg bg-surface-container px-4 py-3 text-on-surface-variant">
           Three rounds in — the next answer drafts a proposal. Keep talking instead?
-          <button className={BTN_GHOST} onClick={() => setAskMoreNext(true)}>
-            Ask more questions
+          <button className={BTN_GHOST} disabled={askMoreNext} onClick={() => setAskMoreNext(true)}>
+            {askMoreLabel(askMoreNext)}
           </button>
         </p>
       )}
