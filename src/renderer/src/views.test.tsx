@@ -40,6 +40,7 @@ import { CaptureModal, CommandPalette, QuickAdd } from './capture'
 import {
   alreadyParkedForReview,
   approveRunIds,
+  askMoreLabel,
   briefSummary,
   captureItem,
   consumeAskMore,
@@ -51,6 +52,7 @@ import {
   railOrder,
   reorderBacklog,
   saveCapture,
+  seedLiveRuns,
   seedRuns,
   sessionGroups,
   shouldAutoHandoff,
@@ -725,6 +727,27 @@ test('pick + seedRuns: disk wins for a seeded-but-never-live run; the pipeline s
 
   const pipelineSlice = pick(board, liveIds)
   expect(pipelineSlice).toEqual({ r2: board.r2 }) // r1 never reaches Home's pipeline
+})
+
+// M30: the parked M29 race. refresh()'s seed step used to close over
+// liveRunIds (the state copy) at CALLBACK-CREATION time — a run whose first
+// onRunState push landed after listRuns() was issued but before it resolved
+// was invisible to that resolution's `pick`, so it transiently vanished from
+// `runs`. seedLiveRuns takes a getter instead of a value, so App.tsx can pass
+// `() => liveRunIdsRef.current` — read at CALL time, i.e. once listRuns()
+// actually resolves, not when the promise chain was built.
+test('seedLiveRuns: a liveIds push landing after listRuns() was issued but before it resolves still counts as live', async () => {
+  const disk: RunRow[] = [{ runId: 'r1', status: 'Completed' } as RunRow]
+  const current: Record<string, RunState> = { r1: { runId: 'r1', status: 'Running' } as RunState }
+  const liveIdsRef = { current: new Set<string>() } // empty when refresh() was first called
+  const listRuns = Promise.resolve().then(() => {
+    liveIdsRef.current = new Set(['r1']) // the run's first onRunState push, mid-flight
+    return disk
+  })
+  const merged = await listRuns.then((rows) =>
+    seedLiveRuns(rows, current, () => liveIdsRef.current)
+  )
+  expect(merged.r1.status).toBe('Running') // not dropped by a stale, capture-time liveIds
 })
 
 // M15 §1: one shared helper builds the captured item — first line is the name,
@@ -1667,6 +1690,21 @@ test('shouldOfferAskMore fires only at the rounds cap, idle, with no pending pro
   expect(shouldOfferAskMore(2, false, false)).toBe(false) // under the cap
   expect(shouldOfferAskMore(3, true, false)).toBe(false) // busy
   expect(shouldOfferAskMore(3, false, true)).toBe(false) // a proposal's already on the table
+})
+
+// M30: arming the banner had no visible feedback — a re-click after arming
+// was a silent no-op. askMoreLabel names the button text for both states;
+// GroomView also disables the button while armed. Consuming the flag
+// (consumeAskMore always resets to `next: false`) restores the unarmed
+// label, same as an explicit clear.
+test('askMoreLabel: unarmed shows the action, armed shows it is about to fire', () => {
+  expect(askMoreLabel(false)).toBe('Ask more questions')
+  expect(askMoreLabel(true)).toBe('Next message will ask')
+})
+
+test('askMoreLabel + consumeAskMore: consuming an armed flag restores the unarmed label', () => {
+  expect(askMoreLabel(consumeAskMore(true).next)).toBe('Ask more questions')
+  expect(askMoreLabel(consumeAskMore(false).next)).toBe('Ask more questions')
 })
 
 // The one-shot bypass: spends `{interactive: true}` on exactly the send it

@@ -264,6 +264,10 @@ export function wireRepoIpc(onSettingsChanged: () => void = () => {}): void {
     const run = listRuns(repo).find((r) => r.runId === runId)
     if (!run) return { ok: false, error: 'run not found' }
     if (run.review?.grade !== 'approve') return { ok: false, error: 'only approved runs merge' }
+    // M30: the one UI-enforced gate the server didn't back up — a merged
+    // run's card has no Merge button left, but a direct re-invoke was
+    // accepted as a harmless "Already up to date" and re-stamped `merged`.
+    if (run.review?.merged) return { ok: false, error: 'already merged' }
     try {
       await lockedGit(['-C', repo, 'rev-parse', '--verify', run.branch])
     } catch {

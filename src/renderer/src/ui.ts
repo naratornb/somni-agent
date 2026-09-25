@@ -131,6 +131,24 @@ export const pick = (
 ): Record<string, RunState> =>
   Object.fromEntries(Object.entries(state).filter(([id]) => ids.has(id)))
 
+/**
+ * The parked M29 race, closed (M30): `refresh()`'s `.then` used to close
+ * over `liveRunIds` (the state copy) at CALLBACK-CREATION time — a run whose
+ * first `onRunState` push landed after `listRuns()` was issued but before it
+ * resolved was invisible to that resolution's `pick`, so it transiently
+ * vanished from `runs` until the next refresh. `liveIds` here is a getter,
+ * read at CALL time instead: App.tsx passes `() => liveRunIdsRef.current`, a
+ * ref mirror kept in sync with the state copy in the same `onRunState`
+ * statement — so a push that lands mid-flight still counts. The state copy
+ * remains for render-time filtering (react-hooks/refs forbids `.current`
+ * reads there); the ref is closure-read only.
+ */
+export const seedLiveRuns = (
+  fromDisk: RunRow[],
+  current: Record<string, RunState>,
+  liveIds: () => ReadonlySet<string>
+): Record<string, RunState> => seedRuns(fromDisk, pick(current, liveIds()))
+
 export const KIND_CHIP: Record<'idea' | 'story' | 'epic', string> = {
   idea: CHIP,
   story: `${STATUS_CHIP_BASE} bg-primary-container/10 text-primary border-primary-container/30`,
@@ -247,6 +265,16 @@ export const consumeAskMore = (
   opts: askNext ? { interactive: true } : undefined,
   next: false
 })
+
+/**
+ * Ask-more banner label (M30): arming the flag had no visible feedback — a
+ * re-click was a silent no-op. While armed, the button names what's about to
+ * happen; GroomView also disables it (`disabled={askMoreNext}`) so the
+ * re-click can't happen at all. consumeAskMore always resets to `next:
+ * false`, so passing that through here restores the unarmed label for free.
+ */
+export const askMoreLabel = (askMoreNext: boolean): string =>
+  askMoreNext ? 'Next message will ask' : 'Ask more questions'
 
 /**
  * Live round advance (M29 item 9 fix): the mount-time `loadChat` snapshot
